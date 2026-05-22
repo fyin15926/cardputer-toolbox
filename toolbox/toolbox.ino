@@ -529,8 +529,9 @@ void setup() {
   p = M5.getPin(m5::pin_name_t::sd_spi_copi); if (p >= 0) sdMOSI = p;
   p = M5.getPin(m5::pin_name_t::sd_spi_cs);   if (p >= 0) sdCS   = p;
 
-  // 预热麦克风: 开机先完整空跑一次"录音会话"(真的录几帧并丢弃),
-  // 消耗掉冷启动后第一次会话的不稳定, 让用户真正第一次录音就正常(否则又小又断续)
+  // 预热麦克风: 开机空跑一次录音(录几帧丢弃), 消耗掉冷启动首次会话的不稳定.
+  // 关键: 预热后【不关麦】, 让 ES8311 保持上电 —— 关麦会写"模拟掉电+整体掉电"寄存器,
+  // 那个电压跳变正是"开机第二声爆音"的来源; 常开还能让第一次录音零爆音.
   {
     auto mc = M5Cardputer.Mic.config();
     mc.magnification = 1;
@@ -546,7 +547,7 @@ void setup() {
       while (M5Cardputer.Mic.isRecording() > 0) delay(1);
     }
   }
-  M5Cardputer.Mic.end();
+  // (此处不再 Mic.end(): 保持麦克风常开 —— 省掉开机第二声, 并让第一次录音零爆音)
 
   // 预热 SD 卡: 首次写入有延迟, 先暖一下避免第一次录音掉帧/断续
   if (sdMount()) {
