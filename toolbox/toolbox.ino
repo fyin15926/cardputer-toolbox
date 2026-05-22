@@ -160,9 +160,21 @@ void playWav(const char *path) {
   d.setCursor(10, 58);
   d.print("任意键停止");
 
+  M5Cardputer.Mic.end();   // 先关麦克风(释放共用的编解码器), 再开扬声器
   M5Cardputer.Speaker.begin();
   M5Cardputer.Speaker.setVolume(255);
-  M5Cardputer.In_I2C.writeRegister8(0x18, 0x32, 0xBF, 400000);  // DAC 0dB(不过推, 给小喇叭留余量, 减回放削波"哒哒")
+  // internal_spk=false 没有自动 DAC 回调, 这里手动开 ES8311 DAC (照官方扬声器寄存器)
+  {
+    const uint8_t ES = 0x18;
+    M5Cardputer.In_I2C.writeRegister8(ES, 0x00, 0x80, 400000);
+    M5Cardputer.In_I2C.writeRegister8(ES, 0x01, 0xB5, 400000);
+    M5Cardputer.In_I2C.writeRegister8(ES, 0x02, 0x18, 400000);
+    M5Cardputer.In_I2C.writeRegister8(ES, 0x0D, 0x01, 400000);
+    M5Cardputer.In_I2C.writeRegister8(ES, 0x12, 0x00, 400000);
+    M5Cardputer.In_I2C.writeRegister8(ES, 0x13, 0x10, 400000);
+    M5Cardputer.In_I2C.writeRegister8(ES, 0x32, 0xBF, 400000);
+    M5Cardputer.In_I2C.writeRegister8(ES, 0x37, 0x08, 400000);
+  }
 
   do { M5Cardputer.update(); delay(10); } while (M5Cardputer.Keyboard.isPressed());
 
@@ -446,15 +458,15 @@ void recorderApp() {
   }
   cv.deleteSprite();
 
-  M5Cardputer.Mic.end();
-  // 掐尾: 申报长度去掉末尾约 0.4s, 去掉"结束键"声
-  uint32_t tailTrim = REC_RATE * 8 / 10;  // 12800字节=6400采样=0.4秒
+  // 不在此处 Mic.end(): 录音停止瞬间关麦会让编解码器掉电"爆音"; 留到播放时再切换
+  // 掐尾: 申报长度去掉末尾约 0.3s, 去掉"结束键"声
+  uint32_t tailTrim = REC_RATE * 6 / 10;  // 9600字节=4800采样=0.3秒
   uint32_t effData = (dataBytes > tailTrim) ? (dataBytes - tailTrim) : 0;
   writeWavHeader(f, REC_RATE, effData);
   f.flush();
   f.close();
   SD.end();
-  M5Cardputer.Speaker.begin();
+  // 不在此处开扬声器: 录音停止瞬间开功放会有"爆音"; 等真正播放(playWav)时再开
   strncpy(lastRecPath, path, sizeof(lastRecPath));
 
   // 结果页: P 回放 / 任意键返回
@@ -496,9 +508,20 @@ void recorderApp() {
 
 void setup() {
   auto cfg = M5.config();
+  cfg.internal_spk = false;  // 开机不自动开扬声器(消除开机功放上电"爆音"), 播放时再手动开
   M5Cardputer.begin(cfg, true);
   M5Cardputer.Display.setRotation(1);
   M5Cardputer.Display.setBrightness(120);
+  // internal_spk=false 会跳过扬声器配置, 这里手动补上 Adv 扬声器引脚
+  {
+    auto sc = M5Cardputer.Speaker.config();
+    sc.pin_bck = 41;
+    sc.pin_ws = 43;
+    sc.pin_data_out = 42;
+    sc.i2s_port = I2S_NUM_1;
+    sc.magnification = 16;
+    M5Cardputer.Speaker.config(sc);
+  }
 
   int p;
   p = M5.getPin(m5::pin_name_t::sd_spi_sclk); if (p >= 0) sdSCLK = p;
@@ -508,7 +531,6 @@ void setup() {
 
   // 预热麦克风: 开机先完整空跑一次"录音会话"(真的录几帧并丢弃),
   // 消耗掉冷启动后第一次会话的不稳定, 让用户真正第一次录音就正常(否则又小又断续)
-  M5Cardputer.Speaker.end();
   {
     auto mc = M5Cardputer.Mic.config();
     mc.magnification = 1;
@@ -525,7 +547,6 @@ void setup() {
     }
   }
   M5Cardputer.Mic.end();
-  M5Cardputer.Speaker.begin();
 
   // 预热 SD 卡: 首次写入有延迟, 先暖一下避免第一次录音掉帧/断续
   if (sdMount()) {
