@@ -1,0 +1,31 @@
+# Arduino build files
+build/
+*.o
+*.a
+*.elf
+*.hex
+*.bin
+*.map
+
+# IDE files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Temporary files
+*.tmp
+*.bak
+*.log
+
+# Large binaries (arduino-cli can be downloaded separately)
+tools/arduino-cli/arduino-cli.exe
+tools/arduino-cli.zip
+
+# Claude settings
+.claude/
