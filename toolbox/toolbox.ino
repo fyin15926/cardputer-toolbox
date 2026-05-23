@@ -58,6 +58,7 @@ static const char *IMPORTANT_DIR = "/IMPORTANT";
 static const char *HOTKEY_PATH = "/SHORTCUT/keys.txt";
 static const char *OLD_IMPORTANT_HOTKEY_PATH = "/IMPORTANT/keys.txt";
 static const char *OLD_HOTKEY_PATH = "/REC/keys.txt";
+static const char *NEXT_INDEX_PATH = "/REC/.next";
 static const int MAX_REC = 9999;
 
 enum RecKind : uint8_t { REC_NORMAL = 0, REC_SHORTCUT = 1, REC_IMPORTANT = 2 };
@@ -76,6 +77,7 @@ struct HotKey { char key; int idx; };
 static const int MAX_HOTKEY = 24;
 HotKey hotkeys[MAX_HOTKEY];
 int hotkeyCount = 0;
+static bool hotkeysLoaded = false;
 
 static bool micInputReady = false;
 static bool forceMicRearm = true;  // 开机/唤醒后的第一次正式录音要强制重建输入链路
@@ -189,7 +191,11 @@ static bool prepareMicInput(bool force = false) {
     M5Cardputer.Mic.config(mc);
   }
   bool ok = M5Cardputer.Mic.begin();
-  M5Cardputer.In_I2C.writeRegister8(0x18, 0x14, 0x17, 400000);  // 提高模拟 PGA(更干净)
+  delay(12);
+  for (uint8_t pga = 0x10; pga <= 0x17; pga++) {
+    M5Cardputer.In_I2C.writeRegister8(0x18, 0x14, pga, 400000);
+    delay(3);
+  }
   delay(8);
   M5Cardputer.In_I2C.writeRegister8(0x18, 0x14, 0x17, 400000);  // 开机首次偶发低增益, 重写一次确保生效
   micInputReady = ok;
@@ -325,6 +331,12 @@ static void loadHotkeys() {
   if (migrated) saveHotkeys();
 }
 
+static void ensureHotkeysLoaded() {
+  if (hotkeysLoaded) return;
+  loadHotkeys();
+  hotkeysLoaded = true;
+}
+
 static void saveHotkeys() {
   if (!sdMount()) return;
   if (!SD.exists(SHORTCUT_DIR)) SD.mkdir(SHORTCUT_DIR);
@@ -452,6 +464,24 @@ static bool recordingExistsKind(int recNum, uint8_t kind) {
   return SD.exists(p);
 }
 
+static int readNextIndexCache() {
+  File f = SD.open(NEXT_INDEX_PATH, FILE_READ);
+  if (!f) return 0;
+  int idx = f.parseInt();
+  f.close();
+  return (idx >= 1 && idx <= 9999) ? idx : 0;
+}
+
+static void writeNextIndexCache(int idx) {
+  if (idx < 1) idx = 1;
+  if (idx > 9999) idx = 9999;
+  File f = SD.open(NEXT_INDEX_PATH, FILE_WRITE);
+  if (!f) return;
+  f.printf("%d\n", idx);
+  f.flush();
+  f.close();
+}
+
 static void scanRecordingDir(const char *dirPath, uint8_t kind, int &maxIdx) {
   File dir = SD.open(dirPath);
   if (dir && dir.isDirectory()) {
@@ -475,6 +505,18 @@ static int nextRecordingIndex() {
     if (!SD.exists(p) && !recordingExistsKind(nextRecHint, REC_SHORTCUT) && !recordingExistsKind(nextRecHint, REC_IMPORTANT)) return nextRecHint;
   }
 
+  int cached = readNextIndexCache();
+  if (cached > 0) {
+    int idx = cached;
+    recordingPathKind(idx, REC_NORMAL, p, sizeof(p));
+    while (idx < 9999 && (SD.exists(p) || recordingExistsKind(idx, REC_SHORTCUT) || recordingExistsKind(idx, REC_IMPORTANT))) {
+      idx++;
+      recordingPathKind(idx, REC_NORMAL, p, sizeof(p));
+    }
+    nextRecHint = idx;
+    return idx;
+  }
+
   int maxIdx = 0;
   recCount = 0;
   clearImportantBits();
@@ -491,6 +533,7 @@ static int nextRecordingIndex() {
     recordingPathKind(idx, REC_NORMAL, p, sizeof(p));
   }
   nextRecHint = idx;
+  writeNextIndexCache(idx);
   return idx;
 }
 
@@ -798,6 +841,7 @@ int playbackScreen(const char *path, int recNum, int prevRec, int nextRec) {
   uint32_t played = 0, remaining = dataSize;
   uint32_t lastSeek = 0;
   uint32_t lastPreviewDraw = 0;
+  uint32_t fadeBytesLeft = REC_RATE * 2 * 80 / 1000;
   uint8_t previewBar = 0;
   int pi = 0;
 
@@ -857,6 +901,7 @@ int playbackScreen(const char *path, int recNum, int prevRec, int nextRec) {
       played &= ~1U;
       remaining = dataSize - played;
       f.seek(44 + played);
+      fadeBytesLeft = REC_RATE * 2 * 80 / 1000;
       drawProgress(played);
       delay(15);
       continue;
@@ -889,6 +934,15 @@ int playbackScreen(const char *path, int recNum, int prevRec, int nextRec) {
     remaining -= got;
     int16_t *liveWave = pbBuf[pi];
     size_t liveN = got / 2;
+    if (fadeBytesLeft > 0) {
+      uint32_t fadeBytes = REC_RATE * 2 * 80 / 1000;
+      for (size_t i = 0; i < liveN && fadeBytesLeft > 0; i++) {
+        uint32_t done = fadeBytes - fadeBytesLeft;
+        int32_t gain = (int32_t)(done * 256 / fadeBytes);
+        liveWave[i] = (int16_t)(((int32_t)liveWave[i] * gain) >> 8);
+        fadeBytesLeft = (fadeBytesLeft > 2) ? (fadeBytesLeft - 2) : 0;
+      }
+    }
     M5Cardputer.Speaker.playRaw(liveWave, liveN, REC_RATE, false, 1, 0, false);
     pi ^= 1;
     played += got;
@@ -1137,7 +1191,7 @@ int recordingScreen() {
   if (!prepareMicInput(mustRearm)) { cv.deleteSprite(); f.close(); SD.end(); showMsg("录音机", "麦克风启动失败", COL_RED); return 0; }
   if (!micWasReady) delay(20);
   if (mustRearm) {
-    for (int i = 0; i < 6; i++) {
+    for (int i = 0; i < 12; i++) {
       M5Cardputer.Mic.record(recBuf[0], REC_N, REC_RATE);
       while (M5Cardputer.Mic.isRecording() > 0) delay(1);
     }
@@ -1248,16 +1302,21 @@ int recordingScreen() {
   if (cancelRec) {
     SD.remove(path);
     nextRecHint = idx;
+    writeNextIndexCache(idx);
   }
   SD.end();
-  // 录音结束时停麦; 回调会写 0x0D=0xFC(爆音源), 立刻写回 0x01 把断电窗口压到 ~300µs
-  micInputReady = false;
-  M5Cardputer.Mic.end();
-  const uint8_t ES = 0x18;
-  M5Cardputer.In_I2C.writeRegister8(ES, 0x0D, 0x01, 400000);  // 立即恢复偏置(不加 delay)
-  M5Cardputer.In_I2C.writeRegister8(ES, 0x00, 0x80, 400000);  // CSM 上电
+  while (M5Cardputer.Mic.isRecording() > 0) delay(1);
+  if (g_afterRecord != R_BACK) {
+    micInputReady = false;
+    M5Cardputer.Mic.end();
+    const uint8_t ES = 0x18;
+    M5Cardputer.In_I2C.writeRegister8(ES, 0x0D, 0x01, 400000);
+    M5Cardputer.In_I2C.writeRegister8(ES, 0x00, 0x80, 400000);
+  }
   if (cancelRec) return 0;
   insertRecListSorted(idx);
+  nextRecHint = (idx < 9999) ? idx + 1 : 9999;
+  writeNextIndexCache(nextRecHint);
   return (effData > 0) ? idx : idx;   // 即使很短也保留, 返回编号
 }
 
@@ -1284,6 +1343,51 @@ static void deleteRecording(int recNum) {
     }
   }
   if (hotkeyRemoved) saveHotkeys();
+}
+
+static int deleteUnmarkedRecordings() {
+  if (!sdMount()) return 0;
+  int deleted = 0;
+  File dir = SD.open(REC_DIR);
+  if (dir && dir.isDirectory()) {
+    File e;
+    while ((e = dir.openNextFile())) {
+      int n = parseRecordingNumber(e.name());
+      e.close();
+      if (n <= 0) continue;
+      char p[40];
+      recordingPathKind(n, REC_NORMAL, p, sizeof(p));
+      if (SD.remove(p)) deleted++;
+    }
+    dir.close();
+  }
+  SD.end();
+  scanRecordings();
+  return deleted;
+}
+
+static bool confirmDeleteUnmarked() {
+  auto &d = M5Cardputer.Display;
+  d.fillScreen(COL_BG);
+  drawHeader("清理录音");
+  d.setFont(&fonts::efontCN_16);
+  d.setTextColor(COL_RED, COL_BG);
+  d.setCursor(12, 38);
+  d.print("删除所有普通录音?");
+  d.setFont(&fonts::efontCN_12);
+  d.setTextColor(COL_DIM, COL_BG);
+  d.setCursor(12, 66);
+  d.print("保留 KEY / IMP");
+  drawFooter("回车确认  退格取消");
+  waitRelease();
+  while (true) {
+    M5Cardputer.update();
+    if (M5Cardputer.Keyboard.isChange() && M5Cardputer.Keyboard.isPressed()) {
+      if (keyEnter()) { waitRelease(); return true; }
+      if (keyDel() || keyEsc()) { waitRelease(); return false; }
+    }
+    delay(8);
+  }
 }
 
 static bool confirmNoiseReduce(int recNum) {
@@ -1465,7 +1569,7 @@ int listScreen(int selectIdx) {
     }
 
     M5Cardputer.update();
-    if (keyDel() && sel >= 0) {
+    if (keyDel() && !keyCtrl() && sel >= 0) {
       if (delHoldStart == 0) delHoldStart = millis();
       uint32_t held = millis() - delHoldStart;
       if (held >= DELETE_HOLD_MS) {
@@ -1505,6 +1609,15 @@ int listScreen(int selectIdx) {
             g_listReturnRec = 0;
           }
           redraw = true; waitRelease(); continue;
+        }
+        redraw = true; waitRelease();
+      }
+      else if (keyCtrl() && keyDel()) {
+        if (confirmDeleteUnmarked()) {
+          int deleted = deleteUnmarkedRecordings();
+          drawActionToast(deleted > 0 ? "CLEAN" : "EMPTY", deleted > 0 ? COL_RED : COL_DIM);
+          sel = recCount - 1;
+          g_listMode = REC_NORMAL;
         }
         redraw = true; waitRelease();
       }
@@ -1562,6 +1675,7 @@ int listScreen(int selectIdx) {
 
 // 列表流程: 列表 <-> 录音 循环; Esc退出到息屏
 void listFlow(int sel) {
+  ensureHotkeysLoaded();
   while (true) {
     int r = listScreen(sel);
     if (r == R_RECORD) {
@@ -1579,13 +1693,13 @@ void listFlow(int sel) {
 }
 
 // ---------- 麦克风预热(开机 / 唤醒后调用): 空跑消耗冷启动不稳定, 之后保持常开 ----------
-static void micWarmup() {
+static void micWarmup(bool rearmAfterWarmup = true, int warmBuffers = 24) {
   // 开机/唤醒的第一条录音也必须走完整输入链路配置; 否则首次录音增益会偏低。
   micInputReady = false;
   if (!prepareMicInput()) return;
-  forceMicRearm = true;
+  forceMicRearm = rearmAfterWarmup;
   static int16_t warm[REC_N];
-  for (int i = 0; i < 24; i++) {
+  for (int i = 0; i < warmBuffers; i++) {
     M5Cardputer.Mic.record(warm, REC_N, REC_RATE);
     while (M5Cardputer.Mic.isRecording() > 0) delay(1);
   }
@@ -1599,10 +1713,23 @@ static void micWarmup() {
 static void goSleep() {
   auto &d = M5Cardputer.Display;
 
-  // 静音 ES8311 输出路径(不掉电 0x0D, 只关 HP drive 和 DAC): 防止睡眠期间 I2S 时钟门控瞬态被功放放大
+  if (micInputReady) {
+    while (M5Cardputer.Mic.isRecording() > 0) delay(1);
+    M5Cardputer.Mic.end();
+    micInputReady = false;
+    forceMicRearm = true;
+    const uint8_t ES = 0x18;
+    M5Cardputer.In_I2C.writeRegister8(ES, 0x0D, 0x01, 400000);
+    M5Cardputer.In_I2C.writeRegister8(ES, 0x00, 0x80, 400000);
+    delay(8);
+  }
+
+  // 静音 ES8311 输出路径(不掉电 0x0D/0x12): 防止睡眠瞬态被无 mute 脚功放放大
   const uint8_t ES = 0x18;
+  if (speakerOutputReady) M5Cardputer.Speaker.setVolume(0);
+  M5Cardputer.In_I2C.writeRegister8(ES, 0x32, 0x00, 400000);  // 先断开 DAC->HP mixer
+  delay(2);
   M5Cardputer.In_I2C.writeRegister8(ES, 0x13, 0x00, 400000);  // 关 HP drive
-  M5Cardputer.In_I2C.writeRegister8(ES, 0x12, 0xFC, 400000);  // DAC 掉电(模拟段仍通电)
   delay(5);
 
   d.fillScreen(COL_BG);
@@ -1617,8 +1744,7 @@ static void goSleep() {
   while (true) {
     M5Cardputer.update();                                          // 排空键盘事件
     M5Cardputer.In_I2C.writeRegister8(0x34, 0x02, 0x03, 400000);  // 清中断标志 -> INT 线复位为高
-    esp_sleep_enable_timer_wakeup(30000000ULL);                    // 30s 安全兜底
-    esp_light_sleep_start();                                       // 一直睡到 GPIO11 变低 或 30s 到
+    esp_light_sleep_start();                                       // 一直睡到 GPIO11 变低
     delay(6);
     M5Cardputer.update();
     if (M5Cardputer.Keyboard.isChange() && M5Cardputer.Keyboard.isPressed()) {
@@ -1629,10 +1755,9 @@ static void goSleep() {
 
   // 唤醒: 关掉唤醒源 + 键盘中断
   gpio_wakeup_disable(GPIO_NUM_11);
-  esp_sleep_disable_wakeup_source(ESP_SLEEP_WAKEUP_TIMER);
   M5Cardputer.In_I2C.writeRegister8(0x34, 0x01, 0x00, 400000);   // CFG: 关键盘中断
   d.setBrightness(120);
-  if (wakeAction == R_RECORD) micWarmup();    // 只有立刻录音才预热; 回车进列表要快
+  if (wakeAction == R_RECORD) micWarmup(false, 16);  // 息屏唤醒复用预热链路, 减少开始爆音和等待
   autoRecordPending = true;
   waitRelease();
 }
@@ -1657,16 +1782,10 @@ void setup() {
   p = M5.getPin(m5::pin_name_t::sd_spi_copi); if (p >= 0) sdMOSI = p;
   p = M5.getPin(m5::pin_name_t::sd_spi_cs);   if (p >= 0) sdCS   = p;
 
-  // 预热麦克风(开机空跑一次, 消冷启动不稳定; 之后保持常开, 见 micWarmup 内说明)
-  micWarmup();
-
-  // 预热 SD 卡 + 读取快捷键绑定
-  if (sdMount()) {
-    File wf = SD.open("/.warm", FILE_WRITE);
-    if (wf) { uint8_t z[512] = {0}; for (int i = 0; i < 16; i++) wf.write(z, sizeof(z)); wf.close(); SD.remove("/.warm"); }
-    SD.end();
-  }
+  micWarmup(true, 8);
   loadHotkeys();
+  hotkeysLoaded = true;
+  scanRecordings();
 
   M5Cardputer.Display.fillScreen(COL_BG);
 }

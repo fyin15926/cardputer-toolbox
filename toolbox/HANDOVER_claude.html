@@ -307,6 +307,37 @@ int amp = (int)(rms * (3.0f * A_HALF) / 32767.0f) * sign;</pre>
 </table>
 <div class="note">最近一次烧录成功：COM3，ESP32-S3，编译 <code>1147508 bytes</code> / RAM <code>76476 bytes</code>，写入 <code>1147888 bytes</code>，Hash verified，随后 Hard resetting with RTC WDT。</div>
 
+<h2 id="audio-pop-20260524">2026-05-24 Audio Pop / Startup Notes</h2>
+<div class="note">
+  Current baseline: sleep idle must stay quiet; playback start pop is handled by an
+  80 ms PCM fade-in; sleep-to-Space recording is quiet and fast. Recording stop can
+  still produce a predictable ES8311 analog transition pop.
+</div>
+<table>
+  <tr><th>Finding</th><th>Result</th></tr>
+  <tr><td>Headphone test</td><td>Speaker pop disappears with headphones inserted, but the pop is still audible in headphones. The source is before the speaker amp, in the ES8311/output analog path.</td></tr>
+  <tr><td>Software headphone/speaker switch</td><td>Not available as a clean software switch. Jack detect / AMP_EN is hardware-controlled, not exposed as an obvious GPIO in this design.</td></tr>
+  <tr><td>ES8311 digital mute / ramp</td><td>Tried 0x31/0x37 style digital mute/soft-ramp behavior. It did not reduce record start/stop pop.</td></tr>
+  <tr><td>Feedback beep masking</td><td>Not useful. The transition pop occurred after the feedback tone.</td></tr>
+  <tr><td>Mic-hot experiments</td><td>Do not broadly reintroduce. Earlier versions caused low/no first recording, silent second recording, or huge second-record pop.</td></tr>
+  <tr><td>Sleep timer wake</td><td>Do not reintroduce <code>esp_sleep_enable_timer_wakeup(30000000ULL)</code>; it caused sleep-idle random pops.</td></tr>
+</table>
+<table>
+  <tr><th>Current strategy</th><th>Why</th></tr>
+  <tr><td><code>goSleep()</code> closes mic only at real sleep entry if needed and disables output path</td><td>Keeps sleep idle quiet and saves power.</td></tr>
+  <tr><td>Sleep Space wake uses <code>micWarmup(false, 16)</code></td><td>Reuses the warmed mic path and avoids the sleep-wake record start pop.</td></tr>
+  <tr><td>Cold boot uses conservative mic warmup/rearm</td><td>Ensures the first recording has audio.</td></tr>
+  <tr><td>Playback uses 80 ms PCM fade-in</td><td>Removes playback-start pop without adding extra audio.</td></tr>
+  <tr><td>Record stop still calls <code>Mic.end()</code> when returning toward list/playback</td><td>Prevents the pop from moving to playback start; remaining pop is predictable codec hardware behavior.</td></tr>
+</table>
+<table>
+  <tr><th>Startup/list performance</th><th>Decision</th></tr>
+  <tr><td>Long delay source</td><td>Serial timing showed the big cost was scanning many recording files, not <code>M5Cardputer.begin()</code>, <code>SD.begin()</code>, or mic warmup.</td></tr>
+  <tr><td>Next recording number</td><td>Added <code>/REC/.next</code> cache so cold recording can avoid full scanning just to find the next index.</td></tr>
+  <tr><td>List loading</td><td>Startup loads recordings/hotkeys so entering the list does not block.</td></tr>
+  <tr><td>Bulk cleanup</td><td>List screen <code>Ctrl+Del</code> confirms and deletes only ordinary <code>/REC/REC_XXXX.wav</code> files; <code>/SHORTCUT</code> and <code>/IMPORTANT</code> are preserved.</td></tr>
+</table>
+
 <!-- ─── GitHub同步 ─── -->
 <h2 id="git">GitHub 同步</h2>
 <div class="note">端口22被封，使用 SSH-over-443（HTTPS PAT无写权限）。</div>

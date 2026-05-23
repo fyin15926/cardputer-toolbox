@@ -299,3 +299,43 @@ Get-Content "C:\cardputer\tools\up.err.log"
 ```
 
 若设备在休眠（COM3 断开），先按空格或回车唤醒再烧录。
+---
+
+## 2026-05-24 audio-pop and startup/list performance notes
+
+Current practical target:
+- Sleep idle must never produce surprise pops. This is the highest priority.
+- Playback start pop is handled with an 80 ms PCM fade-in.
+- Sleep -> Space -> record is now the best path: no obvious start pop and no obvious delay.
+- Recording stop still produces a predictable pop from `Mic.end()` / ES8311 analog power transition. Treat this as a hardware/codec limit unless a hardware mute is added.
+
+Confirmed by testing:
+- Plugging in headphones stops the speaker pop, but the pop is still audible in the headphones. Therefore the source is before the speaker amp, inside the ES8311/output analog path, not only NS4150B.
+- Software cannot truly switch "recording to headphone output, playback to speaker output"; headphone/speaker switching is controlled by the jack detect / AMP_EN hardware path, not an exposed GPIO in the current design.
+- ES8311 digital mute / DAC soft-ramp register attempts did not reduce the record start/stop pop.
+- A feedback beep before record transitions did not mask the pop; the pop occurred after the beep.
+- Keeping the mic hot across too many states caused worse bugs in earlier experiments: first recording low/no volume, second recording silent, or huge second-record pop.
+
+Current firmware strategy:
+- `goSleep()` closes mic only at real sleep entry if needed, then disables the output path and does not use periodic timer wake. This keeps sleep idle quiet.
+- Sleep wake to record uses `micWarmup(false, 16)` so the prewarmed mic chain is reused instead of being rebuilt. This avoids the sleep-wake record start pop.
+- Cold boot uses a conservative mic warmup/rearm path so the first recording has audio.
+- Playback uses the 80 ms PCM fade-in.
+- Startup loads recordings/hotkeys so list entry does not block.
+
+Performance finding:
+- The long delay was not `M5Cardputer.begin()`, `SD.begin()`, or mic warmup. Serial timing showed the big cost was scanning all recording directories to find/list recordings.
+- `.next` cache was added under `/REC/.next` so cold boot recording can find the next index without a full scan.
+- A bug appeared where old recordings seemed missing because the fast path skipped scanning and the in-memory list only knew newly created recordings. Fix: startup scans recordings; list entry no longer forces a scan every time.
+
+Cleanup feature:
+- In the list screen, `Ctrl+Del` opens a confirmation for deleting all unmarked normal recordings.
+- It deletes only `/REC/REC_XXXX.wav`.
+- It preserves `/SHORTCUT` and `/IMPORTANT` recordings.
+- This is the recommended practical way to keep list scanning fast when many ordinary recordings accumulate.
+
+Do not reintroduce without a very specific reason:
+- Periodic sleep timer wake (`esp_sleep_enable_timer_wakeup(30000000ULL)`): caused sleep-idle random pops.
+- Mic-hot/no-`Mic.end()` across playback/list/sleep without clear boundaries: caused no-audio/low-audio regressions.
+- Delaying record-stop `Mic.end()` until playback start: moved the pop to playback start, which was worse.
+- ES8311 DAC digital mute / 0x31/0x37 ramp experiment: no improvement for record transition pop.
