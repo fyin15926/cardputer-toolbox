@@ -1,0 +1,300 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Cardputer Toolbox — 项目交接文档</title>
+<style>
+  :root{--bg:#0d1117;--fg:#e6edf3;--green:#39d353;--dim:#388e3c;--red:#f85149;--head:#1f6feb;--border:#30363d;--code:#161b22;--tag:#1a7f37}
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{background:var(--bg);color:var(--fg);font:14px/1.6 'Segoe UI',sans-serif;padding:24px}
+  h1{color:var(--green);font-size:22px;border-bottom:1px solid var(--border);padding-bottom:10px;margin-bottom:18px}
+  h2{color:var(--head);font-size:15px;margin:24px 0 8px;border-left:3px solid var(--head);padding-left:8px}
+  h3{color:var(--green);font-size:13px;margin:16px 0 6px}
+  table{width:100%;border-collapse:collapse;margin:8px 0}
+  th{background:var(--code);color:var(--green);text-align:left;padding:6px 10px;font-size:12px}
+  td{padding:5px 10px;border-bottom:1px solid var(--border);font-size:13px;vertical-align:top}
+  td:first-child{white-space:nowrap;color:#a5d6ff;font-weight:600}
+  code{background:var(--code);color:#f8c73a;padding:1px 5px;border-radius:3px;font-size:12px;font-family:Consolas,monospace}
+  pre{background:var(--code);border:1px solid var(--border);border-radius:6px;padding:12px;margin:8px 0;overflow-x:auto;font-size:12px;font-family:Consolas,monospace;color:#c9d1d9;line-height:1.5}
+  .warn{background:#3d1f00;border:1px solid #f85149;border-radius:4px;padding:8px 12px;margin:8px 0;font-size:13px;color:#ffa657}
+  .note{background:#0d2d0d;border:1px solid var(--dim);border-radius:4px;padding:8px 12px;margin:8px 0;font-size:13px;color:#7ee787}
+  .tag{background:var(--tag);color:#fff;border-radius:3px;padding:1px 6px;font-size:11px;margin-right:4px}
+  nav{background:var(--code);border:1px solid var(--border);border-radius:6px;padding:12px 16px;margin-bottom:24px;display:flex;flex-wrap:wrap;gap:10px}
+  nav a{color:#58a6ff;text-decoration:none;font-size:13px}
+  nav a:hover{text-decoration:underline}
+  .grid{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+  @media(max-width:700px){.grid{grid-template-columns:1fr}}
+  footer{margin-top:32px;border-top:1px solid var(--border);padding-top:12px;color:#6e7681;font-size:12px}
+  .badge{display:inline-block;background:#1a4a1a;color:var(--green);border:1px solid var(--dim);border-radius:10px;padding:1px 8px;font-size:11px;margin-right:4px}
+</style>
+</head>
+<body>
+
+<h1>🃏 Cardputer Toolbox — 项目交接文档</h1>
+
+<nav>
+  <a href="#hw">硬件</a>
+  <a href="#dirs">目录结构</a>
+  <a href="#tools">工具链</a>
+  <a href="#workflow">编译&烧录</a>
+  <a href="#arch">代码架构</a>
+  <a href="#ui">UI布局</a>
+  <a href="#keys">按键映射</a>
+  <a href="#consts">关键常量</a>
+  <a href="#limits">约束禁令</a>
+  <a href="#errors">常见错误</a>
+  <a href="#git">GitHub同步</a>
+  <a href="#todo">待办</a>
+</nav>
+
+<!-- ─── 硬件 ─── -->
+<h2 id="hw">硬件规格</h2>
+<table>
+  <tr><th>属性</th><th>值</th></tr>
+  <tr><td>设备</td><td>M5Stack Cardputer-Adv</td></tr>
+  <tr><td>MCU</td><td>ESP32-S3</td></tr>
+  <tr><td>屏幕</td><td>240×135 px，ST7789V2，横屏（SCREEN_ROT=1）</td></tr>
+  <tr><td>音频编解码</td><td>ES8311（I2C地址 0x18），NS4150B 功放</td></tr>
+  <tr><td>SD卡引脚</td><td>SCLK=40 MISO=39 MOSI=14 CS=12，25MHz</td></tr>
+  <tr><td>录音格式</td><td>16kHz 单声道 16-bit PCM WAV，存 <code>/REC/recXXX.wav</code></td></tr>
+  <tr><td>串口</td><td><code>COM3</code>（烧录/调试）</td></tr>
+</table>
+
+<!-- ─── 目录 ─── -->
+<h2 id="dirs">文件目录</h2>
+<div class="grid">
+<div>
+<h3>源码（主仓库）</h3>
+<pre>D:\github仓库同步\小机器\toolbox\
+├── toolbox.ino          ← 唯一源码文件，直接编辑这里
+├── HANDOVER_claude.html ← 本文档
+├── DESIGN_SPEC.md       ← UI设计规格
+├── COMPILE_FLASH.md     ← 编译烧录详细指南
+└── UI_INTERACTION_SPEC.md</pre>
+</div>
+<div>
+<h3>工具链（本地，不在仓库）</h3>
+<pre>C:\cardputer\
+├── tools\
+│   ├── arduino-cli\arduino-cli.exe  ← CLI主程序
+│   ├── build_and_flash.ps1          ← 一键脚本
+│   ├── tb.out.log                   ← 编译stdout
+│   └── tb.err.log                   ← 编译stderr（错误在这）
+├── sketches\toolbox\toolbox.ino     ← 编译副本（勿直接编辑）
+└── build_fresh\out\                 ← 编译输出（.bin在此）</pre>
+</div>
+</div>
+<div class="note">⚠ <strong>编辑源码只改 D:\github仓库同步\...</strong>，C:\cardputer\sketches\ 是同步过去的副本，会被覆盖。</div>
+
+<!-- ─── 工具链 ─── -->
+<h2 id="tools">工具链版本</h2>
+<table>
+  <tr><th>组件</th><th>版本</th><th>路径/备注</th></tr>
+  <tr><td>arduino-cli</td><td>最新</td><td><code>C:\cardputer\tools\arduino-cli\arduino-cli.exe</code>（不在PATH）</td></tr>
+  <tr><td>esp32 core</td><td><strong>3.1.3-cn</strong></td><td><code>...\Arduino15\packages\esp32\hardware\esp32\3.1.3</code></td></tr>
+  <tr><td>M5Cardputer</td><td>1.1.1</td><td>via arduino-cli</td></tr>
+  <tr><td>M5Unified</td><td>0.2.15</td><td>via arduino-cli</td></tr>
+  <tr><td>M5GFX</td><td>0.2.21</td><td>via arduino-cli</td></tr>
+  <tr><td>FQBN</td><td>—</td><td><code>esp32:esp32:m5stack_cardputer</code></td></tr>
+  <tr><td>arduino-cli config</td><td>—</td><td><code>C:\Users\87194\AppData\Local\Arduino15\arduino-cli.yaml</code></td></tr>
+</table>
+
+<!-- ─── 编译烧录 ─── -->
+<h2 id="workflow">编译 &amp; 烧录流程</h2>
+
+<h3>一键脚本（推荐）</h3>
+<pre>powershell -File C:\cardputer\tools\build_and_flash.ps1</pre>
+<div class="note">脚本依次：①同步源码 ②编译（60–120秒）③烧录到COM3。编译失败自动停止，不会烧旧固件。</div>
+
+<h3>手动三步</h3>
+<pre># 1. 同步源码
+Copy-Item -Force "D:\github仓库同步\小机器\toolbox\toolbox.ino" `
+          "C:\cardputer\sketches\toolbox\toolbox.ino"
+
+# 2. 编译
+$cli = "C:\cardputer\tools\arduino-cli\arduino-cli.exe"
+$proc = Start-Process -FilePath $cli `
+    -ArgumentList "compile --fqbn esp32:esp32:m5stack_cardputer --build-path C:\cardputer\build_fresh\out C:\cardputer\sketches\toolbox" `
+    -RedirectStandardOutput C:\cardputer\tools\tb.out.log `
+    -RedirectStandardError  C:\cardputer\tools\tb.err.log `
+    -NoNewWindow -PassThru -Wait
+Write-Host "Exit: $($proc.ExitCode)"   # 0=成功
+
+# 3. 烧录（先确认设备唤醒，按一下键盘）
+$proc = Start-Process -FilePath $cli `
+    -ArgumentList "upload --fqbn esp32:esp32:m5stack_cardputer --port COM3 --input-dir C:\cardputer\build_fresh\out" `
+    -RedirectStandardOutput C:\cardputer\tools\tb.out.log `
+    -RedirectStandardError  C:\cardputer\tools\tb.err.log `
+    -NoNewWindow -PassThru -Wait</pre>
+
+<h3>查看编译错误</h3>
+<pre>Get-Content C:\cardputer\tools\tb.err.log   # 错误详情
+Get-Content C:\cardputer\tools\tb.out.log   # Flash/RAM用量</pre>
+
+<h3>Flash用量参考</h3>
+<table>
+  <tr><th>指标</th><th>当前值</th><th>上限</th></tr>
+  <tr><td>Flash</td><td>1,141,928 bytes（87%）</td><td>1,310,720 bytes</td></tr>
+  <tr><td>RAM（全局）</td><td>75,644 bytes（23%）</td><td>327,680 bytes</td></tr>
+</table>
+<div class="warn">⚠ 不要添加中文大字体（如 efontCN_24 约占350KB）。大号数字用内置 <code>Font4</code>（纯ASCII，无额外开销）。</div>
+
+<!-- ─── 代码架构 ─── -->
+<h2 id="arch">代码架构（toolbox.ino）</h2>
+
+<h3>主要函数</h3>
+<table>
+  <tr><th>函数</th><th>说明</th></tr>
+  <tr><td><code>setup()</code></td><td>初始化M5、SD、音频，加载hotkeys，进入loop</td></tr>
+  <tr><td><code>loop()</code></td><td>主屏（drawHome），等待按键：Space→录音，Enter→播放，\→列表，快捷键→直接播放</td></tr>
+  <tr><td><code>recordingScreen(bool showIdle)</code></td><td>录音界面。<code>showIdle=true</code>先显示待机态等第二次Space；<code>false</code>直接录音（主屏调用）</td></tr>
+  <tr><td><code>playbackScreen(int recNum)</code></td><td>回放界面。播放自然结束后停留在界面，等用户按键离开</td></tr>
+  <tr><td><code>listScreen()</code></td><td>录音列表，;/.翻页，回车播放，Ctrl+键绑定快捷键，N降噪</td></tr>
+  <tr><td><code>drawHome()</code></td><td>主屏（录音待机态视觉），TAB_REC高亮</td></tr>
+  <tr><td><code>drawTabBar(int active)</code></td><td>直接在Display上画右侧标签栏（不用Canvas），active=0/1/2</td></tr>
+  <tr><td><code>drawRecCanvas(...)</code></td><td>录音Canvas帧：AB双波形 + 计时器 + 电量</td></tr>
+  <tr><td><code>drawWaveProgress(...)</code></td><td>回放进度波形（连线样式，绿色=已播/暗=未播，白色播放头）</td></tr>
+  <tr><td><code>afterRecordingFlow(int recNum)</code></td><td>录音结束后路由：g_afterRecord决定去列表/播放</td></tr>
+  <tr><td><code>listFlow(int n)</code></td><td>列表界面的完整流程控制（含从列表→录音→再返回的循环）</td></tr>
+  <tr><td><code>playFlow(int n)</code></td><td>播放流程控制</td></tr>
+  <tr><td><code>loadWaveBars(File &f)</code></td><td>从WAV文件采样填充waveBars[]（int8_t有符号，保留极性）</td></tr>
+</table>
+
+<h3>返回码常量</h3>
+<table>
+  <tr><th>常量</th><th>值</th><th>含义</th></tr>
+  <tr><td><code>R_BACK</code></td><td>0</td><td>退格：返回上一层</td></tr>
+  <tr><td><code>R_RECORD</code></td><td>1</td><td>空格：去录音</td></tr>
+  <tr><td><code>R_PLAY</code></td><td>2</td><td>播放键：切换播放（g_nextPlay存目标编号）</td></tr>
+  <tr><td><code>R_LIST</code></td><td>3</td><td>列表键：进入列表</td></tr>
+  <tr><td><code>R_NOISE</code></td><td>4</td><td>N键：降噪</td></tr>
+</table>
+
+<!-- ─── UI布局 ─── -->
+<h2 id="ui">UI 布局</h2>
+<pre>┌──────────────────────────────────────────────┬─────┐
+│                                              │ 列  │ ←TAB_LIST(0)
+│     内容区  CONTENT_W=212px                   │ 表  │  45px高
+│                                              ├─────┤
+│  波形区 y:16–109 (WAVE_H=93)                  │ 回  │ ←TAB_PLAY(1)
+│    ┌── A线 (上半) A_CY=39 ──┐                │ 放  │
+│    └── 中轴    WAVE_CY=62  ─┘                ├─────┤
+│    ┌── B线 (下半) B_CY=85  ─┐                │ 录  │ ←TAB_REC(2)
+│    └───────────────────────┘                │ 制  │  活跃=绿底
+│  计时器 y:110–135 (Font4 大号数字)             └─────┘
+└──────────────────────────────────────────────┘
+  TAB_X=212   TAB_W=28   分隔线: x=211</pre>
+
+<h3>Canvas vs Display</h3>
+<ul style="margin:6px 0 6px 20px;font-size:13px">
+  <li>内容区用 <code>M5Canvas</code>（212×135），<code>pushSprite(0,0)</code> 推到屏幕</li>
+  <li>标签栏（x 212–239）直接用 <code>M5Cardputer.Display</code> 绘制，Canvas推送不会覆盖它</li>
+  <li><code>drawTabBar()</code> 在每个界面初始化时调用一次即可</li>
+</ul>
+
+<!-- ─── 关键常量 ─── -->
+<h2 id="consts">关键常量 &amp; 变量</h2>
+<pre>// 配色
+COL_BG    0x0000  // 纯黑
+COL_GREEN 0x07E0  // 荧光绿
+COL_DIM   0x0320  // 暗绿
+COL_RED   0xF800  // 警告红
+COL_WHITE 0xFFFF  // 白（播放头）
+
+// 布局
+CONTENT_W=212  TAB_X=212  TAB_W=28
+WAVE_TOP=16  WAVE_BOT=109  WAVE_H=93  WAVE_CY=62  MAX_BAR_H=40
+
+// A/B波形中轴（在 drawRecCanvas 前静态定义）
+A_CY   = (WAVE_TOP+WAVE_CY)/2      = 39
+A_HALF = (WAVE_CY-WAVE_TOP)/2 - 2  = 21
+B_CY   = (WAVE_CY+WAVE_BOT)/2      = 85
+B_HALF = (WAVE_BOT-WAVE_CY)/2 - 2  = 21
+
+// 录音
+REC_RATE=16000Hz  REC_N=256(每帧)
+int8_t waveBars[WAVE_BARS]     // 回放波形，有符号（保留极性）
+int8_t waveScroll[CONTENT_W]   // 录音滚动历史波形
+
+// 振幅计算（录音，RMS×3）
+float rms = sqrtf(sumSq / REC_N);
+int amp = (int)(rms * (3.0f * A_HALF) / 32767.0f) * sign;</pre>
+
+<!-- ─── 按键映射 ─── -->
+<h2 id="keys">按键映射</h2>
+<table>
+  <tr><th>物理键</th><th>keyXxx()函数</th><th>作用</th></tr>
+  <tr><td>Space</td><td><code>keySpace()</code></td><td>录音开始/暂停；从其他界面→录音待机</td></tr>
+  <tr><td>Enter</td><td><code>keyEnter()</code></td><td>录音结束存盘；列表播放；回放暂停/继续</td></tr>
+  <tr><td>Backspace</td><td><code>keyDel()</code></td><td>返回上一层；主屏=手动息屏</td></tr>
+  <tr><td>\（反斜杠）</td><td><code>keyList()</code></td><td>进入录音列表</td></tr>
+  <tr><td>; / .</td><td><code>keyUp() keyDown()</code></td><td>列表上下翻页</td></tr>
+  <tr><td>= / -</td><td><code>keyVolUp() keyVolDn()</code></td><td>回放音量（playVol 0–255）</td></tr>
+  <tr><td>W / S</td><td>直接检测</td><td>录音增益（recGain）</td></tr>
+  <tr><td>Ctrl+字母/数字</td><td><code>keyCtrl()+pressedBindKey()</code></td><td>列表界面绑定快捷键</td></tr>
+  <tr><td>任意字母/数字（已绑定）</td><td><code>pressedBindKey()</code></td><td>任意界面直接播放对应录音</td></tr>
+  <tr><td>N</td><td>直接检测</td><td>对当前录音降噪（列表界面）</td></tr>
+</table>
+
+<!-- ─── 约束禁令 ─── -->
+<h2 id="limits">⛔ 约束与禁令</h2>
+<table>
+  <tr><th>禁止</th><th>原因</th></tr>
+  <tr><td>升级 esp32 core 到 3.2.x / 3.3.x</td><td>Mic.begin() 在新版崩溃，只能用 <strong>3.1.3-cn</strong></td></tr>
+  <tr><td>在中文路径下编译</td><td>arduino-cli 子进程会报路径错误</td></tr>
+  <tr><td>直接编辑 C:\cardputer\sketches\...ino</td><td>同步时会被覆盖</td></tr>
+  <tr><td>添加 efontCN_24（24px中文字体）</td><td>占~350KB，Flash直接超限；用 efontCN_12 或 Font4</td></tr>
+  <tr><td>C++ 默认参数写两遍</td><td>声明与定义只能有一处写 <code>= default</code>，否则编译报 <code>-fpermissive</code></td></tr>
+  <tr><td>用 <code>compile --upload</code> 一步完成</td><td>难以排查错误，分步更安全</td></tr>
+  <tr><td>把 arduino-cli 加入PATH后裸调用</td><td>可能与系统其他版本冲突，始终用完整路径</td></tr>
+</table>
+
+<!-- ─── 常见错误 ─── -->
+<h2 id="errors">常见编译错误</h2>
+<table>
+  <tr><th>错误信息</th><th>原因</th><th>解决</th></tr>
+  <tr><td><code>Platform 'esp32:esp32' not found</code></td><td>3.1.3核心丢失</td><td>重装：<code>arduino-cli core install esp32:esp32@3.1.3</code>（需jihulab镜像）</td></tr>
+  <tr><td><code>esp8266-compat.h not found</code></td><td>混入了3.3.x核心</td><td>手动删除 <code>...\Arduino15\packages\esp32\hardware\esp32\3.3.x</code></td></tr>
+  <tr><td><code>Arduino.h not found</code></td><td>构建缓存污染</td><td>删除 <code>C:\cardputer\build_fresh\out</code> 重编</td></tr>
+  <tr><td><code>default argument given for parameter</code></td><td>函数声明和定义都写了默认值</td><td>默认值只保留在前向声明中，定义里去掉</td></tr>
+  <tr><td>Flash超过100%</td><td>引入大字体库（efontCN_24等）</td><td>改用 Font4 或 efontCN_12</td></tr>
+</table>
+
+<h3>恢复esp32 3.1.3核心</h3>
+<pre>$cli = "C:\cardputer\tools\arduino-cli\arduino-cli.exe"
+& $cli config add board_manager.additional_urls `
+    "https://jihulab.com/esp-mirror/arduino/arduino-esp32/-/raw/gh-pages/package_esp32_cn_index.json"
+& $cli core update-index
+& $cli core install esp32:esp32@3.1.3</pre>
+
+<!-- ─── GitHub同步 ─── -->
+<h2 id="git">GitHub 同步</h2>
+<div class="note">端口22被封，使用 SSH-over-443（HTTPS PAT无写权限）。</div>
+<pre># 仓库远端地址（已配置）
+ssh://git@ssh.github.com:443/fyin15926/cardputer-toolbox.git
+
+# 推送
+git -C "D:\github仓库同步\小机器\toolbox" add -A
+git -C "D:\github仓库同步\小机器\toolbox" commit -m "描述"
+git -C "D:\github仓库同步\小机器\toolbox" push</pre>
+
+<!-- ─── 待办 ─── -->
+<h2 id="todo">待办 / 可扩展功能</h2>
+<table>
+  <tr><th>优先级</th><th>功能</th><th>说明</th></tr>
+  <tr><td><span class="badge">低</span></td><td>标签栏活跃凸出动画</td><td>DESIGN_SPEC提到活跃标签向左凸出3px，当前为平面</td></tr>
+  <tr><td><span class="badge">低</span></td><td>磁带转盘动画</td><td>回放界面顶部显示旋转磁盘图案</td></tr>
+  <tr><td><span class="badge">低</span></td><td>快进/快退指示</td><td>回放界面 &gt;&gt; / &lt;&lt; 视觉反馈</td></tr>
+  <tr><td><span class="badge">中</span></td><td>录音文件重命名</td><td>列表界面给录音起名字</td></tr>
+  <tr><td><span class="badge">中</span></td><td>降噪质量优化</td><td>当前简单谱减法，可改为WebRTC VAD</td></tr>
+  <tr><td><span class="badge">中</span></td><td>多工具支持</td><td>项目定位是"工具箱"，录音是第一个工具</td></tr>
+</table>
+
+<footer>
+  Generated by <strong>Claude</strong> (Anthropic) · 2026-05-23 ·
+  项目源码：<code>D:\github仓库同步\小机器\toolbox\toolbox.ino</code>
+</footer>
+
+</body>
+</html>

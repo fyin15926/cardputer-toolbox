@@ -1,28 +1,49 @@
 /*
  * 我的工具箱 (My Toolbox) for M5Stack Cardputer-Adv
- * 风格: 纯黑背景 + 黑客帝国荧光绿 + 线性 + 中文界面 + 竖屏(USB-C 口朝上)
+ * 风格: 纯黑背景 + 黑客帝国荧光绿 + 线性 + 中文界面 + 横屏(240x135)
  *
  * 录音应用交互:
- *   主屏: 空格=录音; ;/. 上下选菜单, 回车进入"录音列表"; 按已绑定的字母键=直接播放该录音
+ *   主屏: 空格=录音; ;/. 上下选菜单, 回车进入"录音列表"; 按已绑定的键=直接播放该录音
  *   录制中: 空格=暂停/继续; 回车=结束(存盘并进入列表); W/S=音量
- *   录音列表: ;/. 上下选; 回车=播放; 退格=返回主屏; Z 再按字母=给该录音绑定快捷键; N=降噪
- *   回放: 回车=暂停/继续; +/- (= 与 - 键)=音量; 退格=返回
+ *   录音列表: ;/. 上下选; 回车=播放; 退格=返回主屏; Ctrl+键(字母/数字)=给该录音绑定快捷键; N=降噪
+ *   回放: 回车=暂停/继续; +/- (= 与 - 键)=音量; 退格=返回; 空格=去录音
+ *   绑定的播放键=最高优先级, 任意界面(录音中除外)即按即播, 且播放中按别的键可覆盖切换
  *
  * 方向键(物理): ; = 上, . = 下, , = 左, / = 右
  */
 #include <M5Cardputer.h>
 #include <SD.h>
 #include <SPI.h>
+#include "esp_sleep.h"   // 轻睡眠(息屏省电)
+#include "driver/gpio.h" // 键盘中断唤醒(GPIO11)
 
 // ---------- 屏幕方向 ----------
-// 竖屏: 0 或 2. 若上下颠倒, 改另一个即可.
-#define SCREEN_ROT 2
+// 横屏: 1 或 3. 若上下颠倒, 改另一个即可.
+#define SCREEN_ROT 1
 
 // ---------- 配色 ----------
 #define COL_BG    0x0000   // 纯黑
 #define COL_GREEN 0x07E0   // 荧光绿(亮)
-#define COL_DIM   0x03A0   // 暗绿
+#define COL_DIM   0x0320   // 暗绿
 #define COL_RED   0xF800   // 录音红点
+#define COL_WHITE 0xFFFF   // 播放头白线
+
+// ---------- 三栏 UI 布局常量 ----------
+// 屏幕 240×135; 右侧 28px = 标签栏; 左侧 212px = 内容区
+#define CONTENT_W  212     // 内容区宽度 (x: 0..211)
+#define TAB_X      212     // 标签栏起始 x
+#define TAB_W       28     // 标签栏宽度
+#define WAVE_TOP    16     // 波形区顶 y
+#define WAVE_BOT   109     // 波形区底 y  (余 26px 给计时器)
+#define WAVE_H      93     // 波形区高度
+#define WAVE_CY     62     // 波形中轴 y = (16+109)/2
+#define MAX_BAR_H   40     // waveBars[] 最大值 (≤ WAVE_H/2-6)
+#define TAB_LIST     0     // 标签 ID: 列表
+#define TAB_PLAY     1     // 标签 ID: 回放
+#define TAB_REC      2     // 标签 ID: 录制
+
+// 录音滚动波形历史 (每帧推入一列, content宽度列)
+static int8_t waveScroll[CONTENT_W];
 
 // ---------- 录音参数 ----------
 static const uint32_t REC_RATE = 16000;  // 16kHz
@@ -46,6 +67,10 @@ int homeSel = 0;             // 0=开始录音, 1=录音列表
 uint32_t lastBlink = 0;
 bool curOn = false;
 uint32_t lastBat = 0;
+
+// 息屏(轻睡眠): 主屏闲置超过此时长自动息屏; 退格键可手动息屏
+#define SLEEP_IDLE_MS 60000  // 60秒(可调)
+uint32_t lastInputMs = 0;
 
 // ---------- SD 辅助 ----------
 static bool sdMount() {
@@ -83,7 +108,10 @@ static void writeWavHeader(File &f, uint32_t rate, uint32_t dataBytes) {
 #define R_BACK   0   // 退格: 返回上一层
 #define R_RECORD 1   // 空格: 去开始录音
 #define R_PLAY   2   // 按下某个已绑定的播放键: 立刻去播放(可覆盖当前播放)
+#define R_LIST   3   // 列表键: 进入录音列表
+#define R_NOISE  4   // N: 对最近/当前录音降噪
 int g_nextPlay = 0;  // 配合 R_PLAY: 要切换去播放的录音编号
+int g_afterRecord = R_LIST;  // 录音结束后跳转目标
 
 // ---------- 按键小工具 ----------
 // 取当前按下的第一个可绑定键(字母转小写, 或数字); 没有则返回 0
@@ -100,8 +128,11 @@ static bool keyCtrl()  { return M5Cardputer.Keyboard.keysState().ctrl; }
 static bool keySpace() { return M5Cardputer.Keyboard.isKeyPressed(' '); }
 static bool keyDel()   { return M5Cardputer.Keyboard.keysState().del; }
 static bool keyEnter() { return M5Cardputer.Keyboard.keysState().enter; }
+static bool keyList()  { return M5Cardputer.Keyboard.isKeyPressed('\\'); }
 static bool keyUp()    { return M5Cardputer.Keyboard.isKeyPressed(';'); }
 static bool keyDown()  { return M5Cardputer.Keyboard.isKeyPressed('.'); }
+static bool keyLeft()  { return M5Cardputer.Keyboard.isKeyPressed(','); }
+static bool keyRight() { return M5Cardputer.Keyboard.isKeyPressed('/'); }
 static bool keyVolUp() { return M5Cardputer.Keyboard.isKeyPressed('=') || M5Cardputer.Keyboard.isKeyPressed('+'); }
 static bool keyVolDn() { return M5Cardputer.Keyboard.isKeyPressed('-') || M5Cardputer.Keyboard.isKeyPressed('_'); }
 
@@ -110,36 +141,76 @@ static void waitRelease() {
   do { M5Cardputer.update(); delay(8); } while (M5Cardputer.Keyboard.isPressed());
 }
 
-// ---------- 通用 UI ----------
+// ---------- 通用 UI (横屏 240x135) ----------
+// 顶栏: 标题(亮绿16) + 左侧小竖条点缀 + 下分隔线
 static void drawHeader(const char *title) {
   auto &d = M5Cardputer.Display;
+  d.fillRect(2, 5, 3, 13, COL_GREEN);          // 标题前的荧光绿小竖条(点缀)
   d.setFont(&fonts::efontCN_16);
   d.setTextColor(COL_GREEN, COL_BG);
-  d.setCursor(6, 5);
+  d.setCursor(10, 3);
   d.print(title);
-  d.drawFastHLine(0, 24, d.width(), COL_DIM);
+  d.drawFastHLine(0, 21, d.width(), COL_DIM);
 }
 
+// 电量: 内容区右上角小字
 static void drawBattery() {
   auto &d = M5Cardputer.Display;
-  int y = d.height() - 18;
-  d.setFont(&fonts::efontCN_16);
-  d.fillRect(0, y, d.width(), 18, COL_BG);
+  int bat = M5.Power.getBatteryLevel();
+  uint16_t col = (bat <= 20) ? COL_RED : COL_DIM;
+  d.fillRect(CONTENT_W - 34, 1, 34, 14, COL_BG);
+  d.setFont(&fonts::efontCN_12);
+  d.setTextColor(col, COL_BG);
+  d.setCursor(CONTENT_W - 32, 2);
+  d.printf("%d%%", bat);
+}
+
+// ---------- 右侧标签栏 (28px, 贴右边) ----------
+// 顺序(上→下): 列表(0) / 回放(1) / 录制(2)
+static void drawTabBar(int active) {
+  auto &d = M5Cardputer.Display;
+  const char *c1[] = {"列", "回", "录"};
+  const char *c2[] = {"表", "放", "制"};
+  d.drawFastVLine(TAB_X - 1, 0, 135, COL_DIM);   // 分隔线
+  for (int i = 0; i < 3; i++) {
+    int ty = i * 45;
+    bool on = (i == active);
+    if (on) {
+      d.fillRect(TAB_X, ty, TAB_W, 45, COL_GREEN);
+      d.setTextColor(COL_BG, COL_GREEN);
+    } else {
+      d.fillRect(TAB_X, ty, TAB_W, 45, COL_BG);
+      d.drawRect(TAB_X + 1, ty + 1, TAB_W - 2, 43, COL_DIM);
+      d.setTextColor(COL_DIM, COL_BG);
+    }
+    d.setFont(&fonts::efontCN_12);
+    int cx = TAB_X + (TAB_W - 12) / 2;  // 12px字在28px中居中: offset=8
+    d.setCursor(cx, ty + 7);   d.print(c1[i]);
+    d.setCursor(cx, ty + 21);  d.print(c2[i]);
+  }
+}
+
+// 底栏提示(小字, 上方一条分隔线)
+static void drawFooter(const char *hint) {
+  auto &d = M5Cardputer.Display;
+  int y = d.height() - 15;
+  d.drawFastHLine(0, y - 3, d.width(), COL_DIM);
+  d.fillRect(0, y, d.width(), 15, COL_BG);
+  d.setFont(&fonts::efontCN_12);
   d.setTextColor(COL_DIM, COL_BG);
   d.setCursor(6, y);
-  d.printf("BAT %d%%", M5.Power.getBatteryLevel());
+  d.print(hint);
 }
 
 static void showMsg(const char *title, const char *msg, uint16_t col) {
   auto &d = M5Cardputer.Display;
   d.fillScreen(COL_BG);
   drawHeader(title);
+  d.setFont(&fonts::efontCN_16);
   d.setTextColor(col, COL_BG);
-  d.setCursor(8, 40);
+  d.setCursor(12, 56);
   d.print(msg);
-  d.setTextColor(COL_DIM, COL_BG);
-  d.setCursor(8, d.height() - 40);
-  d.print("按任意键返回");
+  drawFooter("按任意键返回");
   waitRelease();
   while (true) {
     M5Cardputer.update();
@@ -211,7 +282,7 @@ static int pressedHotkeyRec() {
 }
 
 // ---------- 列出录音编号 ----------
-static const int MAX_REC = 200;
+static const int MAX_REC = 9999;
 int recList[MAX_REC];
 int recCount = 0;
 
@@ -227,6 +298,11 @@ static void scanRecordings() {
     else if (++misses > 5) break;   // 编号连续, 连查到几个空缺就停(避免一路查到9999卡死)
   }
   SD.end();
+}
+
+static int latestRecording() {
+  scanRecordings();
+  return recCount > 0 ? recList[recCount - 1] : 0;
 }
 
 // ---------- 提示音 "滴" (淡入淡出) ----------
@@ -248,7 +324,76 @@ static void speakerOn() {
   M5Cardputer.In_I2C.writeRegister8(ES, 0x37, 0x08, 400000);
 }
 
-// ---------- 回放界面: 回车暂停/继续, +/- 音量, 退格返回, 空格去录音 ----------
+static const int WAVE_BARS = 53;   // 53 × 4px = 212px (CONTENT_W)
+static int8_t waveBars[WAVE_BARS]; // 有符号: -MAX_BAR_H..+MAX_BAR_H
+
+static void loadWaveBars(File &f, uint32_t dataSize) {
+  int16_t tmp[128];
+  for (int i = 0; i < WAVE_BARS; i++) {
+    uint32_t start = 44 + (uint32_t)((uint64_t)dataSize * i / WAVE_BARS);
+    uint32_t end   = 44 + (uint32_t)((uint64_t)dataSize * (i + 1) / WAVE_BARS);
+    uint32_t span  = (end > start) ? (end - start) : 0;
+    if (span > sizeof(tmp)) span = sizeof(tmp);
+    span &= ~1U;
+    int16_t peakPos = 0, peakNeg = 0;
+    if (span > 0 && f.seek(start)) {
+      int rd = f.read((uint8_t *)tmp, span);
+      int n = rd / 2;
+      for (int k = 0; k < n; k++) {
+        if (tmp[k] > peakPos) peakPos = tmp[k];
+        if (tmp[k] < peakNeg) peakNeg = tmp[k];
+      }
+    }
+    // 取绝对值最大的那个采样(保留符号) → 有符号波形
+    int32_t peak = (-peakNeg > peakPos) ? peakNeg : peakPos;
+    int h = (int)((int64_t)peak * MAX_BAR_H / 32767);
+    if (h > MAX_BAR_H) h = MAX_BAR_H;
+    if (h < -MAX_BAR_H) h = -MAX_BAR_H;
+    waveBars[i] = (int8_t)h;
+  }
+  f.seek(44);
+}
+
+// 播放进度 + 计时器 (连线波形, 每帧刷新)
+static void drawWaveProgress(uint32_t played, uint32_t dataSize) {
+  auto &d = M5Cardputer.Display;
+  // --- 波形区 ---
+  d.fillRect(0, WAVE_TOP, CONTENT_W, WAVE_H, COL_BG);
+  d.drawFastHLine(0, WAVE_CY, CONTENT_W, 0x0840);  // 暗中轴线
+
+  int playedBars = dataSize ? (int)((uint64_t)played * WAVE_BARS / dataSize) : 0;
+  if (playedBars > WAVE_BARS) playedBars = WAVE_BARS;
+
+  // 连线样式 (与录音界面相同风格)
+  for (int i = 1; i < WAVE_BARS; i++) {
+    int x0 = (i - 1) * CONTENT_W / WAVE_BARS;
+    int x1 = i       * CONTENT_W / WAVE_BARS;
+    int y0 = WAVE_CY - (int)waveBars[i - 1];
+    int y1 = WAVE_CY - (int)waveBars[i];
+    uint16_t col = (i <= playedBars) ? COL_GREEN : COL_DIM;
+    d.drawLine(x0, y0, x1, y1, col);
+  }
+  // 播放头白线
+  int headX = dataSize ? (int)((uint64_t)played * CONTENT_W / dataSize) : 0;
+  if (headX >= CONTENT_W) headX = CONTENT_W - 1;
+  d.drawFastVLine(headX, WAVE_TOP, WAVE_H, COL_WHITE);
+
+  // --- 计时器 (底部左侧) ---
+  uint32_t cur  = (played / 2) / REC_RATE;
+  uint32_t tot  = (dataSize / 2) / REC_RATE;
+  d.fillRect(0, WAVE_BOT + 1, CONTENT_W, 135 - WAVE_BOT - 1, COL_BG);
+  d.setFont(&fonts::Font4);
+  d.setTextColor(COL_GREEN, COL_BG);
+  d.setCursor(4, WAVE_BOT + 2);
+  d.printf("%02lu:%02lu", (unsigned long)(cur / 60), (unsigned long)(cur % 60));
+  // 右侧暗色总时长
+  d.setFont(&fonts::efontCN_12);
+  d.setTextColor(COL_DIM, COL_BG);
+  d.setCursor(CONTENT_W - 44, WAVE_BOT + 8);
+  d.printf("/%02lu:%02lu", (unsigned long)(tot / 60), (unsigned long)(tot % 60));
+}
+
+// ---------- 回放界面: 回车停止, +/- 音量, 退格返回, 空格去录音 ----------
 // 返回 R_BACK(返回上一层) 或 R_RECORD(去录音)
 int playbackScreen(const char *path, int recNum) {
   auto &d = M5Cardputer.Display;
@@ -262,44 +407,36 @@ int playbackScreen(const char *path, int recNum) {
   uint32_t fileData = total - 44;
   if (dataSize == 0 || dataSize > fileData) dataSize = fileData;
   f.seek(44);
+  loadWaveBars(f, dataSize);
 
   speakerOn();
 
-  const int barY = 64, barW = d.width() - 16;
-  const int vbX = 48, vbY = 92, vbW = d.width() - 56;
-
-  // 静态部分(画一次)
-  auto drawStatic = [&](bool paused) {
+  // 静态部分(画一次): 标签栏 + 顶栏
+  auto drawStatic = [&]() {
     d.fillScreen(COL_BG);
-    drawHeader(paused ? "已暂停" : "播放中");
-    d.setFont(&fonts::efontCN_16);
+    drawTabBar(TAB_PLAY);
+    // 文件编号 (左上小字)
+    d.setFont(&fonts::efontCN_12);
     d.setTextColor(COL_DIM, COL_BG);
-    d.setCursor(8, 32); d.printf("REC_%04d", recNum);
-    d.drawRect(8, barY, barW, 8, COL_DIM);
-    d.setTextColor(COL_GREEN, COL_BG);
-    d.setCursor(8, 90); d.print("音量");
-    d.drawRect(vbX, vbY, vbW, 8, COL_DIM);
-    d.setTextColor(COL_DIM, COL_BG);
-    d.setCursor(8, d.height() - 64); d.print(paused ? "回车=继续" : "回车=暂停");
-    d.setCursor(8, d.height() - 44); d.print("+/-音量 空格录音");
-    d.setCursor(8, d.height() - 24); d.print("退格=返回");
+    d.setCursor(4, 2);
+    d.printf("REC_%04d", recNum);
+    // 电量
+    drawBattery();
+    // 波形区顶底分隔线
+    d.drawFastHLine(0, WAVE_TOP - 1, CONTENT_W, 0x0820);
+    d.drawFastHLine(0, WAVE_BOT + 1, CONTENT_W, 0x0820);
   };
   auto drawProgress = [&](uint32_t played) {
-    int prog = dataSize ? (int)((uint64_t)played * (barW - 2) / dataSize) : 0;
-    d.fillRect(9, barY + 1, barW - 2, 6, COL_BG);
-    d.fillRect(9, barY + 1, prog, 6, COL_GREEN);
-  };
-  auto drawVol = [&]() {
-    d.fillRect(vbX + 1, vbY + 1, vbW - 2, 6, COL_BG);
-    d.fillRect(vbX + 1, vbY + 1, playVol * (vbW - 2) / 255, 6, COL_GREEN);
+    drawWaveProgress(played, dataSize);
   };
 
-  bool stop = false, paused = false;
+  bool stop = false, paused = false, playDone = false;
   int ret = R_BACK;
   uint32_t played = 0, remaining = dataSize, lastDraw = 0;
+  uint32_t lastSeek = 0;
   int pi = 0;
 
-  drawStatic(false); drawProgress(0); drawVol();
+  drawStatic(); drawProgress(0);
   waitRelease();
 
   while (!stop) {
@@ -308,16 +445,37 @@ int playbackScreen(const char *path, int recNum) {
       int hk = pressedHotkeyRec();
       if (hk > 0) { g_nextPlay = hk; ret = R_PLAY; stop = true; }   // 按到别的绑定键=立刻覆盖播放
       else if (keySpace()) { ret = R_RECORD; stop = true; }   // 空格=去录音
+      else if (keyList()) { ret = R_LIST; stop = true; }      // \ = 列表
       else if (keyDel()) { ret = R_BACK; stop = true; }       // 退格=返回
-      else if (keyEnter()) { paused = !paused; drawStatic(paused); drawProgress(played); drawVol(); waitRelease(); }
-      else if (keyVolUp()) { playVol = (playVol + 25 > 255) ? 255 : playVol + 25; M5Cardputer.Speaker.setVolume(playVol); drawVol(); }
-      else if (keyVolDn()) { playVol = (playVol - 25 < 0) ? 0 : playVol - 25; M5Cardputer.Speaker.setVolume(playVol); drawVol(); }
+      else if (keyEnter()) { ret = R_BACK; stop = true; }
+      else if (keyVolUp()) { playVol = min(255, playVol + 25); M5Cardputer.Speaker.setVolume(playVol); }
+      else if (keyVolDn()) { playVol = max(0,   playVol - 25); M5Cardputer.Speaker.setVolume(playVol); }
     }
     if (stop) break;
+
+    if ((keyLeft() || keyRight()) && millis() - lastSeek > 120) {
+      lastSeek = millis();
+      M5Cardputer.Speaker.stop();
+      uint32_t step = REC_RATE * 2;  // 约 1 秒 PCM 数据
+      if (keyLeft()) played = (played > step) ? (played - step) : 0;
+      if (keyRight()) played = (played + step < dataSize) ? (played + step) : dataSize;
+      played &= ~1U;
+      remaining = dataSize - played;
+      f.seek(44 + played);
+      drawProgress(played);
+      delay(15);
+      continue;
+    }
     if (paused) { delay(8); continue; }
 
     if (remaining == 0) {
-      if (M5Cardputer.Speaker.isPlaying(0) == 0) break;   // 放完
+      if (M5Cardputer.Speaker.isPlaying(0) == 0) {
+        if (!playDone) {
+          playDone = true;
+          drawProgress(dataSize);   // 显示 100% 最终状态
+        }
+        delay(8); continue;         // 停留在播放页面, 等待用户按键
+      }
       delay(8); continue;
     }
     if (M5Cardputer.Speaker.isPlaying(0) >= 2) { delay(2); continue; }
@@ -336,6 +494,10 @@ int playbackScreen(const char *path, int recNum) {
   return ret;
 }
 
+void noiseReduce(const char *path);
+void listFlow(int sel);
+int recordingScreen(bool showIdle = true);
+
 // 播放流程: 支持"播放中按别的绑定键 -> 立刻切到那条"(覆盖). 返回 R_BACK 或 R_RECORD.
 int playFlow(int recNum) {
   while (true) {
@@ -343,6 +505,32 @@ int playFlow(int recNum) {
     int r = playbackScreen(p, recNum);
     if (r == R_PLAY) { recNum = g_nextPlay; continue; }
     return r;
+  }
+}
+
+void afterRecordingFlow(int recNum) {
+  int action = g_afterRecord;
+  if (recNum <= 0) {
+    // 从录音待机界面导航出来(未录制)
+    if (action == R_LIST) { listFlow(0); return; }
+    if (action == R_PLAY) { int latest = latestRecording(); if (latest > 0) playFlow(latest); }
+    return;
+  }
+  while (recNum > 0) {
+    if (action == R_PLAY) {
+      int r = playFlow(recNum);
+      if (r == R_RECORD) { recNum = recordingScreen(true); action = g_afterRecord; continue; }
+      if (r == R_LIST) { listFlow(recNum); return; }
+      return;
+    }
+    if (action == R_NOISE) {
+      char p[40]; snprintf(p, sizeof(p), "/REC/REC_%04d.wav", recNum);
+      noiseReduce(p);
+      action = R_LIST;
+      continue;
+    }
+    listFlow(recNum);
+    return;
   }
 }
 
@@ -452,40 +640,103 @@ void noiseReduce(const char *path) {
   SD.end();
 }
 
-// ---------- 录制中: 离屏画布画竖屏声波(双缓冲不闪) ----------
+// ---------- 录音画面 (canvas: CONTENT_W × 135, 推送到 x=0) ----------
+// A线: waveScroll[] 滚动历史(上半区)  B线: wave[]实时示波器(下半区)
+static const int A_CY   = (WAVE_TOP + WAVE_CY) / 2;        // = 39 A线中轴
+static const int A_HALF = (WAVE_CY - WAVE_TOP) / 2 - 2;    // = 21 A线最大半幅
+static const int B_CY   = (WAVE_CY + WAVE_BOT) / 2;        // = 85 B线中轴
+static const int B_HALF = (WAVE_BOT - WAVE_CY) / 2 - 2;    // = 21 B线最大半幅
+
 void drawRecCanvas(M5Canvas &cv, uint32_t elapsedMs, bool blink, bool paused, int16_t *wave) {
-  int W = cv.width(), H = cv.height();
   cv.fillScreen(COL_BG);
-  if (!paused && blink) cv.fillCircle(9, 9, 5, COL_RED);
-  cv.setFont(&fonts::efontCN_16);
-  cv.setTextColor(paused ? COL_DIM : COL_GREEN, COL_BG);
-  cv.setCursor(20, 1);
-  cv.print(paused ? "已暂停" : "录音中");
-  uint32_t s = elapsedMs / 1000;
-  cv.setTextColor(COL_DIM, COL_BG);
-  cv.setCursor(2, 22);
-  cv.printf("%02lu:%02lu", (unsigned long)(s / 60), (unsigned long)(s % 60));
-  // 声波(示波器): 横跨整宽
-  int wfTop = 44, wfBot = H - 4;
-  int cy = (wfTop + wfBot) / 2, half = (wfBot - wfTop) / 2;
-  cv.drawFastHLine(0, cy, W, COL_DIM);
-  int px = 0, py = cy;
-  for (int x = 0; x < W; x++) {
-    int idx = (int)((long)x * REC_N / W);
-    int v = wave[idx] >> 10;
-    if (v > half) v = half;
-    if (v < -half) v = -half;
-    int y = cy - v;
-    if (x > 0) cv.drawLine(px, py, x, y, COL_GREEN);
-    px = x; py = y;
+
+  // ── 顶栏 ────────────────────────────────────────────────────────
+  if (!paused) {
+    if (blink) cv.fillCircle(8, 7, 5, COL_RED);
+    else { cv.fillCircle(8, 7, 5, COL_BG); cv.drawCircle(8, 7, 5, 0x2000); }
+  } else {
+    cv.fillCircle(8, 7, 5, COL_BG);
   }
+  cv.setFont(&fonts::efontCN_12);
+  cv.setTextColor(paused ? COL_DIM : COL_GREEN, COL_BG);
+  cv.setCursor(18, 2);
+  cv.print(paused ? "PAUSE" : "REC");
+  // 电量 (亮绿, 黑底确保可读)
+  int bat = M5.Power.getBatteryLevel();
+  cv.fillRect(CONTENT_W - 34, 0, 34, 14, COL_BG);
+  cv.setTextColor((bat <= 20) ? COL_RED : COL_GREEN, COL_BG);
+  cv.setCursor(CONTENT_W - 32, 2);
+  cv.printf("%d%%", bat);
+  cv.drawFastHLine(0, WAVE_TOP - 1, CONTENT_W, 0x0820);
+
+  // ── A线: 滚动历史 (上半区, 中轴 y=39) ──────────────────────────
+  cv.drawFastHLine(0, A_CY, CONTENT_W, 0x0440);
+  for (int x = 1; x < CONTENT_W; x++) {
+    int v0 = (int)waveScroll[x - 1]; if (v0 > A_HALF) v0 = A_HALF; if (v0 < -A_HALF) v0 = -A_HALF;
+    int v1 = (int)waveScroll[x];     if (v1 > A_HALF) v1 = A_HALF; if (v1 < -A_HALF) v1 = -A_HALF;
+    cv.drawLine(x - 1, A_CY - v0, x, A_CY - v1, COL_GREEN);
+  }
+
+  // ── 中间分隔线 ──────────────────────────────────────────────────
+  cv.drawFastHLine(0, WAVE_CY, CONTENT_W, COL_DIM);
+
+  // ── B线: 实时示波器 (下半区, 中轴 y=85) ─────────────────────────
+  cv.drawFastHLine(0, B_CY, CONTENT_W, 0x0440);
+  if (wave) {
+    int px = 0, py = B_CY;
+    for (int x = 0; x < CONTENT_W; x++) {
+      int idx = (int)((long)x * REC_N / CONTENT_W);
+      int v = (int)((int32_t)wave[idx] * 3 * B_HALF / 32767);  // 3×放大
+      if (v > B_HALF) v = B_HALF; if (v < -B_HALF) v = -B_HALF;
+      int y = B_CY - v;
+      if (x > 0) cv.drawLine(px, py, x, y, COL_GREEN);
+      px = x; py = y;
+    }
+  }
+
+  // ── 计时器 (底部左侧) ───────────────────────────────────────────
+  uint32_t s = elapsedMs / 1000;
+  cv.setFont(&fonts::Font4);
+  cv.setTextColor(COL_GREEN, COL_BG);
+  cv.setCursor(4, WAVE_BOT + 2);
+  cv.printf("%02lu:%02lu", (unsigned long)(s / 60), (unsigned long)(s % 60));
 }
 
-// 录制. 返回新录音编号(>0); 0=失败/无内容
-int recordingScreen() {
+// 录制. showIdle=true 时先显示待机界面等第二次空格; 返回录音编号(>0) 或 0(取消)
+int recordingScreen(bool showIdle) {
   auto &d = M5Cardputer.Display;
+  g_afterRecord = R_LIST;
+
+  // ── 待机阶段: 进入界面不立即录制, 等待第二次空格 ──────────────
+  if (showIdle) {
+    memset(waveScroll, 0, sizeof(waveScroll));
+    d.fillRect(0, 0, CONTENT_W, 135, COL_BG);
+    drawTabBar(TAB_REC); drawBattery();
+    d.drawCircle(8, 7, 5, 0x2000);
+    d.setFont(&fonts::efontCN_12); d.setTextColor(COL_DIM, COL_BG);
+    d.setCursor(18, 2); d.print("REC");
+    d.drawFastHLine(0, WAVE_TOP - 1, CONTENT_W, 0x0820);
+    d.drawFastHLine(0, A_CY, CONTENT_W, 0x0440);
+    d.drawFastHLine(0, WAVE_CY, CONTENT_W, COL_DIM);
+    d.drawFastHLine(0, B_CY, CONTENT_W, 0x0440);
+    d.setFont(&fonts::efontCN_16); d.setTextColor(COL_DIM, COL_BG);
+    d.setCursor(28, WAVE_CY - 12); d.print("空格  开始录制");
+    d.setFont(&fonts::Font4); d.setTextColor(0x0180, COL_BG);
+    d.setCursor(4, WAVE_BOT + 2); d.print("00:00");
+    waitRelease();
+    while (true) {
+      M5Cardputer.update();
+      if (M5Cardputer.Keyboard.isChange() && M5Cardputer.Keyboard.isPressed()) {
+        if (keySpace())  { waitRelease(); break; }               // → 开始录制
+        if (keyList())   { waitRelease(); g_afterRecord = R_LIST; return 0; }
+        if (keyEnter())  { waitRelease(); g_afterRecord = R_PLAY; return 0; }
+        if (keyDel())    { waitRelease(); g_afterRecord = R_BACK; return 0; }
+      }
+      delay(8);
+    }
+  }
+
   d.fillScreen(COL_BG);
-  drawHeader("录音机");
 
   if (!sdMount()) { showMsg("录音机", "未检测到 SD 卡", COL_RED); return 0; }
   if (!SD.exists("/REC")) SD.mkdir("/REC");
@@ -495,8 +746,12 @@ int recordingScreen() {
   if (!f) { SD.end(); showMsg("录音机", "无法写入文件", COL_RED); return 0; }
   writeWavHeader(f, REC_RATE, 0);
 
-  // 切到麦克风(常开时 Mic.begin 是空操作, 不爆音; 刚播放过则真正重开)
+  // 切到麦克风
   M5Cardputer.Speaker.end();
+  // 若上次是播放模式, HP drive 可能还开着; 先关掉再启动麦克风, 避免录音时扬声器出噪音
+  M5Cardputer.In_I2C.writeRegister8(0x18, 0x13, 0x00, 400000);  // HP drive OFF
+  M5Cardputer.In_I2C.writeRegister8(0x18, 0x12, 0xFC, 400000);  // DAC 掉电
+  M5Cardputer.In_I2C.writeRegister8(0x18, 0x32, 0x00, 400000);  // DAC→HP 混音器断开(阻断 0x0D 跳变传导路径)
   {
     auto mc = M5Cardputer.Mic.config();
     mc.magnification = 1; mc.noise_filter_level = 3;
@@ -508,8 +763,14 @@ int recordingScreen() {
 
   waitRelease();
 
+  // 初始化滚动波形历史
+  memset(waveScroll, 0, sizeof(waveScroll));
+
+  // canvas 只覆盖内容区(0..CONTENT_W-1), 标签栏(TAB_X..239)画一次不动
   M5Canvas cv(&d);
-  cv.createSprite(d.width(), d.height() - 54);   // 顶部 0..30 标题, 底部留提示
+  cv.createSprite(CONTENT_W, d.height());
+  d.fillScreen(COL_BG);
+  drawTabBar(TAB_REC);
 
   uint32_t dataBytes = 0;
   M5Cardputer.Mic.record(recBuf[0], REC_N, REC_RATE);
@@ -525,13 +786,10 @@ int recordingScreen() {
     while (M5Cardputer.Mic.isRecording() >= 2) {
       M5Cardputer.update();
       if (M5Cardputer.Keyboard.isChange() && M5Cardputer.Keyboard.isPressed()) {
-        if (keyEnter()) { stop = true; break; }
-        else if (M5Cardputer.Keyboard.isKeyPressed(' ')) {       // 空格=暂停/继续
-          paused = !paused;
-          if (paused) pauseStart = millis();
-          else { pausedMs += millis() - pauseStart; }
-          lastDraw = 0; waitRelease();
-        }
+        if (keySpace()) { g_afterRecord = R_LIST; stop = true; break; }
+        else if (keyEnter()) { g_afterRecord = R_PLAY; stop = true; break; }
+        else if (keyList() || keyDel()) { g_afterRecord = R_LIST; stop = true; break; }
+        else if (M5Cardputer.Keyboard.isKeyPressed('n') || M5Cardputer.Keyboard.isKeyPressed('N')) { g_afterRecord = R_NOISE; stop = true; break; }
         else if (M5Cardputer.Keyboard.isKeyPressed('w') || M5Cardputer.Keyboard.isKeyPressed('W')) { if (recGain < 200) recGain += 4; }
         else if (M5Cardputer.Keyboard.isKeyPressed('s') || M5Cardputer.Keyboard.isKeyPressed('S')) { if (recGain > 2) recGain -= 4; }
       }
@@ -554,39 +812,85 @@ int recordingScreen() {
       lastDraw = now;
       bool blink = ((now / 400) % 2) == 0;
       uint32_t elapsed = (paused ? pauseStart : now) - startMs - pausedMs;
+      // 更新 A 线历史: RMS 幅度 × 3 放大, 符号取中间采样
+      if (!paused) {
+        int64_t sumSq = 0;
+        for (size_t k = 0; k < REC_N; k++) sumSq += (int64_t)filled[k] * filled[k];
+        float rms = sqrtf((float)((double)sumSq / REC_N));
+        int sign = (filled[REC_N / 2] >= 0) ? 1 : -1;
+        int amp = (int)(rms * (3.0f * A_HALF) / 32767.0f) * sign;
+        if (amp > A_HALF) amp = A_HALF; if (amp < -A_HALF) amp = -A_HALF;
+        memmove(waveScroll, waveScroll + 1, (CONTENT_W - 1) * sizeof(int8_t));
+        waveScroll[CONTENT_W - 1] = (int8_t)amp;
+      }
       drawRecCanvas(cv, elapsed, blink, paused, filled);
-      cv.pushSprite(0, 30);
-      // 底部提示(屏幕直接画, 不在画布里)
-      d.setFont(&fonts::efontCN_16); d.setTextColor(COL_DIM, COL_BG);
-      d.fillRect(0, d.height() - 22, d.width(), 22, COL_BG);
-      d.setCursor(4, d.height() - 20);
-      d.printf("空格%s 回车存", paused ? "继续" : "暂停");
+      cv.pushSprite(0, 0);
     }
     M5Cardputer.Mic.record(filled, REC_N, REC_RATE);
     b ^= 1;
   }
   cv.deleteSprite();
-  // 停录不关麦(避免掉电爆音). 掐尾 ~0.3s.
+  // 掐尾 ~0.3s.
   uint32_t tailTrim = REC_RATE * 6 / 10;
   uint32_t effData = (dataBytes > tailTrim) ? (dataBytes - tailTrim) : 0;
   writeWavHeader(f, REC_RATE, effData);
   f.flush(); f.close(); SD.end();
+  // 录音结束时停麦; 回调会写 0x0D=0xFC(爆音源), 立刻写回 0x01 把断电窗口压到 ~300µs
+  M5Cardputer.Mic.end();
+  const uint8_t ES = 0x18;
+  M5Cardputer.In_I2C.writeRegister8(ES, 0x0D, 0x01, 400000);  // 立即恢复偏置(不加 delay)
+  M5Cardputer.In_I2C.writeRegister8(ES, 0x00, 0x80, 400000);  // CSM 上电
   return (effData > 0) ? idx : idx;   // 即使很短也保留, 返回编号
 }
 
 // ---------- 录音列表: ;/.选, 回车放, Ctrl+键绑定, N降噪, 空格录音, 退格返回 ----------
 // 返回 R_BACK(返回主屏) 或 R_RECORD(去录音)
+static bool confirmDeleteRec(int recNum) {
+  auto &d = M5Cardputer.Display;
+  d.fillScreen(COL_BG);
+  drawHeader("删除录音");
+  d.setFont(&fonts::efontCN_16);
+  d.setTextColor(COL_GREEN, COL_BG);
+  d.setCursor(18, 45);
+  d.printf("删除 REC_%04d ?", recNum);
+  drawFooter("回车删除  退格取消");
+  waitRelease();
+  while (true) {
+    M5Cardputer.update();
+    if (M5Cardputer.Keyboard.isChange() && M5Cardputer.Keyboard.isPressed()) {
+      if (keyEnter()) { waitRelease(); return true; }
+      if (keyDel())   { waitRelease(); return false; }
+    }
+    delay(8);
+  }
+}
+
+static void deleteRecording(int recNum) {
+  if (!sdMount()) return;
+  char p[40]; snprintf(p, sizeof(p), "/REC/REC_%04d.wav", recNum);
+  SD.remove(p);
+  SD.end();
+  for (int i = 0; i < hotkeyCount; i++) {
+    if (hotkeys[i].idx == recNum) {
+      for (int j = i; j < hotkeyCount - 1; j++) hotkeys[j] = hotkeys[j + 1];
+      hotkeyCount--; i--;
+    }
+  }
+  saveHotkeys();
+}
+
 int listScreen(int selectIdx) {
   auto &d = M5Cardputer.Display;
   scanRecordings();
 
-  // 空列表: 也允许 空格=录音 / 退格=返回
+  // 空列表
   if (recCount == 0) {
-    d.fillScreen(COL_BG); drawHeader("录音列表");
+    d.fillScreen(COL_BG);
+    drawTabBar(TAB_LIST); drawBattery();
     d.setFont(&fonts::efontCN_16); d.setTextColor(COL_DIM, COL_BG);
-    d.setCursor(8, 48);  d.print("还没有录音");
-    d.setCursor(8, 84);  d.print("空格=录音");
-    d.setCursor(8, 104); d.print("退格=返回");
+    d.setCursor(12, 56); d.print("还没有录音");
+    d.setFont(&fonts::efontCN_12); d.setTextColor(COL_DIM, COL_BG);
+    d.setCursor(4, 120); d.print("空格录音  退格返回");
     waitRelease();
     while (true) {
       M5Cardputer.update();
@@ -598,13 +902,15 @@ int listScreen(int selectIdx) {
     }
   }
 
-  int sel = 0;
+  int sel = recCount - 1;   // 默认选最新录音(列表末尾)
   if (selectIdx > 0) for (int i = 0; i < recCount; i++) if (recList[i] == selectIdx) { sel = i; break; }
   bool redraw = true;
+  uint32_t delHoldStart = 0;
+  bool delLongHandled = false;
 
-  const int rowH = 22;
-  const int top = 30;
-  int visRows = (d.height() - top - 58) / rowH;   // 底部留 58px 给提示
+  const int rowH = 21;
+  const int top = 26;
+  int visRows = (d.height() - top - 18) / rowH;   // 底部留 18px 给提示
   if (visRows < 1) visRows = 1;
 
   waitRelease();
@@ -616,36 +922,74 @@ int listScreen(int selectIdx) {
 
     if (redraw) {
       redraw = false;
-      d.fillScreen(COL_BG);
-      char title[24]; snprintf(title, sizeof(title), "录音列表 %d", recCount);
-      drawHeader(title);
+      // 只清内容区, 标签栏保持
+      d.fillRect(0, 0, CONTENT_W, 135, COL_BG);
+      drawTabBar(TAB_LIST); drawBattery();
+
+      // 标题行
+      d.setFont(&fonts::efontCN_12);
+      d.setTextColor(COL_GREEN, COL_BG);
+      d.setCursor(4, 3);
+      d.printf("录音列表  %d 条", recCount);
+      d.drawFastHLine(0, 15, CONTENT_W, COL_DIM);
+
+      // 列表行
       for (int r = 0; r < visRows && first + r < recCount; r++) {
         int i = first + r;
         int y = top + r * rowH;
         bool on = (i == sel);
-        if (on) d.fillRoundRect(2, y - 1, d.width() - 4, rowH - 2, 3, 0x0140);
+        uint16_t bg = on ? 0x0180 : COL_BG;
+        if (on) d.fillRect(0, y - 2, CONTENT_W, rowH - 1, bg);
+        // 选中游标
+        if (on) { d.setTextColor(COL_GREEN, bg); d.setCursor(2, y); d.print(">"); }
         d.setFont(&fonts::efontCN_16);
-        d.setTextColor(on ? COL_GREEN : COL_DIM, on ? 0x0140 : COL_BG);
-        d.setCursor(6, y + 2);
+        d.setTextColor(on ? COL_GREEN : COL_DIM, bg);
+        d.setCursor(14, y);
+        d.printf("REC_%04d", recList[i]);
+        // 快捷键标签
         char hk = hotkeyOf(recList[i]);
-        if (hk) d.printf("REC_%04d [%c]", recList[i], dispKey(hk));
-        else    d.printf("REC_%04d", recList[i]);
+        if (hk) {
+          d.setFont(&fonts::efontCN_12);
+          d.setTextColor(on ? COL_GREEN : COL_DIM, bg);
+          d.setCursor(CONTENT_W - 26, y + 3);
+          d.printf("[%c]", dispKey(hk));
+        }
       }
-      // 底部提示(短行, 不超宽)
-      int hy = d.height() - 56;
-      d.setFont(&fonts::efontCN_16); d.setTextColor(COL_DIM, COL_BG);
-      d.fillRect(0, hy, d.width(), 56, COL_BG);
-      d.setCursor(4, hy);      d.print(";/.选 回车放");
-      d.setCursor(4, hy + 18); d.print("Ctrl+键绑定 N降噪");
-      d.setCursor(4, hy + 36); d.print("空格录音 退格返回");
+      // 更多项箭头
+      d.setFont(&fonts::efontCN_12); d.setTextColor(COL_DIM, COL_BG);
+      if (first > 0)                  { d.setCursor(CONTENT_W - 10, top); d.print("^"); }
+      if (first + visRows < recCount) { d.setCursor(CONTENT_W - 10, top + (visRows - 1) * rowH); d.print("v"); }
+      // 底部操作提示
+      d.drawFastHLine(0, 120, CONTENT_W, COL_DIM);
+      d.setCursor(4, 122); d.print(";/.选 回车放 Del删 空格录");
     }
 
     M5Cardputer.update();
+    if (keyDel()) {
+      if (delHoldStart == 0) delHoldStart = millis();
+      if (!delLongHandled && millis() - delHoldStart > 700) {
+        delLongHandled = true;
+        if (confirmDeleteRec(recList[sel])) {
+          deleteRecording(recList[sel]);
+          scanRecordings();
+          if (recCount == 0) return R_BACK;
+          if (sel >= recCount) sel = recCount - 1;
+        }
+        delHoldStart = 0;
+        redraw = true;
+        waitRelease();
+      }
+    } else {
+      if (delHoldStart != 0 && !delLongHandled) return R_BACK;  // 短按 Del: 返回
+      delHoldStart = 0;
+      delLongHandled = false;
+    }
     if (M5Cardputer.Keyboard.isChange() && M5Cardputer.Keyboard.isPressed()) {
       int hk = pressedHotkeyRec();
       if (hk > 0) {                                     // 绑定键=最高优先级, 立刻播放(可覆盖)
         int r = playFlow(hk);
         if (r == R_RECORD) return R_RECORD;
+        if (r == R_LIST) { redraw = true; waitRelease(); continue; }
         redraw = true; waitRelease();
       }
       else if (keyCtrl()) {                             // Ctrl+键 = 绑定快捷键(字母/数字)
@@ -653,12 +997,13 @@ int listScreen(int selectIdx) {
         if (bk) { setHotkey(bk, recList[sel]); redraw = true; waitRelease(); }
       }
       else if (keySpace()) { return R_RECORD; }         // 空格=去录音
-      else if (keyDel())   { return R_BACK; }           // 退格=返回主屏
+      else if (keyList())  { waitRelease(); }           // 列表里再按列表键: 无效
       else if (keyUp())    { if (sel > 0) sel--; redraw = true; waitRelease(); }
       else if (keyDown())  { if (sel < recCount - 1) sel++; redraw = true; waitRelease(); }
       else if (keyEnter()) {
         int r = playFlow(recList[sel]);
         if (r == R_RECORD) return R_RECORD;             // 回放里按空格 -> 去录音
+        if (r == R_LIST) { redraw = true; waitRelease(); continue; }
         redraw = true; waitRelease();
       }
       else if (M5Cardputer.Keyboard.isKeyPressed('n') || M5Cardputer.Keyboard.isKeyPressed('N')) {
@@ -674,32 +1019,117 @@ int listScreen(int selectIdx) {
 void listFlow(int sel) {
   while (true) {
     int r = listScreen(sel);
-    if (r == R_RECORD) { int n = recordingScreen(); sel = n; continue; }
+    if (r == R_RECORD) {
+      int n = recordingScreen(true);   // 先显示待机界面
+      if (n <= 0) {
+        // 在待机界面按了 N → 留在列表; 其他键 → 退出 listFlow
+        if (g_afterRecord == R_LIST) continue;
+        return;
+      }
+      if (g_afterRecord == R_LIST) { sel = n; continue; }
+      afterRecordingFlow(n);
+      return;
+    }
     return;
   }
 }
 
-// ---------- 主屏 ----------
+// ---------- 主屏: 录音界面空闲状态 ----------
+// 显示录制标签栏 + 空波形 + 待机提示; 不实际录音
 void drawHome() {
   auto &d = M5Cardputer.Display;
   d.fillScreen(COL_BG);
-  drawHeader("录音机");
-  d.setFont(&fonts::efontCN_16);
-  const char *items[2] = {"开始录音", "录音列表"};
-  for (int i = 0; i < 2; i++) {
-    int y = 40 + i * 26;
-    bool on = (i == homeSel);
-    d.setTextColor(on ? COL_GREEN : COL_DIM, COL_BG);
-    d.setCursor(8, y);
-    d.printf("%s %s", on ? ">" : " ", items[i]);
-  }
-  d.setTextColor(COL_DIM, COL_BG);
-  d.setCursor(8, 104);
-  d.print("空格=录音");
-  d.setCursor(8, 124);
-  d.print("绑定键=播放");
-  d.drawFastHLine(0, d.height() - 20, d.width(), COL_DIM);
+  drawTabBar(TAB_REC);
   drawBattery();
+
+  // 顶栏: 静止红点 + "TAPEBOX"
+  d.drawCircle(8, 7, 5, 0x2000);              // 暗红圈(录音未开始)
+  d.setFont(&fonts::efontCN_12);
+  d.setTextColor(COL_DIM, COL_BG);
+  d.setCursor(18, 2); d.print("TAPEBOX");
+  d.drawFastHLine(0, WAVE_TOP - 1, CONTENT_W, 0x0820);
+
+  // 空波形区: 只画中轴线
+  d.drawFastHLine(0, WAVE_CY, CONTENT_W, 0x0840);
+
+  // 中央提示文字
+  d.setFont(&fonts::efontCN_16);
+  d.setTextColor(COL_DIM, COL_BG);
+  d.setCursor(32, WAVE_CY - 18); d.print("空格 开始录音");
+  d.setCursor(32, WAVE_CY + 6);  d.print("回车 播放最新");
+
+  // 底部计时器占位 "00:00"
+  d.setFont(&fonts::Font4);
+  d.setTextColor(0x0180, COL_BG);            // 极暗绿, 表示待机
+  d.setCursor(4, WAVE_BOT + 2);
+  d.print("00:00");
+
+  // 底部次级提示
+  d.drawFastHLine(0, 120, CONTENT_W, 0x0820);
+  d.setFont(&fonts::efontCN_12);
+  d.setTextColor(0x0140, COL_BG);
+  d.setCursor(4, 122); d.print("N=列表  Del=息屏");
+}
+
+// ---------- 麦克风预热(开机 / 唤醒后调用): 空跑消耗冷启动不稳定, 之后保持常开 ----------
+static void micWarmup() {
+  {
+    auto mc = M5Cardputer.Mic.config();
+    mc.magnification = 1; mc.noise_filter_level = 3;
+    M5Cardputer.Mic.config(mc);
+  }
+  M5Cardputer.Mic.begin();
+  M5Cardputer.In_I2C.writeRegister8(0x18, 0x14, 0x17, 400000);  // 提高模拟 PGA(更干净)
+  static int16_t warm[REC_N];
+  for (int i = 0; i < 24; i++) {
+    M5Cardputer.Mic.record(warm, REC_N, REC_RATE);
+    while (M5Cardputer.Mic.isRecording() > 0) delay(1);
+  }
+  // 不 Mic.end(): 保持常开
+}
+
+// ---------- 息屏(轻睡眠): 关背光; 一直睡到"键盘中断"才醒; 只有空格真正唤醒 ----------
+// 核心思路: 不调 Mic.end() → ES8311 模拟段保持通电, 没有掉电瞬态, 没有爆音.
+// CONFIG_PM_ENABLE 未启用: I2S 不持有阻止轻睡眠的电源锁, 可直接 esp_light_sleep_start().
+// I2S 任务在睡眠期间被 RTOS 暂停, APB 时钟门控; 唤醒后自动续跑.
+static void goSleep() {
+  auto &d = M5Cardputer.Display;
+
+  // 静音 ES8311 输出路径(不掉电 0x0D, 只关 HP drive 和 DAC): 防止睡眠期间 I2S 时钟门控瞬态被功放放大
+  const uint8_t ES = 0x18;
+  M5Cardputer.In_I2C.writeRegister8(ES, 0x13, 0x00, 400000);  // 关 HP drive
+  M5Cardputer.In_I2C.writeRegister8(ES, 0x12, 0xFC, 400000);  // DAC 掉电(模拟段仍通电)
+  delay(5);
+
+  d.fillScreen(COL_BG);
+  d.setBrightness(0);          // 关背光 = 最大省电点
+  delay(10);
+
+  // 打开键盘芯片(TCA8418 @0x34)的按键中断 -> 按键时拉低 GPIO11; 可一直睡, 不必周期性醒
+  M5Cardputer.In_I2C.writeRegister8(0x34, 0x01, 0x01, 400000);   // CFG: KE_IEN=1
+  gpio_wakeup_enable(GPIO_NUM_11, GPIO_INTR_LOW_LEVEL);
+  esp_sleep_enable_gpio_wakeup();
+
+  while (true) {
+    M5Cardputer.update();                                          // 排空键盘事件
+    M5Cardputer.In_I2C.writeRegister8(0x34, 0x02, 0x03, 400000);  // 清中断标志 -> INT 线复位为高
+    esp_sleep_enable_timer_wakeup(30000000ULL);                    // 30s 安全兜底
+    esp_light_sleep_start();                                       // 一直睡到 GPIO11 变低 或 30s 到
+    delay(6);
+    M5Cardputer.update();
+    if (M5Cardputer.Keyboard.isChange() && M5Cardputer.Keyboard.isPressed() && keySpace()) break;
+  }
+
+  // 唤醒: 关掉唤醒源 + 键盘中断
+  gpio_wakeup_disable(GPIO_NUM_11);
+  esp_sleep_disable_wakeup_source(ESP_SLEEP_WAKEUP_TIMER);
+  M5Cardputer.In_I2C.writeRegister8(0x34, 0x01, 0x00, 400000);   // CFG: 关键盘中断
+  d.setBrightness(120);
+  micWarmup();    // 重新预热: 保证麦克风就绪(无论之前是否已停)
+  homeSel = 0;
+  drawHome();
+  waitRelease();
+  lastInputMs = millis();
 }
 
 void setup() {
@@ -722,24 +1152,8 @@ void setup() {
   p = M5.getPin(m5::pin_name_t::sd_spi_copi); if (p >= 0) sdMOSI = p;
   p = M5.getPin(m5::pin_name_t::sd_spi_cs);   if (p >= 0) sdCS   = p;
 
-  // 预热麦克风: 开机空跑一次录音(录几帧丢弃), 消耗掉冷启动首次会话的不稳定.
-  // 关键: 预热后【不关麦】, 让 ES8311 保持上电 —— 关麦会写"模拟掉电+整体掉电"寄存器,
-  // 那个电压跳变正是"开机第二声爆音"的来源; 常开还能让第一次录音零爆音.
-  {
-    auto mc = M5Cardputer.Mic.config();
-    mc.magnification = 1; mc.noise_filter_level = 3;
-    M5Cardputer.Mic.config(mc);
-  }
-  M5Cardputer.Mic.begin();
-  M5Cardputer.In_I2C.writeRegister8(0x18, 0x14, 0x17, 400000);
-  {
-    static int16_t warm[REC_N];
-    for (int i = 0; i < 24; i++) {
-      M5Cardputer.Mic.record(warm, REC_N, REC_RATE);
-      while (M5Cardputer.Mic.isRecording() > 0) delay(1);
-    }
-  }
-  // (此处不再 Mic.end(): 保持麦克风常开 —— 省掉开机第二声, 并让第一次录音零爆音)
+  // 预热麦克风(开机空跑一次, 消冷启动不稳定; 之后保持常开, 见 micWarmup 内说明)
+  micWarmup();
 
   // 预热 SD 卡 + 读取快捷键绑定
   if (sdMount()) {
@@ -749,6 +1163,7 @@ void setup() {
   }
   loadHotkeys();
 
+  lastInputMs = millis();
   drawHome();
 }
 
@@ -758,25 +1173,40 @@ void loop() {
   uint32_t now = millis();
   if (now - lastBat > 5000) { lastBat = now; drawBattery(); }
 
+  // 闲置自动息屏
+  if (now - lastInputMs > SLEEP_IDLE_MS) { goSleep(); return; }
+
   if (M5Cardputer.Keyboard.isChange() && M5Cardputer.Keyboard.isPressed()) {
+    lastInputMs = now;
+    if (keyDel()) { goSleep(); return; }                        // Del=手动息屏
+
     // 已绑定的键(字母/数字) -> 最高优先级, 立刻播放(可覆盖)
     int hk = pressedHotkeyRec();
     if (hk > 0) {
       int r = playFlow(hk);
-      if (r == R_RECORD) { int n = recordingScreen(); listFlow(n); }   // 回放里按空格 -> 录音
-      homeSel = 0; drawHome(); waitRelease(); return;
+      if (r == R_RECORD) { int n = recordingScreen(false); afterRecordingFlow(n); }  // 从主屏跳录制无需二次待机
+      else if (r == R_LIST) { listFlow(hk); }
+      homeSel = 0; drawHome(); waitRelease(); lastInputMs = millis(); return;
     }
-    if (keySpace()) {                                            // 空格=录音 -> 列表
-      int n = recordingScreen();
-      listFlow(n);
+    if (keySpace()) {                                            // 空格=录音 (主屏即待机, 直接开录)
+      int n = recordingScreen(false);
+      afterRecordingFlow(n);
       homeSel = 0; drawHome(); waitRelease();
-    } else if (keyUp())   { homeSel = 0; drawHome(); waitRelease(); }
-      else if (keyDown()) { homeSel = 1; drawHome(); waitRelease(); }
-      else if (keyEnter()) {
-        if (homeSel == 0) { int n = recordingScreen(); listFlow(n); }
-        else { listFlow(0); }
+    } else if (keyList()) {                                      // \=列表
+      listFlow(0);
+      homeSel = 0; drawHome(); waitRelease();
+    } else if (keyEnter()) {                                     // 回车=播放最新
+        int latest = latestRecording();
+        if (latest > 0) {
+          int r = playFlow(latest);
+          if (r == R_RECORD) { int n = recordingScreen(false); afterRecordingFlow(n); }
+          else if (r == R_LIST) { listFlow(latest); }
+        } else {
+          listFlow(0);
+        }
         homeSel = 0; drawHome(); waitRelease();
       }
+    lastInputMs = millis();
   }
   delay(8);
 }
