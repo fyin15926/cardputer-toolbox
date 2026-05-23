@@ -25,6 +25,7 @@
 | GitHub 仓库（主编辑） | `D:\github仓库同步\小机器\toolbox\toolbox.ino` |
 | Arduino 编译副本 | `C:\cardputer\sketches\toolbox\toolbox.ino` |
 | 本文档 | `D:\github仓库同步\小机器\toolbox\HANDOVER.md` |
+| 云端转写方案 | `D:\github仓库同步\小机器\toolbox\CLOUD_TRANSCRIBE_FLOMO_PLAN.html` |
 
 **每次修改 `.ino` 后需要手动同步到编译副本：**
 ```powershell

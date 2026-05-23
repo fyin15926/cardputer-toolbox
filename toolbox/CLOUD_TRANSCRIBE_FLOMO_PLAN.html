@@ -1,0 +1,183 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Cardputer 录音自动上传、转写与 flomo 同步方案</title>
+<style>
+  :root{--bg:#0d1117;--fg:#e6edf3;--green:#39d353;--blue:#58a6ff;--dim:#8b949e;--border:#30363d;--code:#161b22;--warn:#f85149;--gold:#f8c73a}
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--fg);font:14px/1.65 "Segoe UI","Microsoft YaHei",Arial,sans-serif;padding:24px}
+  h1{font-size:23px;color:var(--green);margin:0 0 12px;border-bottom:1px solid var(--border);padding-bottom:10px}
+  h2{font-size:16px;color:var(--blue);margin:24px 0 10px;border-left:3px solid var(--blue);padding-left:8px}
+  h3{font-size:14px;color:var(--green);margin:16px 0 6px}
+  p{margin:8px 0}
+  a{color:var(--blue)}
+  code{background:var(--code);color:var(--gold);padding:1px 5px;border-radius:4px;font-family:Consolas,monospace;font-size:12px}
+  pre{background:var(--code);border:1px solid var(--border);border-radius:8px;padding:12px;overflow:auto;color:#c9d1d9;font:12px/1.5 Consolas,monospace}
+  table{width:100%;border-collapse:collapse;margin:8px 0 14px}
+  th,td{border-bottom:1px solid var(--border);padding:7px 9px;text-align:left;vertical-align:top}
+  th{background:var(--code);color:var(--green);font-size:12px}
+  td:first-child{color:#a5d6ff;white-space:nowrap;font-weight:600}
+  nav{display:flex;flex-wrap:wrap;gap:10px;background:var(--code);border:1px solid var(--border);border-radius:8px;padding:12px;margin:14px 0 22px}
+  nav a{text-decoration:none;color:var(--blue)}
+  .note{border:1px solid #2ea043;background:#0f2a15;color:#b7f7c1;border-radius:8px;padding:10px 12px;margin:10px 0}
+  .warn{border:1px solid var(--warn);background:#3b1717;color:#ffb3ad;border-radius:8px;padding:10px 12px;margin:10px 0}
+  .grid{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+  .card{border:1px solid var(--border);border-radius:8px;padding:12px;background:#111820}
+  .check td:first-child{font-family:Consolas,monospace;color:var(--green)}
+  .dim{color:var(--dim)}
+  @media(max-width:760px){.grid{grid-template-columns:1fr}body{padding:16px}}
+</style>
+</head>
+<body>
+
+<h1>Cardputer 录音自动上传、转写与 flomo 同步方案</h1>
+<p class="dim">目标：Cardputer 录完音后自动上传到阿里云服务器，服务器转成文字，再自动写入 flomo。本文档用于后续开发对齐。</p>
+
+<nav>
+  <a href="#goal">目标</a>
+  <a href="#flow">总链路</a>
+  <a href="#prepare">准备清单</a>
+  <a href="#server">服务器</a>
+  <a href="#device">设备端</a>
+  <a href="#phases">实施阶段</a>
+  <a href="#security">安全</a>
+  <a href="#open">待确认</a>
+</nav>
+
+<h2 id="goal">一、目标与边界</h2>
+<table>
+  <tr><th>项目</th><th>决定</th></tr>
+  <tr><td>设备端职责</td><td>只负责录音、本地保存、排队上传 WAV。不要在 Cardputer 上转文字，也不要把 flomo webhook 放进固件。</td></tr>
+  <tr><td>服务器职责</td><td>接收录音、保存文件、调用阿里云语音识别、生成文本、发送到 flomo。</td></tr>
+  <tr><td>flomo 职责</td><td>只接收服务器发来的文字 memo。flomo 自带语音输入不作为后台音频转写 API 使用。</td></tr>
+  <tr><td>性能原则</td><td>上传必须后台化、可重试，不能影响录音、播放和列表操作。</td></tr>
+</table>
+
+<h2 id="flow">二、总链路</h2>
+<pre>Cardputer 录音保存 WAV
+  -> Wi-Fi 上传到阿里云服务器 /upload
+  -> 服务器保存 uploads/REC_XXXX.wav
+  -> 调用阿里云 Paraformer / DashScope 转文字
+  -> 生成 notes/REC_XXXX.txt 和 JSON 状态
+  -> 调用 flomo Incoming Webhook 写入 flomo
+  -> 服务器返回上传/转写/发送结果
+  -> Cardputer 标记本地录音为已上传</pre>
+
+<div class="note">
+  推荐先跑通“上传并保存 WAV”，再接转写，最后接 flomo。不要一开始就做全链路，否则排错会很乱。
+</div>
+
+<h2 id="prepare">三、准备清单</h2>
+<table class="check">
+  <tr><th>状态</th><th>事项</th><th>说明</th></tr>
+  <tr><td>[ ]</td><td>阿里云服务器</td><td>需要公网 IP 或域名，能 SSH 登录，建议 Ubuntu / Debian。</td></tr>
+  <tr><td>[ ]</td><td>Node.js 运行环境</td><td>建议 Node.js 20 LTS，用 Express 写轻量服务。</td></tr>
+  <tr><td>[ ]</td><td>阿里云语音识别 API Key</td><td>开通 DashScope / Paraformer，拿到 <code>DASHSCOPE_API_KEY</code>。</td></tr>
+  <tr><td>[ ]</td><td>flomo PRO</td><td>开通后获取 Incoming Webhook，形如 <code>https://flomoapp.com/iwh/...</code>。</td></tr>
+  <tr><td>[ ]</td><td>Cardputer Wi-Fi 信息</td><td>SSID 和密码只放本地配置或后续配网方案，不提交 GitHub。</td></tr>
+  <tr><td>[ ]</td><td>服务器上传密钥</td><td>自定义一个 <code>UPLOAD_TOKEN</code>，Cardputer 上传时带上，避免接口裸奔。</td></tr>
+</table>
+
+<h2 id="server">四、服务器设计</h2>
+<div class="grid">
+  <div class="card">
+    <h3>目录结构建议</h3>
+    <pre>/opt/cardputer-voice/
+├── server.js
+├── package.json
+├── uploads/       # 原始 WAV
+├── transcripts/   # 转写文本
+├── jobs/          # 状态 JSON
+└── logs/</pre>
+  </div>
+  <div class="card">
+    <h3>环境变量</h3>
+    <pre>PORT=3000
+UPLOAD_TOKEN=一串随机长密码
+DASHSCOPE_API_KEY=阿里云语音识别key
+FLOMO_WEBHOOK_URL=https://flomoapp.com/iwh/...
+PUBLIC_BASE_URL=https://你的域名</pre>
+  </div>
+</div>
+
+<h3>接口规划</h3>
+<table>
+  <tr><th>接口</th><th>方法</th><th>作用</th></tr>
+  <tr><td><code>/health</code></td><td>GET</td><td>服务器健康检查，Cardputer 可用它测试网络。</td></tr>
+  <tr><td><code>/upload</code></td><td>POST</td><td>上传 WAV，Header 带 <code>X-Upload-Token</code>。</td></tr>
+  <tr><td><code>/jobs/:id</code></td><td>GET</td><td>查看某条录音的处理状态，调试用。</td></tr>
+</table>
+
+<h3>上传请求格式</h3>
+<pre>POST /upload
+Headers:
+  X-Upload-Token: UPLOAD_TOKEN
+  X-Device-Id: cardputer-001
+  X-Recording-Name: REC_0123.wav
+Content-Type: audio/wav
+
+Body:
+  WAV bytes</pre>
+
+<h3>flomo 笔记格式建议</h3>
+<pre>#Cardputer语音
+
+转写内容……
+
+---
+录音：REC_0123.wav
+时间：2026-05-23 21:30
+来源：Cardputer
+状态：自动转写</pre>
+
+<h2 id="device">五、Cardputer 端设计</h2>
+<table>
+  <tr><th>模块</th><th>做法</th></tr>
+  <tr><td>上传时机</td><td>录音保存完成后加入上传队列；优先不阻塞 UI。</td></tr>
+  <tr><td>失败处理</td><td>上传失败保留本地 WAV，下次开机/进入列表/空闲时重试。</td></tr>
+  <tr><td>状态记录</td><td>后续可在 SD 写 <code>/UPLOAD/status.txt</code>，记录已上传编号。</td></tr>
+  <tr><td>目录关系</td><td>普通、快捷、重要录音都可以上传；上传不应改变三列目录分类。</td></tr>
+  <tr><td>性能约束</td><td>播放中不上传；录音中不上传；只在空闲、列表或保存后短窗口尝试。</td></tr>
+</table>
+
+<h2 id="phases">六、实施阶段</h2>
+<table class="check">
+  <tr><th>状态</th><th>阶段</th><th>验收标准</th></tr>
+  <tr><td>[ ]</td><td>阶段 1：服务器最小上传接口</td><td>用电脑 curl 上传一个 WAV，服务器保存到 <code>uploads/</code>。</td></tr>
+  <tr><td>[ ]</td><td>阶段 2：Cardputer 上传 WAV</td><td>录音保存后能上传到服务器；失败不会影响本地录音。</td></tr>
+  <tr><td>[ ]</td><td>阶段 3：接阿里云 Paraformer</td><td>服务器能把上传的 WAV 转成文字，并保存 <code>.txt</code>。</td></tr>
+  <tr><td>[ ]</td><td>阶段 4：接 flomo Webhook</td><td>转写文字自动出现在 flomo。</td></tr>
+  <tr><td>[ ]</td><td>阶段 5：上传队列与状态</td><td>断网后能重试；已上传录音不会重复发 flomo。</td></tr>
+  <tr><td>[ ]</td><td>阶段 6：清理策略</td><td>可安全清空普通 <code>/REC</code>，不影响 <code>/SHORTCUT</code> 与 <code>/IMPORTANT</code>。</td></tr>
+</table>
+
+<h2 id="security">七、安全原则</h2>
+<div class="warn">
+  不要把 <code>DASHSCOPE_API_KEY</code>、<code>FLOMO_WEBHOOK_URL</code>、<code>UPLOAD_TOKEN</code>、Wi-Fi 密码提交到 GitHub。
+</div>
+<ul>
+  <li>flomo webhook 只放服务器环境变量。</li>
+  <li>阿里云 API Key 只放服务器环境变量。</li>
+  <li>Cardputer 固件最多只保存服务器上传地址和上传 token；如果后续能做本地配置文件，就不要写死进源码。</li>
+  <li>服务器接口必须校验 <code>X-Upload-Token</code>。</li>
+  <li>服务器日志不要打印完整 webhook 和 API Key。</li>
+</ul>
+
+<h2 id="open">八、待确认问题</h2>
+<table class="check">
+  <tr><td>[ ]</td><td>服务器系统</td><td>Ubuntu / Debian / CentOS？</td></tr>
+  <tr><td>[ ]</td><td>部署方式</td><td>Node.js + systemd，还是 Docker？建议先 Node.js + systemd。</td></tr>
+  <tr><td>[ ]</td><td>公网访问</td><td>用域名 + HTTPS，还是先公网 IP + HTTP 测试？</td></tr>
+  <tr><td>[ ]</td><td>阿里云语音识别</td><td>确认使用 DashScope Paraformer。</td></tr>
+  <tr><td>[ ]</td><td>flomo PRO</td><td>开通后获取 Incoming Webhook。</td></tr>
+  <tr><td>[ ]</td><td>笔记标签</td><td>默认用 <code>#Cardputer语音</code>，是否要加 <code>#录音</code>、<code>#灵感</code> 等。</td></tr>
+</table>
+
+<footer>
+  文档位置：<code>toolbox/CLOUD_TRANSCRIBE_FLOMO_PLAN.html</code>。下一步建议从“阶段 1：服务器最小上传接口”开始。
+</footer>
+
+</body>
+</html>
