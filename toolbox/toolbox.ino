@@ -3,7 +3,7 @@
  * 风格: 纯黑背景 + 黑客帝国荧光绿 + 线性 + 中文界面 + 横屏(240x135)
  *
  * 录音应用交互:
- *   开机: 自动开始录音
+ *   开机: 自动开始录音; 息屏: 空格=录音, 回车=列表
  *   录制中: 空格=暂停/继续; 回车=结束(存盘并进入列表); Esc=存盘并息屏; 长按Del 1.2秒=取消并删除本条; W/S=音量
  *   录音列表: ;/. 上下选; 回车=播放; Esc=退出到息屏; 长按Del 1.2秒=删除选中; Ctrl+键(字母/数字)=给该录音绑定快捷键; Alt=降噪
  *   回放: 播放完自动回列表; 回车=暂停/继续; 退格=回列表; ;/.=上一条/下一条; Esc=息屏; +/- (= 与 - 键)=音量; 长按Del 1.2秒=删除当前录音; 空格=去录音
@@ -64,6 +64,7 @@ int hotkeyCount = 0;
 static bool micInputReady = false;
 static bool forceMicRearm = true;  // 开机/唤醒后的第一次正式录音要强制重建输入链路
 static bool autoRecordPending = true;
+static int wakeAction = 1;  // R_RECORD, 这里早于返回码宏定义
 static bool speakerOutputReady = false;
 
 // ---------- SD 辅助 ----------
@@ -1306,7 +1307,7 @@ static void micWarmup() {
   // 不 Mic.end(): 保持常开
 }
 
-// ---------- 息屏(轻睡眠): 关背光; 一直睡到"键盘中断"才醒; 只有空格真正唤醒 ----------
+// ---------- 息屏(轻睡眠): 关背光; 一直睡到"键盘中断"才醒; 空格=录音, 回车=列表 ----------
 // 核心思路: 不调 Mic.end() → ES8311 模拟段保持通电, 没有掉电瞬态, 没有爆音.
 // CONFIG_PM_ENABLE 未启用: I2S 不持有阻止轻睡眠的电源锁, 可直接 esp_light_sleep_start().
 // I2S 任务在睡眠期间被 RTOS 暂停, APB 时钟门控; 唤醒后自动续跑.
@@ -1335,7 +1336,10 @@ static void goSleep() {
     esp_light_sleep_start();                                       // 一直睡到 GPIO11 变低 或 30s 到
     delay(6);
     M5Cardputer.update();
-    if (M5Cardputer.Keyboard.isChange() && M5Cardputer.Keyboard.isPressed() && keySpace()) break;
+    if (M5Cardputer.Keyboard.isChange() && M5Cardputer.Keyboard.isPressed()) {
+      if (keySpace()) { wakeAction = R_RECORD; break; }
+      if (keyEnter()) { wakeAction = R_LIST; break; }
+    }
   }
 
   // 唤醒: 关掉唤醒源 + 键盘中断
@@ -1343,7 +1347,7 @@ static void goSleep() {
   esp_sleep_disable_wakeup_source(ESP_SLEEP_WAKEUP_TIMER);
   M5Cardputer.In_I2C.writeRegister8(0x34, 0x01, 0x00, 400000);   // CFG: 关键盘中断
   d.setBrightness(120);
-  micWarmup();    // 重新预热: 保证麦克风就绪(无论之前是否已停)
+  if (wakeAction == R_RECORD) micWarmup();    // 只有立刻录音才预热; 回车进列表要快
   autoRecordPending = true;
   waitRelease();
 }
@@ -1387,8 +1391,14 @@ void loop() {
 
   if (autoRecordPending) {
     autoRecordPending = false;
-    int n = recordingScreen();
-    afterRecordingFlow(n);
+    if (wakeAction == R_LIST) {
+      wakeAction = R_RECORD;
+      listFlow(0);
+    } else {
+      wakeAction = R_RECORD;
+      int n = recordingScreen();
+      afterRecordingFlow(n);
+    }
     goSleep();
     return;
   }
