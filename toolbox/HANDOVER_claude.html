@@ -136,8 +136,8 @@ Get-Content C:\cardputer\tools\tb.out.log   # Flash/RAM用量</pre>
 <h3>Flash用量参考</h3>
 <table>
   <tr><th>指标</th><th>当前值</th><th>上限</th></tr>
-  <tr><td>Flash</td><td>1,141,928 bytes（87%）</td><td>1,310,720 bytes</td></tr>
-  <tr><td>RAM（全局）</td><td>75,644 bytes（23%）</td><td>327,680 bytes</td></tr>
+  <tr><td>Flash</td><td>1,142,496 bytes（87%）</td><td>1,310,720 bytes</td></tr>
+  <tr><td>RAM（全局）</td><td>73,636 bytes（22%）</td><td>327,680 bytes</td></tr>
 </table>
 <div class="warn">⚠ 不要添加中文大字体（如 efontCN_24 约占350KB）。大号数字用内置 <code>Font4</code>（纯ASCII，无额外开销）。</div>
 
@@ -148,12 +148,10 @@ Get-Content C:\cardputer\tools\tb.out.log   # Flash/RAM用量</pre>
 <table>
   <tr><th>函数</th><th>说明</th></tr>
   <tr><td><code>setup()</code></td><td>初始化M5、SD、音频，加载hotkeys，进入loop</td></tr>
-  <tr><td><code>loop()</code></td><td>开机首次循环直接进入 <code>recordingScreen()</code>；READY 仅保留作返回/异常兜底</td></tr>
+  <tr><td><code>loop()</code></td><td>开机/唤醒后若 <code>autoRecordPending</code> 为真，直接进入 <code>recordingScreen()</code>；否则进入息屏等待 Space</td></tr>
   <tr><td><code>recordingScreen()</code></td><td>真正录音流程。调用后创建WAV并开始写SD</td></tr>
   <tr><td><code>playbackScreen(int recNum)</code></td><td>回放界面。播放自然结束后停留在界面，等用户按键离开</td></tr>
   <tr><td><code>listScreen()</code></td><td>录音列表，;/.翻页，回车播放，Ctrl+键绑定快捷键，Alt降噪</td></tr>
-  <tr><td><code>drawHome()</code></td><td>主屏即录音界面 READY 态：直接复用 <code>drawRecCanvas(..., ready=true)</code>；不创建文件、不写SD</td></tr>
-  <tr><td><code>updateHomeMonitor(...)</code></td><td>主屏监听波形循环，约18fps，复用录音页 Canvas 绘制；离开主屏时释放 READY Canvas</td></tr>
   <tr><td><code>drawRecCanvas(...)</code></td><td>录音Canvas帧：AB双波形 + 计时器 + 电量</td></tr>
   <tr><td><code>drawPlaybackCanvas(...)</code></td><td>播放Canvas帧：A线为播放时间轴，B线为当前播放缓冲跳动</td></tr>
   <tr><td><code>afterRecordingFlow(int recNum)</code></td><td>录音结束后默认回列表；快捷键仍可直接播放</td></tr>
@@ -189,18 +187,17 @@ Get-Content C:\cardputer\tools\tb.out.log   # Flash/RAM用量</pre>
 <ul style="margin:6px 0 6px 20px;font-size:13px">
   <li>录音动态画面用 <code>M5Canvas</code>（240×135），<code>pushSprite(0,0)</code> 推到屏幕</li>
   <li>右侧三段标签栏已取消，减少界面切换重绘与视觉噪音</li>
-  <li>开机不再停留 READY 页，第一次 <code>loop()</code> 直接开始真正录音</li>
-  <li>READY态仅保留作返回/异常兜底：只监听收音，A线静止，B线实时动，不写入SD</li>
-  <li>READY→REC 会复用已热机的麦克风输入；按下 Space 后立刻启动录音缓冲，松开前只忽略停止事件</li>
+  <li>独立启动页已清理，开机/空格唤醒后的第一次 <code>loop()</code> 直接开始真正录音</li>
+  <li><code>READY</code> 只作为录音准备帧；真正启动 <code>Mic.record()</code> 后才亮 REC 红点</li>
+  <li>录音准备会复用已热机的麦克风输入；启动录音缓冲后，松开前只忽略停止事件</li>
   <li>开机/唤醒预热也必须走 <code>prepareMicInput()</code> 完整输入链路，避免第一次录音音量偏低</li>
   <li>开机/唤醒后的第一次正式录音会 <code>forceMicRearm</code>：强制重建输入链路并丢弃 6 帧稳定缓冲</li>
-  <li>开机/唤醒后的 READY 主屏也会消费 <code>forceMicRearm</code>，避免 B线幅度偏小</li>
-  <li>录音准备阶段保持 READY 显示；真正启动 <code>Mic.record()</code> 后才亮 REC 红点</li>
-  <li>录音中 <code>Del</code> 需要按两次才取消：第一次提示，第二次删除当前临时 WAV 并返回主屏</li>
+  <li>录音准备阶段会消费 <code>forceMicRearm</code>，避免第一条录音音量偏低</li>
+  <li>录音中 <code>Del</code> 需要按两次才取消：第一次提示，第二次删除当前临时 WAV 并退出到息屏</li>
   <li>新录音编号用 <code>nextRecHint</code> 缓存和目录扫描获取，不再每次从 <code>REC_0001.wav</code> 顺序探测</li>
   <li>播放页也使用 Canvas 双缓冲推屏；A线缩略图使用多点采样平均并轻微阻尼，减少峰值过高和频闪</li>
   <li>统一命名：上半区叫 <strong>A线 / 轨道线 / Timeline A</strong>；下半区叫 <strong>B线 / 监听线 / Monitor B</strong></li>
-  <li>交互统一为：主屏回车进入列表，列表回车播放选中录音</li>
+  <li>交互统一为：录音中回车保存进列表，列表回车播放选中录音，播放中回车回列表</li>
 </ul>
 
 <!-- ─── 关键常量 ─── -->
@@ -240,9 +237,9 @@ int amp = (int)(rms * (3.0f * A_HALF) / 32767.0f) * sign;</pre>
 <h2 id="keys">按键映射</h2>
 <table>
   <tr><th>物理键</th><th>keyXxx()函数</th><th>作用</th></tr>
-  <tr><td>Space</td><td><code>keySpace()</code></td><td>主屏开始录音；录音中结束存盘；播放/列表中进入录音</td></tr>
+  <tr><td>Space</td><td><code>keySpace()</code></td><td>息屏唤醒并直接录音；录音中结束存盘；播放/列表中进入录音</td></tr>
   <tr><td>Enter</td><td><code>keyEnter()</code></td><td>录音结束存盘并回列表；列表播放；回放返回列表</td></tr>
-  <tr><td>Backspace</td><td><code>keyDel()</code></td><td>返回上一层；主屏=手动息屏；录音中按两次=取消删除本条</td></tr>
+  <tr><td>Backspace</td><td><code>keyDel()</code></td><td>返回上一层/退出到息屏；录音中按两次=取消删除本条</td></tr>
   <tr><td>\（反斜杠）</td><td><code>keyList()</code></td><td>进入录音列表</td></tr>
   <tr><td>; / .</td><td><code>keyUp() keyDown()</code></td><td>列表上下翻页</td></tr>
   <tr><td>= / -</td><td><code>keyVolUp() keyVolDn()</code></td><td>回放音量（playVol 0–255）</td></tr>
@@ -296,7 +293,7 @@ int amp = (int)(rms * (3.0f * A_HALF) / 32767.0f) * sign;</pre>
   <tr><td>首次恢复后很慢</td><td><code>core install</code> / <code>compile --build-path</code> 超时但后台仍有进程</td><td>先查 <code>arduino-cli</code> / <code>xtensa</code> 进程，等待结束后再重试</td></tr>
   <tr><td>编译不等于烧录</td><td>编译成功但机器没有变化</td><td>还要执行 <code>upload --port COM3 --input-dir C:\cardputer\build_fresh\out</code></td></tr>
 </table>
-<div class="note">最近一次烧录成功：COM3，ESP32-S3，编译 <code>1143272 bytes</code> / RAM <code>74172 bytes</code>，写入 <code>1143648 bytes</code>，Hash verified，随后 Hard resetting with RTC WDT。</div>
+<div class="note">最近一次烧录成功：COM3，ESP32-S3，编译 <code>1142496 bytes</code> / RAM <code>73636 bytes</code>，写入 <code>1142880 bytes</code>，Hash verified，随后 Hard resetting with RTC WDT。</div>
 
 <!-- ─── GitHub同步 ─── -->
 <h2 id="git">GitHub 同步</h2>
