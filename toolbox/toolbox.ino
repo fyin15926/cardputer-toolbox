@@ -40,9 +40,6 @@ static const int A_HALF = (WAVE_CY - WAVE_TOP) / 2 - 2;    // A线最大半幅
 static const int B_CY   = (WAVE_CY + WAVE_BOT) / 2;        // B线/监听线中轴
 static const int B_HALF = (WAVE_BOT - WAVE_CY) / 2 - 2;    // B线最大半幅
 
-// 录音滚动波形历史 (每帧推入一列, content宽度列)
-static int8_t waveScroll[CONTENT_W];
-
 // ---------- 录音参数 ----------
 static const uint32_t REC_RATE = 16000;  // 16kHz
 static const size_t   REC_N    = 256;    // 每缓冲样本数 (~16ms, 小=波形更流畅)
@@ -448,13 +445,8 @@ static void mergePlaybackWaveBar(int idx, int amp) {
   if (idx < 0 || idx >= WAVE_BARS) return;
   if (amp > A_HALF) amp = A_HALF;
   if (amp < -A_HALF) amp = -A_HALF;
-  uint8_t c = waveBarCounts[idx];
-  if (c < 8) {
-    waveBars[idx] = (int8_t)(((int)waveBars[idx] * c + amp) / (c + 1));
-    waveBarCounts[idx] = c + 1;
-  } else {
-    waveBars[idx] = (int8_t)(((int)waveBars[idx] * 7 + amp) / 8);
-  }
+  if (waveBarCounts[idx] == 0 || abs(amp) > abs((int)waveBars[idx])) waveBars[idx] = (int8_t)amp;
+  if (waveBarCounts[idx] < 255) waveBarCounts[idx]++;
 }
 
 static void feedPlaybackWaveBars(uint32_t chunkStart, uint32_t dataSize, const int16_t *buf, size_t n) {
@@ -472,7 +464,7 @@ static void feedPlaybackWaveBars(uint32_t chunkStart, uint32_t dataSize, const i
 
 static bool previewPlaybackWaveChunk(File &f, uint32_t dataSize, uint32_t &previewPos) {
   if (previewPos >= dataSize) return false;
-  static int16_t tmp[PB_N];
+  static int16_t tmp[REC_N];
   uint32_t restore = f.position();
   uint32_t want = dataSize - previewPos;
   if (want > sizeof(tmp)) want = sizeof(tmp);
@@ -528,16 +520,17 @@ static void drawTrackBar(M5Canvas &cv, int i, int v) {
   cv.drawFastVLine(x, A_CY - v, v * 2 + 1, COL_GREEN);
 }
 
-static void drawTrackBarsFromScroll(M5Canvas &cv) {
+static void pushTrackBar(int amp) {
+  memmove(waveBars, waveBars + 1, (WAVE_BARS - 1) * sizeof(int8_t));
+  memmove(waveBarCounts, waveBarCounts + 1, (WAVE_BARS - 1) * sizeof(uint8_t));
+  waveBars[WAVE_BARS - 1] = (int8_t)amp;
+  waveBarCounts[WAVE_BARS - 1] = 1;
+}
+
+static void drawTrackBars(M5Canvas &cv) {
   for (int i = 0; i < WAVE_BARS; i++) {
-    int x0 = i * CONTENT_W / WAVE_BARS;
-    int x1 = (i + 1) * CONTENT_W / WAVE_BARS;
-    int v = 0;
-    for (int x = x0; x < x1 && x < CONTENT_W; x++) {
-      int a = abs((int)waveScroll[x]);
-      if (a > v) v = a;
-    }
-    if (v > 0) drawTrackBar(cv, i, v);
+    if (waveBarCounts[i] == 0) continue;
+    drawTrackBar(cv, i, waveBars[i]);
   }
 }
 
@@ -548,10 +541,7 @@ static void drawPlaybackCanvas(M5Canvas &cv, uint32_t played, uint32_t dataSize,
 
   // A线: 时间轴波形进度。录制页和播放页共用同款小波形柱。
   cv.drawFastHLine(0, A_CY, CONTENT_W, 0x0440);
-  for (int i = 0; i < WAVE_BARS; i++) {
-    if (waveBarCounts[i] == 0) continue;
-    drawTrackBar(cv, i, waveBars[i]);
-  }
+  drawTrackBars(cv);
 
   // B线: 当前播放缓冲实时跳动
   cv.drawFastHLine(0, B_CY, CONTENT_W, 0x0440);
@@ -906,7 +896,7 @@ void noiseReduce(const char *path) {
 }
 
 // ---------- 录音画面 (canvas: CONTENT_W × 135, 推送到 x=0) ----------
-// A线: waveScroll[] 滚动历史(上半区)  B线: wave[]实时示波器(下半区)
+// A线: waveBars[] 小柱轨道(上半区)  B线: wave[]实时示波器(下半区)
 void drawRecCanvas(M5Canvas &cv, uint32_t elapsedMs, bool blink, int16_t *wave, bool ready = false, bool paused = false, uint32_t deleteHeldMs = 0) {
   cv.fillScreen(COL_BG);
 
@@ -932,7 +922,7 @@ void drawRecCanvas(M5Canvas &cv, uint32_t elapsedMs, bool blink, int16_t *wave, 
 
   // ── A线: 滚动历史 (上半区, 中轴 y=39) ──────────────────────────
   cv.drawFastHLine(0, A_CY, CONTENT_W, 0x0440);
-  drawTrackBarsFromScroll(cv);
+  drawTrackBars(cv);
 
   // ── B线: 实时示波器 (下半区, 中轴 y=85) ─────────────────────────
   cv.drawFastHLine(0, B_CY, CONTENT_W, 0x0440);
@@ -963,7 +953,8 @@ int recordingScreen() {
   g_afterRecord = R_LIST;
 
   // 准备阶段仍显示 READY, 真正开始采样后才亮 REC 红点
-  memset(waveScroll, 0, sizeof(waveScroll));
+  memset(waveBars, 0, sizeof(waveBars));
+  memset(waveBarCounts, 0, sizeof(waveBarCounts));
   M5Canvas cv(&d);
   cv.createSprite(CONTENT_W, d.height());
   drawRecCanvas(cv, 0, false, nullptr, true);
@@ -1074,12 +1065,11 @@ int recordingScreen() {
     if (skipBuffers > 0) skipBuffers--;
     else { f.write((uint8_t *)filled, REC_N * sizeof(int16_t)); dataBytes += REC_N * sizeof(int16_t); }
     uint32_t now = millis();
-    if (now - lastDraw > 33) {
+    if (now - lastDraw >= 16) {
       lastDraw = now;
       bool blink = ((now / 400) % 2) == 0;
       uint32_t elapsed = activeElapsed();
-      memmove(waveScroll, waveScroll + 1, (CONTENT_W - 1) * sizeof(int8_t));
-      waveScroll[CONTENT_W - 1] = calcTrackAmp(filled, REC_N);
+      pushTrackBar(calcTrackAmp(filled, REC_N));
       uint32_t held = delHoldStart ? millis() - delHoldStart : 0;
       drawRecCanvas(cv, elapsed, blink, filled, false, false, held);
       cv.pushSprite(0, 0);
