@@ -460,7 +460,6 @@ static void mergePlaybackWaveBar(int idx, int amp) {
 static void feedPlaybackWaveBars(uint32_t chunkStart, uint32_t dataSize, const int16_t *buf, size_t n) {
   if (!buf || n == 0 || dataSize == 0) return;
   int amp = calcTrackAmp(buf, n);
-  amp = (amp * 3) / 4;
 
   uint32_t chunkEnd = chunkStart + (uint32_t)n * 2;
   if (chunkEnd > dataSize) chunkEnd = dataSize;
@@ -519,22 +518,39 @@ static void drawDeleteProgressOnDisplay(uint32_t heldMs) {
   d.fillRect(168, 125, deleteProgressW(heldMs), 7, COL_RED);
 }
 
+static void drawTrackBar(M5Canvas &cv, int i, int v) {
+  int x0 = i * CONTENT_W / WAVE_BARS;
+  int x1 = (i + 1) * CONTENT_W / WAVE_BARS;
+  int x = (x0 + x1) / 2;
+  v = abs(v);
+  if (v < 1) v = 1;
+  if (v > A_HALF) v = A_HALF;
+  cv.drawFastVLine(x, A_CY - v, v * 2 + 1, COL_GREEN);
+}
+
+static void drawTrackBarsFromScroll(M5Canvas &cv) {
+  for (int i = 0; i < WAVE_BARS; i++) {
+    int x0 = i * CONTENT_W / WAVE_BARS;
+    int x1 = (i + 1) * CONTENT_W / WAVE_BARS;
+    int v = 0;
+    for (int x = x0; x < x1 && x < CONTENT_W; x++) {
+      int a = abs((int)waveScroll[x]);
+      if (a > v) v = a;
+    }
+    if (v > 0) drawTrackBar(cv, i, v);
+  }
+}
+
 // 播放画面: A线=轨道线/Timeline A, B线=监听线/Monitor B(播放缓冲)
 static void drawPlaybackCanvas(M5Canvas &cv, uint32_t played, uint32_t dataSize, int16_t *liveWave, size_t liveN, bool paused = false, uint32_t deleteHeldMs = 0) {
   // --- 波形区 ---
   cv.fillRect(0, WAVE_TOP, CONTENT_W, WAVE_H, COL_BG);
 
-  // A线: 时间轴波形进度。已预览的格子画成小波形柱, 空格子只保留暗基线。
+  // A线: 时间轴波形进度。录制页和播放页共用同款小波形柱。
   cv.drawFastHLine(0, A_CY, CONTENT_W, 0x0440);
   for (int i = 0; i < WAVE_BARS; i++) {
     if (waveBarCounts[i] == 0) continue;
-    int x0 = i * CONTENT_W / WAVE_BARS;
-    int x1 = (i + 1) * CONTENT_W / WAVE_BARS;
-    int x = (x0 + x1) / 2;
-    int v = abs((int)waveBars[i]);
-    if (v < 1) v = 1;
-    if (v > A_HALF) v = A_HALF;
-    cv.drawFastVLine(x, A_CY - v, v * 2 + 1, COL_GREEN);
+    drawTrackBar(cv, i, waveBars[i]);
   }
 
   // B线: 当前播放缓冲实时跳动
@@ -916,11 +932,7 @@ void drawRecCanvas(M5Canvas &cv, uint32_t elapsedMs, bool blink, int16_t *wave, 
 
   // ── A线: 滚动历史 (上半区, 中轴 y=39) ──────────────────────────
   cv.drawFastHLine(0, A_CY, CONTENT_W, 0x0440);
-  for (int x = 1; x < CONTENT_W; x++) {
-    int v0 = (int)waveScroll[x - 1]; if (v0 > A_HALF) v0 = A_HALF; if (v0 < -A_HALF) v0 = -A_HALF;
-    int v1 = (int)waveScroll[x];     if (v1 > A_HALF) v1 = A_HALF; if (v1 < -A_HALF) v1 = -A_HALF;
-    cv.drawLine(x - 1, A_CY - v0, x, A_CY - v1, COL_GREEN);
-  }
+  drawTrackBarsFromScroll(cv);
 
   // ── B线: 实时示波器 (下半区, 中轴 y=85) ─────────────────────────
   cv.drawFastHLine(0, B_CY, CONTENT_W, 0x0440);
