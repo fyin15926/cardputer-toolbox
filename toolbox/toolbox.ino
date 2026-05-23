@@ -5,7 +5,7 @@
  * 录音应用交互:
  *   开机: 自动开始录音; 息屏: 空格=录音, 回车=列表
  *   录制中: 空格=暂停/继续; 回车=结束(存盘并进入列表); Esc=存盘并息屏; 长按Del 1.2秒=取消并删除本条; W/S=音量
- *   录音列表: ;/. 上下选; 回车=播放; Esc=退出到息屏; 长按Del 1.2秒=删除选中; Ctrl+键=绑定快捷键并标重要; Ctrl+Enter=标重要; Alt=降噪
+ *   录音列表: 左/右切 REC/KEY/IMP; ;/. 上下选; 回车=播放; Esc=息屏; 长按Del=删除; Ctrl+键=绑定快捷; Ctrl+Enter=标重要; Alt=降噪
  *   回放: 播放完自动回列表; 回车=暂停/继续; 退格=回列表; ;/.=上一条/下一条; Esc=息屏; +/- (= 与 - 键)=音量; 长按Del 1.2秒=删除当前录音; 空格=去录音
  *   绑定的播放键=最高优先级, 任意界面(录音中除外)即按即播, 且播放中按别的键可覆盖切换
  *
@@ -53,16 +53,25 @@ int playVol = 200;                       // 回放音量(+/- 可调, 0..255)
 int sdSCLK = 40, sdMISO = 39, sdMOSI = 14, sdCS = 12;
 
 static const char *REC_DIR = "/REC";
+static const char *SHORTCUT_DIR = "/SHORTCUT";
 static const char *IMPORTANT_DIR = "/IMPORTANT";
-static const char *HOTKEY_PATH = "/IMPORTANT/keys.txt";
+static const char *HOTKEY_PATH = "/SHORTCUT/keys.txt";
+static const char *OLD_IMPORTANT_HOTKEY_PATH = "/IMPORTANT/keys.txt";
 static const char *OLD_HOTKEY_PATH = "/REC/keys.txt";
 static const int MAX_REC = 9999;
 
-static void recordingPath(int recNum, bool important, char *p, size_t n) {
-  snprintf(p, n, "%s/REC_%04d.wav", important ? IMPORTANT_DIR : REC_DIR, recNum);
+enum RecKind : uint8_t { REC_NORMAL = 0, REC_SHORTCUT = 1, REC_IMPORTANT = 2 };
+
+static void recordingPathKind(int recNum, uint8_t kind, char *p, size_t n) {
+  const char *dir = (kind == REC_SHORTCUT) ? SHORTCUT_DIR : ((kind == REC_IMPORTANT) ? IMPORTANT_DIR : REC_DIR);
+  snprintf(p, n, "%s/REC_%04d.wav", dir, recNum);
 }
 
-// ---------- 快捷键绑定 (字母键 -> 录音编号), 存到 SD 卡 /IMPORTANT/keys.txt ----------
+static void recordingPath(int recNum, bool important, char *p, size_t n) {
+  recordingPathKind(recNum, important ? REC_IMPORTANT : REC_NORMAL, p, n);
+}
+
+// ---------- 快捷键绑定 (字母键 -> 录音编号), 存到 SD 卡 /SHORTCUT/keys.txt ----------
 struct HotKey { char key; int idx; };
 static const int MAX_HOTKEY = 24;
 HotKey hotkeys[MAX_HOTKEY];
@@ -127,6 +136,8 @@ static void writeWavHeader(File &f, uint32_t rate, uint32_t dataBytes) {
 #define R_DELETE 5   // Del长按确认后删除当前录音
 int g_nextPlay = 0;  // 配合 R_PLAY: 要切换去播放的录音编号
 int g_afterRecord = R_LIST;  // 录音结束后跳转目标
+int g_listReturnRec = 0;     // 播放页返回列表时应重新选中的录音
+uint8_t g_listMode = REC_NORMAL;  // 0普通 / 1快捷 / 2重要
 static int nextRecHint = 0;  // 下一个录音编号缓存, 避免每次从 REC_0001 顺序探测
 static const uint32_t DELETE_HOLD_MS = 1200;
 
@@ -292,6 +303,10 @@ static void loadHotkeys() {
   bool migrated = false;
   File f = SD.open(HOTKEY_PATH, FILE_READ);
   if (!f) {
+    f = SD.open(OLD_IMPORTANT_HOTKEY_PATH, FILE_READ);
+    migrated = (bool)f;
+  }
+  if (!f) {
     f = SD.open(OLD_HOTKEY_PATH, FILE_READ);
     migrated = (bool)f;
   }
@@ -312,7 +327,7 @@ static void loadHotkeys() {
 
 static void saveHotkeys() {
   if (!sdMount()) return;
-  if (!SD.exists(IMPORTANT_DIR)) SD.mkdir(IMPORTANT_DIR);
+  if (!SD.exists(SHORTCUT_DIR)) SD.mkdir(SHORTCUT_DIR);
   SD.remove(HOTKEY_PATH);
   File f = SD.open(HOTKEY_PATH, FILE_WRITE);
   if (f) {
@@ -356,16 +371,31 @@ static int pressedHotkeyRec() {
 // ---------- 列出录音编号 ----------
 int recList[MAX_REC];
 int recCount = 0;
+static uint8_t shortcutBits[(MAX_REC + 8) / 8];
 static uint8_t importantBits[(MAX_REC + 8) / 8];
 
 static void clearImportantBits() {
+  memset(shortcutBits, 0, sizeof(shortcutBits));
   memset(importantBits, 0, sizeof(importantBits));
+}
+
+static bool isShortcutRec(int recNum) {
+  if (recNum <= 0 || recNum > MAX_REC) return false;
+  int bit = recNum - 1;
+  return (shortcutBits[bit >> 3] & (1 << (bit & 7))) != 0;
 }
 
 static bool isImportantRec(int recNum) {
   if (recNum <= 0 || recNum > MAX_REC) return false;
   int bit = recNum - 1;
   return (importantBits[bit >> 3] & (1 << (bit & 7))) != 0;
+}
+
+static void setShortcutRec(int recNum, bool shortcut) {
+  if (recNum <= 0 || recNum > MAX_REC) return;
+  int bit = recNum - 1;
+  if (shortcut) shortcutBits[bit >> 3] |= (1 << (bit & 7));
+  else shortcutBits[bit >> 3] &= ~(1 << (bit & 7));
 }
 
 static void setImportantRec(int recNum, bool important) {
@@ -375,16 +405,27 @@ static void setImportantRec(int recNum, bool important) {
   else importantBits[bit >> 3] &= ~(1 << (bit & 7));
 }
 
+static uint8_t recKindOf(int recNum) {
+  if (isShortcutRec(recNum)) return REC_SHORTCUT;
+  if (isImportantRec(recNum)) return REC_IMPORTANT;
+  return REC_NORMAL;
+}
+
+static void recordingPathForRec(int recNum, char *p, size_t n) {
+  recordingPathKind(recNum, recKindOf(recNum), p, n);
+}
+
 static int recListIndexOf(int recNum) {
   for (int i = 0; i < recCount; i++) if (recList[i] == recNum) return i;
   return -1;
 }
 
-static void insertRecListSorted(int recNum, bool important = false) {
+static void insertRecListSorted(int recNum, uint8_t kind = REC_NORMAL) {
   if (recNum <= 0) return;
   int existing = recListIndexOf(recNum);
   if (existing >= 0) {
-    if (important) setImportantRec(recNum, true);
+    if (kind == REC_SHORTCUT) setShortcutRec(recNum, true);
+    if (kind == REC_IMPORTANT) setImportantRec(recNum, true);
     return;
   }
   if (recCount >= MAX_REC) return;
@@ -394,7 +435,8 @@ static void insertRecListSorted(int recNum, bool important = false) {
     pos--;
   }
   recList[pos] = recNum;
-  setImportantRec(recNum, important);
+  setShortcutRec(recNum, kind == REC_SHORTCUT);
+  setImportantRec(recNum, kind == REC_IMPORTANT);
   recCount++;
 }
 
@@ -404,13 +446,13 @@ static void removeRecListAt(int idx) {
   recCount--;
 }
 
-static bool recordingExists(int recNum, bool important) {
+static bool recordingExistsKind(int recNum, uint8_t kind) {
   char p[40];
-  recordingPath(recNum, important, p, sizeof(p));
+  recordingPathKind(recNum, kind, p, sizeof(p));
   return SD.exists(p);
 }
 
-static void scanRecordingDir(const char *dirPath, bool important, int &maxIdx) {
+static void scanRecordingDir(const char *dirPath, uint8_t kind, int &maxIdx) {
   File dir = SD.open(dirPath);
   if (dir && dir.isDirectory()) {
     File e;
@@ -418,7 +460,7 @@ static void scanRecordingDir(const char *dirPath, bool important, int &maxIdx) {
       int n = parseRecordingNumber(e.name());
       if (n > 0) {
         if (n > maxIdx) maxIdx = n;
-        insertRecListSorted(n, important);
+        insertRecListSorted(n, kind);
       }
       e.close();
     }
@@ -429,23 +471,24 @@ static void scanRecordingDir(const char *dirPath, bool important, int &maxIdx) {
 static int nextRecordingIndex() {
   char p[40];
   if (nextRecHint > 0 && nextRecHint <= 9999) {
-    recordingPath(nextRecHint, false, p, sizeof(p));
-    if (!SD.exists(p) && !recordingExists(nextRecHint, true)) return nextRecHint;
+    recordingPathKind(nextRecHint, REC_NORMAL, p, sizeof(p));
+    if (!SD.exists(p) && !recordingExistsKind(nextRecHint, REC_SHORTCUT) && !recordingExistsKind(nextRecHint, REC_IMPORTANT)) return nextRecHint;
   }
 
   int maxIdx = 0;
   recCount = 0;
   clearImportantBits();
-  scanRecordingDir(REC_DIR, false, maxIdx);
-  scanRecordingDir(IMPORTANT_DIR, true, maxIdx);
+  scanRecordingDir(REC_DIR, REC_NORMAL, maxIdx);
+  scanRecordingDir(SHORTCUT_DIR, REC_SHORTCUT, maxIdx);
+  scanRecordingDir(IMPORTANT_DIR, REC_IMPORTANT, maxIdx);
 
   int idx = maxIdx + 1;
   if (idx < 1) idx = 1;
   if (idx > 9999) idx = 9999;
-  recordingPath(idx, false, p, sizeof(p));
-  while (idx < 9999 && (SD.exists(p) || recordingExists(idx, true))) {
+  recordingPathKind(idx, REC_NORMAL, p, sizeof(p));
+  while (idx < 9999 && (SD.exists(p) || recordingExistsKind(idx, REC_SHORTCUT) || recordingExistsKind(idx, REC_IMPORTANT))) {
     idx++;
-    recordingPath(idx, false, p, sizeof(p));
+    recordingPathKind(idx, REC_NORMAL, p, sizeof(p));
   }
   nextRecHint = idx;
   return idx;
@@ -455,16 +498,11 @@ static void scanRecordings() {
   recCount = 0;
   clearImportantBits();
   if (!sdMount()) return;
-  if (!SD.exists(REC_DIR) && !SD.exists(IMPORTANT_DIR)) { SD.end(); return; }
-  char p[40];
-  int misses = 0;
-  for (int i = 1; i <= 9999 && recCount < MAX_REC; i++) {
-    recordingPath(i, false, p, sizeof(p));
-    if (SD.exists(p)) { recList[recCount++] = i; misses = 0; }
-    else if (++misses > 5) break;   // 编号连续, 连查到几个空缺就停(避免一路查到9999卡死)
-  }
-  int importantMax = 0;
-  scanRecordingDir(IMPORTANT_DIR, true, importantMax);
+  if (!SD.exists(REC_DIR) && !SD.exists(SHORTCUT_DIR) && !SD.exists(IMPORTANT_DIR)) { SD.end(); return; }
+  int maxIdx = 0;
+  scanRecordingDir(REC_DIR, REC_NORMAL, maxIdx);
+  scanRecordingDir(SHORTCUT_DIR, REC_SHORTCUT, maxIdx);
+  scanRecordingDir(IMPORTANT_DIR, REC_IMPORTANT, maxIdx);
   nextRecHint = (recCount > 0 && recList[recCount - 1] < 9999) ? recList[recCount - 1] + 1 : 1;
   SD.end();
 }
@@ -491,12 +529,14 @@ static bool copyFileOnSD(const char *from, const char *to) {
   return true;
 }
 
-static bool markRecordingImportant(int recNum) {
+static bool moveRecordingToKind(int recNum, uint8_t targetKind) {
+  if (targetKind == REC_NORMAL) return false;
   if (!sdMount()) return false;
-  if (!SD.exists(IMPORTANT_DIR)) SD.mkdir(IMPORTANT_DIR);
+  const char *targetDir = (targetKind == REC_SHORTCUT) ? SHORTCUT_DIR : IMPORTANT_DIR;
+  if (!SD.exists(targetDir)) SD.mkdir(targetDir);
   char src[40], dst[40];
-  recordingPath(recNum, false, src, sizeof(src));
-  recordingPath(recNum, true, dst, sizeof(dst));
+  recordingPathKind(recNum, recKindOf(recNum), src, sizeof(src));
+  recordingPathKind(recNum, targetKind, dst, sizeof(dst));
   bool ok = SD.exists(dst);
   if (!ok && SD.exists(src)) ok = SD.rename(src, dst);
   if (!ok && SD.exists(src)) {
@@ -506,8 +546,19 @@ static bool markRecordingImportant(int recNum) {
     SD.remove(src);
   }
   SD.end();
-  if (ok) setImportantRec(recNum, true);
+  if (ok) {
+    setShortcutRec(recNum, targetKind == REC_SHORTCUT);
+    setImportantRec(recNum, targetKind == REC_IMPORTANT);
+  }
   return ok;
+}
+
+static bool markRecordingImportant(int recNum) {
+  return moveRecordingToKind(recNum, REC_IMPORTANT);
+}
+
+static bool markRecordingShortcut(int recNum) {
+  return moveRecordingToKind(recNum, REC_SHORTCUT);
 }
 
 static void speakerOn() {
@@ -565,19 +616,16 @@ static bool previewPlaybackWaveBar(File &f, uint32_t dataSize, uint8_t &previewB
   if (segEnd <= segStart) segEnd = segStart + 2;
   if (segEnd > dataSize) segEnd = dataSize;
   uint32_t span = segEnd - segStart;
-  for (uint8_t s = 0; s < 3; s++) {
-    uint32_t pos = segStart + (uint32_t)((uint64_t)span * (s + 1) / 4);
-    if (pos + sizeof(tmp) > segEnd) pos = (segEnd > sizeof(tmp)) ? (segEnd - sizeof(tmp)) : segStart;
-    pos &= ~1U;
-    uint32_t want = dataSize - pos;
-    if (want > sizeof(tmp)) want = sizeof(tmp);
-    if (want > segEnd - pos) want = segEnd - pos;
-    want &= ~1U;
-    if (want == 0) continue;
-    int rd = 0;
-    if (f.seek(44 + pos)) rd = f.read((uint8_t *)tmp, want);
-    if (rd > 0) feedPlaybackWaveBars(pos, dataSize, tmp, rd / 2);
-  }
+  uint32_t pos = segStart + span / 2;
+  if (pos + sizeof(tmp) > segEnd) pos = (segEnd > sizeof(tmp)) ? (segEnd - sizeof(tmp)) : segStart;
+  pos &= ~1U;
+  uint32_t want = dataSize - pos;
+  if (want > sizeof(tmp)) want = sizeof(tmp);
+  if (want > segEnd - pos) want = segEnd - pos;
+  want &= ~1U;
+  int rd = 0;
+  if (want > 0 && f.seek(44 + pos)) rd = f.read((uint8_t *)tmp, want);
+  if (rd > 0) feedPlaybackWaveBars(pos, dataSize, tmp, rd / 2);
   f.seek(restore);
   previewBar++;
   return true;
@@ -779,6 +827,7 @@ int playbackScreen(const char *path, int recNum, int prevRec, int nextRec) {
         int hk = pressedHotkeyRec();
         if (hk > 0) {
           drawPlaybackAction(cv, "PLAY", COL_GREEN);
+          g_listMode = REC_SHORTCUT;
           g_nextPlay = hk; ret = R_PLAY; stop = true;
         }   // 按到别的绑定键=立刻覆盖播放
         else if (keyEsc()) { drawPlaybackAction(cv, "SLEEP", COL_DIM); ret = R_BACK; stop = true; }       // Esc=息屏
@@ -826,8 +875,8 @@ int playbackScreen(const char *path, int recNum, int prevRec, int nextRec) {
       delay(8); continue;
     }
     if (M5Cardputer.Speaker.isPlaying(0) >= 2) {
-      previewPlaybackWaveStep(f, dataSize, previewBar, 12);
-      if (millis() - lastPreviewDraw > 45) {
+      previewPlaybackWaveStep(f, dataSize, previewBar, 4);
+      if (millis() - lastPreviewDraw > 70) {
         lastPreviewDraw = millis();
         drawProgress(played);
       }
@@ -841,7 +890,6 @@ int playbackScreen(const char *path, int recNum, int prevRec, int nextRec) {
     int16_t *liveWave = pbBuf[pi];
     size_t liveN = got / 2;
     M5Cardputer.Speaker.playRaw(liveWave, liveN, REC_RATE, false, 1, 0, false);
-    previewPlaybackWaveStep(f, dataSize, previewBar, 4);
     pi ^= 1;
     played += got;
     drawProgress(played, liveWave, liveN);
@@ -865,13 +913,21 @@ int playFlow(int recNum) {
     int prevRec = 0, nextRec = 0;
     int idx = recListIndexOf(recNum);
     if (idx >= 0) {
-      if (idx > 0) prevRec = recList[idx - 1];
-      if (idx + 1 < recCount) nextRec = recList[idx + 1];
+      if (recVisibleInMode(recNum, g_listMode)) {
+        int pi = prevVisibleIndex(idx, g_listMode);
+        int ni = nextVisibleIndex(idx, g_listMode);
+        if (pi != idx) prevRec = recList[pi];
+        if (ni != idx) nextRec = recList[ni];
+      } else {
+        if (idx > 0) prevRec = recList[idx - 1];
+        if (idx + 1 < recCount) nextRec = recList[idx + 1];
+      }
     }
-    char p[40]; recordingPath(recNum, isImportantRec(recNum), p, sizeof(p));
+    char p[40]; recordingPathForRec(recNum, p, sizeof(p));
     int r = playbackScreen(p, recNum, prevRec, nextRec);
     if (r == R_PLAY) { recNum = g_nextPlay; continue; }
-    if (r == R_DELETE) { deleteRecording(recNum); return R_LIST; }
+    if (r == R_DELETE) { g_listReturnRec = 0; deleteRecording(recNum); return R_LIST; }
+    if (r == R_LIST) g_listReturnRec = recNum;
     return r;
   }
 }
@@ -885,7 +941,7 @@ void afterRecordingFlow(int recNum) {
   if (action == R_BACK) return;
   while (recNum > 0) {
     if (action == R_NOISE) {
-      char p[40]; recordingPath(recNum, isImportantRec(recNum), p, sizeof(p));
+      char p[40]; recordingPathForRec(recNum, p, sizeof(p));
       noiseReduce(p);
       action = R_LIST;
       continue;
@@ -1070,7 +1126,7 @@ int recordingScreen() {
   if (!SD.exists(REC_DIR)) SD.mkdir(REC_DIR);
   int idx = nextRecordingIndex();
   char path[40];
-  recordingPath(idx, false, path, sizeof(path));
+  recordingPathKind(idx, REC_NORMAL, path, sizeof(path));
   File f = SD.open(path, FILE_WRITE);
   if (!f) { cv.deleteSprite(); SD.end(); showMsg("录音机", "无法写入文件", COL_RED); return 0; }
   nextRecHint = (idx < 9999) ? idx + 1 : 9999;
@@ -1210,11 +1266,14 @@ int recordingScreen() {
 static void deleteRecording(int recNum) {
   if (!sdMount()) return;
   char p[40];
-  recordingPath(recNum, false, p, sizeof(p));
+  recordingPathKind(recNum, REC_NORMAL, p, sizeof(p));
   SD.remove(p);
-  recordingPath(recNum, true, p, sizeof(p));
+  recordingPathKind(recNum, REC_SHORTCUT, p, sizeof(p));
+  SD.remove(p);
+  recordingPathKind(recNum, REC_IMPORTANT, p, sizeof(p));
   SD.remove(p);
   SD.end();
+  setShortcutRec(recNum, false);
   setImportantRec(recNum, false);
   bool hotkeyRemoved = false;
   for (int i = 0; i < hotkeyCount; i++) {
@@ -1251,6 +1310,46 @@ static bool confirmNoiseReduce(int recNum) {
   }
 }
 
+static bool recVisibleInMode(int recNum, uint8_t mode) {
+  if (mode == REC_SHORTCUT) return isShortcutRec(recNum);
+  if (mode == REC_IMPORTANT) return isImportantRec(recNum);
+  return !isShortcutRec(recNum) && !isImportantRec(recNum);
+}
+
+static int firstVisibleIndex(uint8_t mode) {
+  for (int i = 0; i < recCount; i++) if (recVisibleInMode(recList[i], mode)) return i;
+  return -1;
+}
+
+static int countVisible(uint8_t mode) {
+  int c = 0;
+  for (int i = 0; i < recCount; i++) if (recVisibleInMode(recList[i], mode)) c++;
+  return c;
+}
+
+static int nearestVisibleIndex(int start, uint8_t mode) {
+  if (recCount <= 0) return -1;
+  if (start < 0) start = 0;
+  if (start >= recCount) start = recCount - 1;
+  if (recVisibleInMode(recList[start], mode)) return start;
+  for (int d = 1; d < recCount; d++) {
+    int a = start - d, b = start + d;
+    if (a >= 0 && recVisibleInMode(recList[a], mode)) return a;
+    if (b < recCount && recVisibleInMode(recList[b], mode)) return b;
+  }
+  return -1;
+}
+
+static int prevVisibleIndex(int idx, uint8_t mode) {
+  for (int i = idx - 1; i >= 0; i--) if (recVisibleInMode(recList[i], mode)) return i;
+  return idx;
+}
+
+static int nextVisibleIndex(int idx, uint8_t mode) {
+  for (int i = idx + 1; i < recCount; i++) if (recVisibleInMode(recList[i], mode)) return i;
+  return idx;
+}
+
 int listScreen(int selectIdx) {
   auto &d = M5Cardputer.Display;
   if (recCount <= 0 || (selectIdx > 0 && recListIndexOf(selectIdx) < 0)) scanRecordings();
@@ -1276,7 +1375,16 @@ int listScreen(int selectIdx) {
   }
 
   int sel = recCount - 1;   // 默认选最新录音(列表末尾)
-  if (selectIdx > 0) for (int i = 0; i < recCount; i++) if (recList[i] == selectIdx) { sel = i; break; }
+  if (selectIdx > 0) {
+    for (int i = 0; i < recCount; i++) {
+      if (recList[i] == selectIdx) {
+        sel = i;
+        g_listMode = recKindOf(selectIdx);
+        break;
+      }
+    }
+  }
+  sel = nearestVisibleIndex(sel, g_listMode);
   bool redraw = true;
   uint32_t delHoldStart = 0;
   uint32_t lastDelDraw = 0;
@@ -1288,12 +1396,18 @@ int listScreen(int selectIdx) {
 
   waitRelease();
   while (true) {
-    int first = sel - visRows / 2;
-    if (first < 0) first = 0;
-    if (first > recCount - visRows) first = recCount - visRows;
-    if (first < 0) first = 0;
-
     if (redraw) {
+      int visibleTotal = countVisible(g_listMode);
+      if (visibleTotal == 0) sel = -1;
+      if (visibleTotal > 0 && (sel < 0 || !recVisibleInMode(recList[sel], g_listMode))) sel = nearestVisibleIndex(sel, g_listMode);
+      int selectedOrdinal = 0;
+      if (sel >= 0) {
+        for (int i = 0; i < sel; i++) if (recVisibleInMode(recList[i], g_listMode)) selectedOrdinal++;
+      }
+      int firstOrdinal = selectedOrdinal - visRows / 2;
+      if (firstOrdinal < 0) firstOrdinal = 0;
+      if (firstOrdinal > visibleTotal - visRows) firstOrdinal = visibleTotal - visRows;
+      if (firstOrdinal < 0) firstOrdinal = 0;
       redraw = false;
       // 重绘全屏列表内容
       d.fillRect(0, 0, CONTENT_W, 135, COL_BG);
@@ -1303,12 +1417,23 @@ int listScreen(int selectIdx) {
       d.setFont(&fonts::efontCN_12);
       d.setTextColor(COL_GREEN, COL_BG);
       d.setCursor(4, 3);
-      d.printf("录音列表  %d 条", recCount);
+      d.printf("%cREC %cKEY %cIMP  %d", g_listMode == REC_NORMAL ? '>' : ' ',
+               g_listMode == REC_SHORTCUT ? '>' : ' ',
+               g_listMode == REC_IMPORTANT ? '>' : ' ',
+               visibleTotal);
       d.drawFastHLine(0, 15, CONTENT_W, COL_DIM);
 
       // 列表行
-      for (int r = 0; r < visRows && first + r < recCount; r++) {
-        int i = first + r;
+      if (visibleTotal == 0) {
+        d.setTextColor(COL_DIM, COL_BG);
+        d.setCursor(28, 58);
+        d.print("EMPTY");
+      }
+      int drawn = 0, ord = 0;
+      for (int i = 0; i < recCount && drawn < visRows; i++) {
+        if (!recVisibleInMode(recList[i], g_listMode)) continue;
+        if (ord++ < firstOrdinal) continue;
+        int r = drawn++;
         int y = top + r * rowH;
         bool on = (i == sel);
         uint16_t bg = on ? 0x0180 : COL_BG;
@@ -1319,7 +1444,8 @@ int listScreen(int selectIdx) {
         d.setTextColor(on ? COL_GREEN : COL_DIM, bg);
         d.setCursor(14, y);
         d.printf("REC_%04d", recList[i]);
-        if (isImportantRec(recList[i])) d.print("*");
+        if (isShortcutRec(recList[i])) d.print(">");
+        else if (isImportantRec(recList[i])) d.print("*");
         // 快捷键标签
         char hk = hotkeyOf(recList[i]);
         if (hk) {
@@ -1331,15 +1457,15 @@ int listScreen(int selectIdx) {
       }
       // 更多项箭头
       d.setFont(&fonts::efontCN_12); d.setTextColor(COL_DIM, COL_BG);
-      if (first > 0)                  { d.setCursor(CONTENT_W - 10, top); d.print("^"); }
-      if (first + visRows < recCount) { d.setCursor(CONTENT_W - 10, top + (visRows - 1) * rowH); d.print("v"); }
+      if (firstOrdinal > 0)                    { d.setCursor(CONTENT_W - 10, top); d.print("^"); }
+      if (firstOrdinal + visRows < visibleTotal) { d.setCursor(CONTENT_W - 10, top + (visRows - 1) * rowH); d.print("v"); }
       // 底部操作提示
       d.drawFastHLine(0, 120, CONTENT_W, COL_DIM);
       d.setCursor(4, 122); d.print(";/.选 回车放 Esc退 长Del删");
     }
 
     M5Cardputer.update();
-    if (keyDel()) {
+    if (keyDel() && sel >= 0) {
       if (delHoldStart == 0) delHoldStart = millis();
       uint32_t held = millis() - delHoldStart;
       if (held >= DELETE_HOLD_MS) {
@@ -1368,44 +1494,63 @@ int listScreen(int selectIdx) {
       int hk = pressedHotkeyRec();
       if (hk > 0) {                                     // 绑定键=最高优先级, 立刻播放(可覆盖)
         drawActionToast("PLAY", COL_GREEN);
+        g_listMode = REC_SHORTCUT;
         int r = playFlow(hk);
         if (r == R_RECORD) return R_RECORD;
         if (r == R_BACK) return R_BACK;
-        if (r == R_LIST) { redraw = true; waitRelease(); continue; }
+        if (r == R_LIST) {
+          if (g_listReturnRec > 0) {
+            int ni = recListIndexOf(g_listReturnRec);
+            if (ni >= 0) { g_listMode = recKindOf(g_listReturnRec); sel = ni; }
+            g_listReturnRec = 0;
+          }
+          redraw = true; waitRelease(); continue;
+        }
         redraw = true; waitRelease();
       }
-      else if (keyCtrl()) {                             // Ctrl+键 = 绑定快捷键(字母/数字)
+      else if (keyCtrl() && sel >= 0) {                             // Ctrl+键 = 绑定快捷键(字母/数字)
         if (keyEnter()) {
           bool ok = markRecordingImportant(recList[sel]);
+          if (ok) g_listMode = REC_IMPORTANT;
           drawActionToast(ok ? "IMP" : "ERR", ok ? COL_GREEN : COL_RED);
           redraw = true; waitRelease();
           continue;
         }
         char bk = pressedBindKey();
         if (bk) {
-          bool ok = markRecordingImportant(recList[sel]);
+          bool ok = markRecordingShortcut(recList[sel]);
           if (ok) setHotkey(bk, recList[sel]);
+          if (ok) g_listMode = REC_SHORTCUT;
           drawActionToast(ok ? "BIND" : "ERR", ok ? COL_GREEN : COL_RED);
           redraw = true; waitRelease();
         }
       }
       else if (keySpace()) { drawActionToast("REC", COL_RED); return R_RECORD; }         // 空格=去录音
       else if (keyEsc())   { drawActionToast("SLEEP", COL_DIM); return R_BACK; }           // Esc=退出列表并息屏
-      else if (keyUp())    { if (sel > 0) sel--; redraw = true; }
-      else if (keyDown())  { if (sel < recCount - 1) sel++; redraw = true; }
-      else if (keyEnter()) {
+      else if (keyLeft())  { g_listMode = (g_listMode + 2) % 3; sel = nearestVisibleIndex(sel, g_listMode); redraw = true; waitRelease(); }
+      else if (keyRight()) { g_listMode = (g_listMode + 1) % 3; sel = nearestVisibleIndex(sel, g_listMode); redraw = true; waitRelease(); }
+      else if (keyUp())    { if (sel >= 0) sel = prevVisibleIndex(sel, g_listMode); redraw = true; }
+      else if (keyDown())  { if (sel >= 0) sel = nextVisibleIndex(sel, g_listMode); redraw = true; }
+      else if (keyEnter() && sel >= 0) {
         drawActionToast("PLAY", COL_GREEN);
         int r = playFlow(recList[sel]);
         if (r == R_RECORD) return R_RECORD;             // 回放里按空格 -> 去录音
         if (r == R_BACK) return R_BACK;                 // 回放里按 Esc -> 息屏
-        if (r == R_LIST) { redraw = true; waitRelease(); continue; }
+        if (r == R_LIST) {
+          if (g_listReturnRec > 0) {
+            int ni = recListIndexOf(g_listReturnRec);
+            if (ni >= 0) { g_listMode = recKindOf(g_listReturnRec); sel = ni; }
+            g_listReturnRec = 0;
+          }
+          redraw = true; waitRelease(); continue;
+        }
         redraw = true; waitRelease();
       }
-      else if (keyAlt()) {
+      else if (keyAlt() && sel >= 0) {
         drawActionToast("NOISE", COL_GREEN);
         int recNum = recList[sel];
         if (confirmNoiseReduce(recNum)) {
-          char p[40]; recordingPath(recNum, isImportantRec(recNum), p, sizeof(p));
+          char p[40]; recordingPathForRec(recNum, p, sizeof(p));
           noiseReduce(p);
         }
         redraw = true; waitRelease();

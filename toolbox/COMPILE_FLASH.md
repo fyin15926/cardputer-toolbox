@@ -423,6 +423,17 @@ Hash of data verified.
 Hard resetting with RTC WDT...
 ```
 
+2026-05-23 三列列表与播放 A线低卡顿预览后烧录成功记录：
+```text
+Serial port COM3
+Chip is ESP32-S3
+Sketch uses 1147508 bytes (87%)
+Global variables use 76476 bytes (23%)
+Wrote 1147888 bytes
+Hash of data verified.
+Hard resetting with RTC WDT...
+```
+
 ## 9. 快速参考：一键脚本
 
 将以下内容保存为 `C:\cardputer\tools\build_and_flash.ps1`，需要时直接运行：
