@@ -136,8 +136,8 @@ Get-Content C:\cardputer\tools\tb.out.log   # Flash/RAM用量</pre>
 <h3>Flash用量参考</h3>
 <table>
   <tr><th>指标</th><th>当前值</th><th>上限</th></tr>
-  <tr><td>Flash</td><td>1,145,580 bytes（87%）</td><td>1,310,720 bytes</td></tr>
-  <tr><td>RAM（全局）</td><td>73,700 bytes（22%）</td><td>327,680 bytes</td></tr>
+  <tr><td>Flash</td><td>1,144,972 bytes（87%）</td><td>1,310,720 bytes</td></tr>
+  <tr><td>RAM（全局）</td><td>74,724 bytes（22%）</td><td>327,680 bytes</td></tr>
 </table>
 <div class="warn">⚠ 不要添加中文大字体（如 efontCN_24 约占350KB）。大号数字用内置 <code>Font4</code>（纯ASCII，无额外开销）。</div>
 
@@ -157,7 +157,7 @@ Get-Content C:\cardputer\tools\tb.out.log   # Flash/RAM用量</pre>
   <tr><td><code>afterRecordingFlow(int recNum)</code></td><td>录音结束后默认回列表；快捷键仍可直接播放</td></tr>
   <tr><td><code>listFlow(int n)</code></td><td>列表界面的完整流程控制（含从列表→录音→再返回的循环）</td></tr>
   <tr><td><code>playFlow(int n)</code></td><td>播放流程控制</td></tr>
-  <tr><td><code>previewPlaybackWaveStep(...)</code> / <code>updatePlaybackWaveBars(...)</code></td><td>播放时后台逐格预览 A线，并用当前音频缓冲增量修正；不再进播放页前完整扫描 WAV</td></tr>
+  <tr><td><code>previewPlaybackWaveStep(...)</code> / <code>feedPlaybackWaveBars(...)</code></td><td>播放时后台用连续音频块生成 A线；播放缓冲不再二次改写 A线，避免播放头前后不一致</td></tr>
 </table>
 
 <h3>返回码常量</h3>
@@ -199,7 +199,7 @@ Get-Content C:\cardputer\tools\tb.out.log   # Flash/RAM用量</pre>
   <li>息屏键统一为 <code>Esc</code>：列表页 Esc 退出息屏，播放页 Esc 停止播放并息屏，录音中 Esc 保存当前录音后息屏。Cardputer 库里物理 Esc 映射为左上角反引号键</li>
   <li>删除操作统一为长按 <code>Del</code> 1.2 秒：录音中删除本条、播放页删除当前录音、列表页删除选中录音；按住显示红色进度条和“删除中”，松开取消</li>
   <li>新录音编号用 <code>nextRecHint</code> 缓存和目录扫描获取，不再每次从 <code>REC_0001.wav</code> 顺序探测</li>
-  <li>播放页也使用 Canvas 双缓冲推屏；A线在扬声器队列空隙里后台多点预览，并随播放缓冲增量修正，统一画成亮绿小波形柱，播放头表示进度，避免进播放页前完整扫描 WAV 造成等待</li>
+  <li>播放页也使用 Canvas 双缓冲推屏；A线在扬声器队列空隙里后台用连续音频块生成，播放缓冲不再二次改写 A线，统一画成亮绿小波形柱，播放头表示进度</li>
   <li>播放入口不再阻塞等待回车松开；启动按键会被非阻塞忽略，音频队列可以立即开始填充</li>
   <li>所有主要按键先给即时反馈再执行慢操作：列表播放显示 <code>PLAY</code>，播放切换显示 <code>PREV/NEXT</code>，暂停/继续显示 <code>PAUSE/PLAY</code>，返回/录音/息屏也会先闪提示</li>
   <li>播放流程复用当前录音列表缓存，只有缓存缺失时才重新扫描 SD，减少列表播放和播放中上下切换的等待</li>
@@ -303,7 +303,7 @@ int amp = (int)(rms * (3.0f * A_HALF) / 32767.0f) * sign;</pre>
   <tr><td>首次恢复后很慢</td><td><code>core install</code> / <code>compile --build-path</code> 超时但后台仍有进程</td><td>先查 <code>arduino-cli</code> / <code>xtensa</code> 进程，等待结束后再重试</td></tr>
   <tr><td>编译不等于烧录</td><td>编译成功但机器没有变化</td><td>还要执行 <code>upload --port COM3 --input-dir C:\cardputer\build_fresh\out</code></td></tr>
 </table>
-<div class="note">最近一次烧录成功：COM3，ESP32-S3，编译 <code>1145580 bytes</code> / RAM <code>73700 bytes</code>，写入 <code>1145968 bytes</code>，Hash verified，随后 Hard resetting with RTC WDT。</div>
+<div class="note">最近一次烧录成功：COM3，ESP32-S3，编译 <code>1144972 bytes</code> / RAM <code>74724 bytes</code>，写入 <code>1145360 bytes</code>，Hash verified，随后 Hard resetting with RTC WDT。</div>
 
 <!-- ─── GitHub同步 ─── -->
 <h2 id="git">GitHub 同步</h2>
