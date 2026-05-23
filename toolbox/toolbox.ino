@@ -5,7 +5,7 @@
  * 录音应用交互:
  *   开机: 自动开始录音; 息屏: 空格=录音, 回车=列表
  *   录制中: 空格=暂停/继续; 回车=结束(存盘并进入列表); Esc=存盘并息屏; 长按Del 1.2秒=取消并删除本条; W/S=音量
- *   录音列表: ;/. 上下选; 回车=播放; Esc=退出到息屏; 长按Del 1.2秒=删除选中; Ctrl+键(字母/数字)=给该录音绑定快捷键; Alt=降噪
+ *   录音列表: ;/. 上下选; 回车=播放; Esc=退出到息屏; 长按Del 1.2秒=删除选中; Ctrl+键=绑定快捷键并标重要; Ctrl+Enter=标重要; Alt=降噪
  *   回放: 播放完自动回列表; 回车=暂停/继续; 退格=回列表; ;/.=上一条/下一条; Esc=息屏; +/- (= 与 - 键)=音量; 长按Del 1.2秒=删除当前录音; 空格=去录音
  *   绑定的播放键=最高优先级, 任意界面(录音中除外)即按即播, 且播放中按别的键可覆盖切换
  *
@@ -52,7 +52,17 @@ int playVol = 200;                       // 回放音量(+/- 可调, 0..255)
 // SD 引脚(运行时由 M5Unified 按机型给出, 失败则回退到 Adv 已知值)
 int sdSCLK = 40, sdMISO = 39, sdMOSI = 14, sdCS = 12;
 
-// ---------- 快捷键绑定 (字母键 -> 录音编号), 存到 SD 卡 /REC/keys.txt ----------
+static const char *REC_DIR = "/REC";
+static const char *IMPORTANT_DIR = "/IMPORTANT";
+static const char *HOTKEY_PATH = "/IMPORTANT/keys.txt";
+static const char *OLD_HOTKEY_PATH = "/REC/keys.txt";
+static const int MAX_REC = 9999;
+
+static void recordingPath(int recNum, bool important, char *p, size_t n) {
+  snprintf(p, n, "%s/REC_%04d.wav", important ? IMPORTANT_DIR : REC_DIR, recNum);
+}
+
+// ---------- 快捷键绑定 (字母键 -> 录音编号), 存到 SD 卡 /IMPORTANT/keys.txt ----------
 struct HotKey { char key; int idx; };
 static const int MAX_HOTKEY = 24;
 HotKey hotkeys[MAX_HOTKEY];
@@ -274,10 +284,17 @@ static void showMsg(const char *title, const char *msg, uint16_t col) {
 }
 
 // ---------- 快捷键绑定: 读/写 SD ----------
+static void saveHotkeys();
+
 static void loadHotkeys() {
   hotkeyCount = 0;
   if (!sdMount()) return;
-  File f = SD.open("/REC/keys.txt", FILE_READ);
+  bool migrated = false;
+  File f = SD.open(HOTKEY_PATH, FILE_READ);
+  if (!f) {
+    f = SD.open(OLD_HOTKEY_PATH, FILE_READ);
+    migrated = (bool)f;
+  }
   if (f) {
     while (f.available() && hotkeyCount < MAX_HOTKEY) {
       String line = f.readStringUntil('\n');
@@ -290,13 +307,14 @@ static void loadHotkeys() {
     f.close();
   }
   SD.end();
+  if (migrated) saveHotkeys();
 }
 
 static void saveHotkeys() {
   if (!sdMount()) return;
-  if (!SD.exists("/REC")) SD.mkdir("/REC");
-  SD.remove("/REC/keys.txt");
-  File f = SD.open("/REC/keys.txt", FILE_WRITE);
+  if (!SD.exists(IMPORTANT_DIR)) SD.mkdir(IMPORTANT_DIR);
+  SD.remove(HOTKEY_PATH);
+  File f = SD.open(HOTKEY_PATH, FILE_WRITE);
   if (f) {
     for (int i = 0; i < hotkeyCount; i++) f.printf("%c %d\n", hotkeys[i].key, hotkeys[i].idx);
     f.flush();
@@ -336,23 +354,47 @@ static int pressedHotkeyRec() {
 }
 
 // ---------- 列出录音编号 ----------
-static const int MAX_REC = 9999;
 int recList[MAX_REC];
 int recCount = 0;
+static uint8_t importantBits[(MAX_REC + 8) / 8];
+
+static void clearImportantBits() {
+  memset(importantBits, 0, sizeof(importantBits));
+}
+
+static bool isImportantRec(int recNum) {
+  if (recNum <= 0 || recNum > MAX_REC) return false;
+  int bit = recNum - 1;
+  return (importantBits[bit >> 3] & (1 << (bit & 7))) != 0;
+}
+
+static void setImportantRec(int recNum, bool important) {
+  if (recNum <= 0 || recNum > MAX_REC) return;
+  int bit = recNum - 1;
+  if (important) importantBits[bit >> 3] |= (1 << (bit & 7));
+  else importantBits[bit >> 3] &= ~(1 << (bit & 7));
+}
 
 static int recListIndexOf(int recNum) {
   for (int i = 0; i < recCount; i++) if (recList[i] == recNum) return i;
   return -1;
 }
 
-static void insertRecListSorted(int recNum) {
-  if (recNum <= 0 || recCount >= MAX_REC || recListIndexOf(recNum) >= 0) return;
+static void insertRecListSorted(int recNum, bool important = false) {
+  if (recNum <= 0) return;
+  int existing = recListIndexOf(recNum);
+  if (existing >= 0) {
+    if (important) setImportantRec(recNum, true);
+    return;
+  }
+  if (recCount >= MAX_REC) return;
   int pos = recCount;
   while (pos > 0 && recList[pos - 1] > recNum) {
     recList[pos] = recList[pos - 1];
     pos--;
   }
   recList[pos] = recNum;
+  setImportantRec(recNum, important);
   recCount++;
 }
 
@@ -362,36 +404,48 @@ static void removeRecListAt(int idx) {
   recCount--;
 }
 
-static int nextRecordingIndex() {
+static bool recordingExists(int recNum, bool important) {
   char p[40];
-  if (nextRecHint > 0 && nextRecHint <= 9999) {
-    snprintf(p, sizeof(p), "/REC/REC_%04d.wav", nextRecHint);
-    if (!SD.exists(p)) return nextRecHint;
-  }
+  recordingPath(recNum, important, p, sizeof(p));
+  return SD.exists(p);
+}
 
-  int maxIdx = 0;
-  recCount = 0;
-  File dir = SD.open("/REC");
+static void scanRecordingDir(const char *dirPath, bool important, int &maxIdx) {
+  File dir = SD.open(dirPath);
   if (dir && dir.isDirectory()) {
     File e;
     while ((e = dir.openNextFile())) {
       int n = parseRecordingNumber(e.name());
       if (n > 0) {
         if (n > maxIdx) maxIdx = n;
-        insertRecListSorted(n);
+        insertRecListSorted(n, important);
       }
       e.close();
     }
     dir.close();
   }
+}
+
+static int nextRecordingIndex() {
+  char p[40];
+  if (nextRecHint > 0 && nextRecHint <= 9999) {
+    recordingPath(nextRecHint, false, p, sizeof(p));
+    if (!SD.exists(p) && !recordingExists(nextRecHint, true)) return nextRecHint;
+  }
+
+  int maxIdx = 0;
+  recCount = 0;
+  clearImportantBits();
+  scanRecordingDir(REC_DIR, false, maxIdx);
+  scanRecordingDir(IMPORTANT_DIR, true, maxIdx);
 
   int idx = maxIdx + 1;
   if (idx < 1) idx = 1;
   if (idx > 9999) idx = 9999;
-  snprintf(p, sizeof(p), "/REC/REC_%04d.wav", idx);
-  while (idx < 9999 && SD.exists(p)) {
+  recordingPath(idx, false, p, sizeof(p));
+  while (idx < 9999 && (SD.exists(p) || recordingExists(idx, true))) {
     idx++;
-    snprintf(p, sizeof(p), "/REC/REC_%04d.wav", idx);
+    recordingPath(idx, false, p, sizeof(p));
   }
   nextRecHint = idx;
   return idx;
@@ -399,15 +453,18 @@ static int nextRecordingIndex() {
 
 static void scanRecordings() {
   recCount = 0;
+  clearImportantBits();
   if (!sdMount()) return;
-  if (!SD.exists("/REC")) { SD.end(); return; }
+  if (!SD.exists(REC_DIR) && !SD.exists(IMPORTANT_DIR)) { SD.end(); return; }
   char p[40];
   int misses = 0;
   for (int i = 1; i <= 9999 && recCount < MAX_REC; i++) {
-    snprintf(p, sizeof(p), "/REC/REC_%04d.wav", i);
+    recordingPath(i, false, p, sizeof(p));
     if (SD.exists(p)) { recList[recCount++] = i; misses = 0; }
     else if (++misses > 5) break;   // 编号连续, 连查到几个空缺就停(避免一路查到9999卡死)
   }
+  int importantMax = 0;
+  scanRecordingDir(IMPORTANT_DIR, true, importantMax);
   nextRecHint = (recCount > 0 && recList[recCount - 1] < 9999) ? recList[recCount - 1] + 1 : 1;
   SD.end();
 }
@@ -416,6 +473,43 @@ static void scanRecordings() {
 // (保留: 暂未使用; 需要时可在切到扬声器后调用以遮爆音)
 
 // ---------- 切换编解码器到扬声器(含手动开 DAC) ----------
+static bool copyFileOnSD(const char *from, const char *to) {
+  File in = SD.open(from, FILE_READ);
+  if (!in) return false;
+  SD.remove(to);
+  File out = SD.open(to, FILE_WRITE);
+  if (!out) { in.close(); return false; }
+  uint8_t buf[512];
+  while (in.available()) {
+    int n = in.read(buf, sizeof(buf));
+    if (n <= 0) break;
+    if (out.write(buf, n) != (size_t)n) { in.close(); out.close(); return false; }
+  }
+  out.flush();
+  in.close();
+  out.close();
+  return true;
+}
+
+static bool markRecordingImportant(int recNum) {
+  if (!sdMount()) return false;
+  if (!SD.exists(IMPORTANT_DIR)) SD.mkdir(IMPORTANT_DIR);
+  char src[40], dst[40];
+  recordingPath(recNum, false, src, sizeof(src));
+  recordingPath(recNum, true, dst, sizeof(dst));
+  bool ok = SD.exists(dst);
+  if (!ok && SD.exists(src)) ok = SD.rename(src, dst);
+  if (!ok && SD.exists(src)) {
+    ok = copyFileOnSD(src, dst);
+    if (ok) SD.remove(src);
+  } else if (ok && SD.exists(src)) {
+    SD.remove(src);
+  }
+  SD.end();
+  if (ok) setImportantRec(recNum, true);
+  return ok;
+}
+
 static void speakerOn() {
   if (speakerOutputReady) {
     M5Cardputer.Speaker.setVolume(playVol);
@@ -774,7 +868,7 @@ int playFlow(int recNum) {
       if (idx > 0) prevRec = recList[idx - 1];
       if (idx + 1 < recCount) nextRec = recList[idx + 1];
     }
-    char p[40]; snprintf(p, sizeof(p), "/REC/REC_%04d.wav", recNum);
+    char p[40]; recordingPath(recNum, isImportantRec(recNum), p, sizeof(p));
     int r = playbackScreen(p, recNum, prevRec, nextRec);
     if (r == R_PLAY) { recNum = g_nextPlay; continue; }
     if (r == R_DELETE) { deleteRecording(recNum); return R_LIST; }
@@ -791,7 +885,7 @@ void afterRecordingFlow(int recNum) {
   if (action == R_BACK) return;
   while (recNum > 0) {
     if (action == R_NOISE) {
-      char p[40]; snprintf(p, sizeof(p), "/REC/REC_%04d.wav", recNum);
+      char p[40]; recordingPath(recNum, isImportantRec(recNum), p, sizeof(p));
       noiseReduce(p);
       action = R_LIST;
       continue;
@@ -973,10 +1067,10 @@ int recordingScreen() {
   cv.pushSprite(0, 0);
 
   if (!sdMount()) { cv.deleteSprite(); showMsg("录音机", "未检测到 SD 卡", COL_RED); return 0; }
-  if (!SD.exists("/REC")) SD.mkdir("/REC");
+  if (!SD.exists(REC_DIR)) SD.mkdir(REC_DIR);
   int idx = nextRecordingIndex();
   char path[40];
-  snprintf(path, sizeof(path), "/REC/REC_%04d.wav", idx);
+  recordingPath(idx, false, path, sizeof(path));
   File f = SD.open(path, FILE_WRITE);
   if (!f) { cv.deleteSprite(); SD.end(); showMsg("录音机", "无法写入文件", COL_RED); return 0; }
   nextRecHint = (idx < 9999) ? idx + 1 : 9999;
@@ -1115,9 +1209,13 @@ int recordingScreen() {
 // 返回 R_BACK(退出列表并息屏) 或 R_RECORD(去录音)
 static void deleteRecording(int recNum) {
   if (!sdMount()) return;
-  char p[40]; snprintf(p, sizeof(p), "/REC/REC_%04d.wav", recNum);
+  char p[40];
+  recordingPath(recNum, false, p, sizeof(p));
+  SD.remove(p);
+  recordingPath(recNum, true, p, sizeof(p));
   SD.remove(p);
   SD.end();
+  setImportantRec(recNum, false);
   bool hotkeyRemoved = false;
   for (int i = 0; i < hotkeyCount; i++) {
     if (hotkeys[i].idx == recNum) {
@@ -1221,6 +1319,7 @@ int listScreen(int selectIdx) {
         d.setTextColor(on ? COL_GREEN : COL_DIM, bg);
         d.setCursor(14, y);
         d.printf("REC_%04d", recList[i]);
+        if (isImportantRec(recList[i])) d.print("*");
         // 快捷键标签
         char hk = hotkeyOf(recList[i]);
         if (hk) {
@@ -1276,8 +1375,19 @@ int listScreen(int selectIdx) {
         redraw = true; waitRelease();
       }
       else if (keyCtrl()) {                             // Ctrl+键 = 绑定快捷键(字母/数字)
+        if (keyEnter()) {
+          bool ok = markRecordingImportant(recList[sel]);
+          drawActionToast(ok ? "IMP" : "ERR", ok ? COL_GREEN : COL_RED);
+          redraw = true; waitRelease();
+          continue;
+        }
         char bk = pressedBindKey();
-        if (bk) { drawActionToast("BIND", COL_GREEN); setHotkey(bk, recList[sel]); redraw = true; waitRelease(); }
+        if (bk) {
+          bool ok = markRecordingImportant(recList[sel]);
+          if (ok) setHotkey(bk, recList[sel]);
+          drawActionToast(ok ? "BIND" : "ERR", ok ? COL_GREEN : COL_RED);
+          redraw = true; waitRelease();
+        }
       }
       else if (keySpace()) { drawActionToast("REC", COL_RED); return R_RECORD; }         // 空格=去录音
       else if (keyEsc())   { drawActionToast("SLEEP", COL_DIM); return R_BACK; }           // Esc=退出列表并息屏
@@ -1295,7 +1405,7 @@ int listScreen(int selectIdx) {
         drawActionToast("NOISE", COL_GREEN);
         int recNum = recList[sel];
         if (confirmNoiseReduce(recNum)) {
-          char p[40]; snprintf(p, sizeof(p), "/REC/REC_%04d.wav", recNum);
+          char p[40]; recordingPath(recNum, isImportantRec(recNum), p, sizeof(p));
           noiseReduce(p);
         }
         redraw = true; waitRelease();
