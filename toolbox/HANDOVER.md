@@ -64,7 +64,19 @@ network:
 位置：C:\Users\87194\AppData\Local\Arduino15\packages\esp32\hardware\esp32\3.1.3\
 FQBN：esp32:esp32:m5stack_cardputer
 ```
-Core 是完整的，无需重新安装。
+2026-05-23 踩坑记录：曾出现 `Platform 'esp32:esp32' not found`，原因是
+`packages\esp32\hardware\esp32\3.1.3` 目录缺失，但 `packages\esp32\tools` 仍残留。
+这种情况无需清理 tools，直接执行 `core install esp32:esp32@3.1.3` 可恢复。
+
+注意：实测可用镜像是：
+```
+https://jihulab.com/esp-mirror/espressif/arduino-esp32/-/raw/gh-pages/package_esp32_index_cn.json
+```
+不要使用：
+```
+https://jihulab.com/esp-mirror/arduino/arduino-esp32/-/raw/gh-pages/package_esp32_cn_index.json
+```
+这条在 2026-05-23 返回 `401 Unauthorized`。
 
 ### 依赖库
 位于 `C:\cardputer\Arduino\libraries\`：
@@ -78,16 +90,21 @@ Core 是完整的，无需重新安装。
 ```powershell
 $cli    = "C:\cardputer\tools\arduino-cli\arduino-cli.exe"
 $sketch = "C:\cardputer\sketches\toolbox"
+$build  = "C:\cardputer\build_fresh\out"
 $fqbn   = "esp32:esp32:m5stack_cardputer"
 
 # 编译
-& $cli compile --fqbn $fqbn $sketch
+& $cli compile --fqbn $fqbn --build-path $build $sketch
 
 # 烧录（设备通过 USB CDC 挂载为 COM3；若设备在休眠则先按空格唤醒）
-& $cli upload --fqbn $fqbn --port COM3 $sketch
+& $cli upload --fqbn $fqbn --port COM3 --input-dir $build
 ```
 
 编译通过后资源占用约：程序 86%（1134KB / 1310KB），全局变量 23%（75KB / 327KB）。
+
+`C:\cardputer\tools\build_and_flash.ps1` 曾因文件编码损坏导致 PowerShell 解析错误
+（中文乱码、字符串缺少结束符）。如果脚本报错，优先按上面的手动三步走；
+需要一键脚本时，用 `COMPILE_FLASH.md` 第 9 节的 UTF-8 版本覆盖重写。
 
 ---
 
@@ -107,31 +124,52 @@ git push
 
 ### 界面流程
 ```
-主屏
- ├─ 空格          → 录音 → 录音结束 → 录音列表（自动定位到刚录的条目）
- ├─ 回车（光标在"录音列表"）→ 录音列表（默认选最新录音）
- ├─ 绑定键（字母/数字）→ 直接播放对应录音
- └─ 退格 / 60s 无操作 → 息屏（轻睡眠）
-     └─ 空格唤醒 → 主屏
+开机
+ └─ 自动进入真正录音 → 录音结束 → 录音列表（自动定位到刚录的条目）
 
 录音中
- ├─ 空格  → 暂停/继续
+ ├─ 空格  → 停止并保存 → 录音列表
  ├─ 回车  → 停止并保存 → 录音列表
+ ├─ Del   → 第一次提示取消，第二次取消并删除本条 → 主屏
  └─ W/S   → 软件增益调节
 
 录音列表
  ├─ ;/.   → 上下选择
  ├─ 回车  → 播放
- ├─ N     → 对选中录音做频域降噪（覆盖原文件）
+ ├─ Alt   → 降噪确认；回车确认后覆盖原文件，退格取消
  ├─ Ctrl+键 → 给该录音绑定快捷键（存到 SD:/REC/keys.txt）
  └─ 退格  → 返回主屏
 
 播放中
- ├─ 回车  → 暂停/继续
+ ├─ 回车 / \ → 返回录音列表
  ├─ +/-   → 音量
  ├─ 空格  → 返回去录音
  └─ 退格  → 返回列表
 ```
+
+### UI 简化原则（2026-05-23 更新）
+- 已移除右侧三段标签栏，所有界面使用 240px 全宽内容区。
+- 开机不再停留 READY 页，`setup()` 后第一次 `loop()` 会直接进入 `recordingScreen()` 开始录音。
+- READY 态保留为列表返回/异常兜底：调用同一个 `drawRecCanvas(..., ready=true)`，只监听麦克风，不创建文件、不写 SD。
+- 统一双线命名：**A线 / 轨道线 / Timeline A**，**B线 / 监听线 / Monitor B**。
+- 播放页也使用同一套双线布局：A线显示播放时间轴和播放头，B线使用当前播放缓冲跳动；播放时不额外开麦克风。
+- A线和B线之间不绘制额外分隔线，只保留各自的暗基线，减少视觉噪音。
+- 播放页进入时先画空播放帧，再读取 WAV 生成 A线，减少列表到播放的等待感。
+- 播放页改为 Canvas 双缓冲推屏，减少 A/B 线和计时器的直接擦屏频闪。
+- 播放 A线使用每段多点采样平均，并做轻微阻尼，避免缩略波形比录制滚动波形显得过高。
+- READY 页不再额外每 5 秒直写电量；电量随 READY Canvas 一起刷新，减少重复显示写入。
+- READY→REC 不再等待启动键松开才开始采样；改为立刻启动录音缓冲，并在松开前忽略停止键事件。
+- READY 态麦克风已经热机，真正录音时复用输入链路；只在从播放等扬声器状态切回来时重新准备麦克风。
+- 开机/唤醒预热必须调用 `prepareMicInput()` 的完整输入链路配置；否则第一次录音会因为寄存器路径不完整而音量偏低。
+- 开机/唤醒后的第一次正式录音设置 `forceMicRearm=true`：录音前强制 `Mic.end()` → 完整 `prepareMicInput(true)` → 丢弃 6 帧稳定缓冲，避免第一条录音音量偏低。
+- 开机/唤醒后的 READY 主屏也会消费 `forceMicRearm`，先强制重建输入链路并丢弃 6 帧稳定缓冲，避免主屏 B线幅度偏小。
+- 录音准备阶段保持 READY 显示；只有 `Mic.record()` 真正启动后才显示 REC 红点，避免“还没录就闪红点”。
+- 录音中 Del 采用二次确认：第一次显示“再按Del删除”，第二次才删除当前临时 WAV 并返回主屏。
+- 新录音编号使用 `nextRecHint` 缓存和 `/REC` 目录扫描，不再每次从 `REC_0001.wav` 顺序探测，减少录音多时的启动等待。
+- 不再使用“回车直接播放最新录音”的隐藏捷径，避免误触和界面跳转分叉。
+- 统一交互：**主屏回车进入列表，列表回车播放选中录音**。
+- 快捷键直播放仍保留，适合高频音效/录音触发。
+- 列表 `Alt` 降噪已加二次确认，避免误覆盖原文件。
 
 ### 方向键映射
 | 物理键 | 逻辑 |
@@ -220,6 +258,7 @@ C:\Users\87194\AppData\Local\Arduino15\packages\esp32\tools\
 
 1. **停录轻微爆音**：硬件上 NS4150B 无 SD 引脚，软件已尽力压缩断电窗口。若需彻底消除，需要硬件修改（串联 RC 到 NS4150B 输入，或更换带 MUTE 引脚的功放）。
 2. **开机轻微爆音**：同上，`Mic.begin()` 首次上电模拟段不可避免产生瞬态。
+3. **一键脚本需重写**：当前本地 `build_and_flash.ps1` 有编码损坏风险，推荐用 `COMPILE_FLASH.md` 里的版本重建。
 
 ---
 
