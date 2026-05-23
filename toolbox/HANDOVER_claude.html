@@ -136,7 +136,7 @@ Get-Content C:\cardputer\tools\tb.out.log   # Flash/RAM用量</pre>
 <h3>Flash用量参考</h3>
 <table>
   <tr><th>指标</th><th>当前值</th><th>上限</th></tr>
-  <tr><td>Flash</td><td>1,142,736 bytes（87%）</td><td>1,310,720 bytes</td></tr>
+  <tr><td>Flash</td><td>1,143,084 bytes（87%）</td><td>1,310,720 bytes</td></tr>
   <tr><td>RAM（全局）</td><td>73,636 bytes（22%）</td><td>327,680 bytes</td></tr>
 </table>
 <div class="warn">⚠ 不要添加中文大字体（如 efontCN_24 约占350KB）。大号数字用内置 <code>Font4</code>（纯ASCII，无额外开销）。</div>
@@ -150,7 +150,7 @@ Get-Content C:\cardputer\tools\tb.out.log   # Flash/RAM用量</pre>
   <tr><td><code>setup()</code></td><td>初始化M5、SD、音频，加载hotkeys，进入loop</td></tr>
   <tr><td><code>loop()</code></td><td>开机/唤醒后若 <code>autoRecordPending</code> 为真，直接进入 <code>recordingScreen()</code>；否则进入息屏等待 Space</td></tr>
   <tr><td><code>recordingScreen()</code></td><td>真正录音流程。调用后创建WAV并开始写SD</td></tr>
-  <tr><td><code>playbackScreen(int recNum)</code></td><td>回放界面。播放自然结束后停留在界面，等用户按键离开</td></tr>
+  <tr><td><code>playbackScreen(int recNum)</code></td><td>回放界面。播放自然结束后自动返回列表；长按 Del 可删除当前录音</td></tr>
   <tr><td><code>listScreen()</code></td><td>录音列表，;/.翻页，回车播放，Ctrl+键绑定快捷键，Alt降噪</td></tr>
   <tr><td><code>drawRecCanvas(...)</code></td><td>录音Canvas帧：AB双波形 + 计时器 + 电量</td></tr>
   <tr><td><code>drawPlaybackCanvas(...)</code></td><td>播放Canvas帧：A线为播放时间轴，B线为当前播放缓冲跳动</td></tr>
@@ -168,7 +168,7 @@ Get-Content C:\cardputer\tools\tb.out.log   # Flash/RAM用量</pre>
   <tr><td><code>R_PLAY</code></td><td>2</td><td>播放键：切换播放（g_nextPlay存目标编号）</td></tr>
   <tr><td><code>R_LIST</code></td><td>3</td><td>列表键：进入列表</td></tr>
   <tr><td><code>R_NOISE</code></td><td>4</td><td>Alt键：降噪</td></tr>
-  <tr><td><code>R_DELETE</code></td><td>5</td><td>播放页 Del 二次确认后删除当前录音</td></tr>
+  <tr><td><code>R_DELETE</code></td><td>5</td><td>播放页 Del 长按确认后删除当前录音</td></tr>
 </table>
 
 <!-- ─── UI布局 ─── -->
@@ -194,8 +194,8 @@ Get-Content C:\cardputer\tools\tb.out.log   # Flash/RAM用量</pre>
   <li>开机/唤醒预热也必须走 <code>prepareMicInput()</code> 完整输入链路，避免第一次录音音量偏低</li>
   <li>开机/唤醒后的第一次正式录音会 <code>forceMicRearm</code>：强制重建输入链路并丢弃 6 帧稳定缓冲</li>
   <li>录音准备阶段会消费 <code>forceMicRearm</code>，避免第一条录音音量偏低</li>
-  <li>录音中 <code>Del</code> 需要按两次才取消：第一次提示，第二次删除当前临时 WAV 并退出到息屏</li>
-  <li>播放页 <code>Del</code> 也需要按两次才删除：第一次提示，第二次删除当前 WAV 和快捷键绑定，并返回列表</li>
+  <li>播放自然结束后自动返回列表，不再停在播放页等待按键</li>
+  <li>删除操作统一为长按 <code>Del</code> 3 秒：录音中删除本条、播放页删除当前录音、列表页删除选中录音；按住显示红色进度条，松开取消</li>
   <li>新录音编号用 <code>nextRecHint</code> 缓存和目录扫描获取，不再每次从 <code>REC_0001.wav</code> 顺序探测</li>
   <li>播放页也使用 Canvas 双缓冲推屏；A线缩略图使用多点采样平均并轻微阻尼，减少峰值过高和频闪</li>
   <li>统一命名：上半区叫 <strong>A线 / 轨道线 / Timeline A</strong>；下半区叫 <strong>B线 / 监听线 / Monitor B</strong></li>
@@ -241,8 +241,8 @@ int amp = (int)(rms * (3.0f * A_HALF) / 32767.0f) * sign;</pre>
   <tr><th>物理键</th><th>keyXxx()函数</th><th>作用</th></tr>
   <tr><td>Space</td><td><code>keySpace()</code></td><td>息屏唤醒并直接录音；录音中结束存盘；播放/列表中进入录音</td></tr>
   <tr><td>Enter</td><td><code>keyEnter()</code></td><td>录音结束存盘并回列表；列表播放；回放返回列表</td></tr>
-  <tr><td>Backspace / Del</td><td><code>keyDel()</code></td><td>列表退出到息屏；录音中按两次=取消删除本条；播放中按两次=删除当前录音</td></tr>
-  <tr><td>\（反斜杠）</td><td><code>keyList()</code></td><td>进入录音列表</td></tr>
+  <tr><td>Backspace / Del</td><td><code>keyDel()</code></td><td>录音/播放/列表中长按3秒删除；未满松开取消</td></tr>
+  <tr><td>\（反斜杠）</td><td><code>keyList()</code></td><td>进入录音列表；列表中再次按下则退出到息屏</td></tr>
   <tr><td>; / .</td><td><code>keyUp() keyDown()</code></td><td>列表上下翻页</td></tr>
   <tr><td>= / -</td><td><code>keyVolUp() keyVolDn()</code></td><td>回放音量（playVol 0–255）</td></tr>
   <tr><td>W / S</td><td>直接检测</td><td>录音增益（recGain）</td></tr>
@@ -295,7 +295,7 @@ int amp = (int)(rms * (3.0f * A_HALF) / 32767.0f) * sign;</pre>
   <tr><td>首次恢复后很慢</td><td><code>core install</code> / <code>compile --build-path</code> 超时但后台仍有进程</td><td>先查 <code>arduino-cli</code> / <code>xtensa</code> 进程，等待结束后再重试</td></tr>
   <tr><td>编译不等于烧录</td><td>编译成功但机器没有变化</td><td>还要执行 <code>upload --port COM3 --input-dir C:\cardputer\build_fresh\out</code></td></tr>
 </table>
-<div class="note">最近一次烧录成功：COM3，ESP32-S3，编译 <code>1142736 bytes</code> / RAM <code>73636 bytes</code>，写入 <code>1143120 bytes</code>，Hash verified，随后 Hard resetting with RTC WDT。</div>
+<div class="note">最近一次烧录成功：COM3，ESP32-S3，编译 <code>1143084 bytes</code> / RAM <code>73636 bytes</code>，写入 <code>1143472 bytes</code>，Hash verified，随后 Hard resetting with RTC WDT。</div>
 
 <!-- ─── GitHub同步 ─── -->
 <h2 id="git">GitHub 同步</h2>
