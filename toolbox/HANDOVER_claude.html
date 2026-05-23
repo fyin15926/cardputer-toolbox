@@ -136,7 +136,7 @@ Get-Content C:\cardputer\tools\tb.out.log   # Flash/RAM用量</pre>
 <h3>Flash用量参考</h3>
 <table>
   <tr><th>指标</th><th>当前值</th><th>上限</th></tr>
-  <tr><td>Flash</td><td>1,143,712 bytes（87%）</td><td>1,310,720 bytes</td></tr>
+  <tr><td>Flash</td><td>1,144,304 bytes（87%）</td><td>1,310,720 bytes</td></tr>
   <tr><td>RAM（全局）</td><td>73,700 bytes（22%）</td><td>327,680 bytes</td></tr>
 </table>
 <div class="warn">⚠ 不要添加中文大字体（如 efontCN_24 约占350KB）。大号数字用内置 <code>Font4</code>（纯ASCII，无额外开销）。</div>
@@ -157,7 +157,7 @@ Get-Content C:\cardputer\tools\tb.out.log   # Flash/RAM用量</pre>
   <tr><td><code>afterRecordingFlow(int recNum)</code></td><td>录音结束后默认回列表；快捷键仍可直接播放</td></tr>
   <tr><td><code>listFlow(int n)</code></td><td>列表界面的完整流程控制（含从列表→录音→再返回的循环）</td></tr>
   <tr><td><code>playFlow(int n)</code></td><td>播放流程控制</td></tr>
-  <tr><td><code>updatePlaybackWaveBars(...)</code></td><td>播放时用当前音频缓冲增量填充 A线，不再进播放页前完整扫描 WAV</td></tr>
+  <tr><td><code>previewPlaybackWaveStep(...)</code> / <code>updatePlaybackWaveBars(...)</code></td><td>播放时后台逐格预览 A线，并用当前音频缓冲增量修正；不再进播放页前完整扫描 WAV</td></tr>
 </table>
 
 <h3>返回码常量</h3>
@@ -197,9 +197,9 @@ Get-Content C:\cardputer\tools\tb.out.log   # Flash/RAM用量</pre>
   <li>播放自然结束后自动返回列表，不再停在播放页等待按键</li>
   <li>录音中 <code>Space</code> 是暂停/继续：暂停时停止写入 SD、计时冻结；继续时丢弃恢复瞬间 2 帧缓冲</li>
   <li>息屏键统一为 <code>Esc</code>：列表页 Esc 退出息屏，播放页 Esc 停止播放并息屏，录音中 Esc 保存当前录音后息屏。Cardputer 库里物理 Esc 映射为左上角反引号键</li>
-  <li>删除操作统一为长按 <code>Del</code> 2 秒：录音中删除本条、播放页删除当前录音、列表页删除选中录音；按住显示红色进度条和“删除中”，松开取消</li>
+  <li>删除操作统一为长按 <code>Del</code> 1.2 秒：录音中删除本条、播放页删除当前录音、列表页删除选中录音；按住显示红色进度条和“删除中”，松开取消</li>
   <li>新录音编号用 <code>nextRecHint</code> 缓存和目录扫描获取，不再每次从 <code>REC_0001.wav</code> 顺序探测</li>
-  <li>播放页也使用 Canvas 双缓冲推屏；A线随播放缓冲增量填充并轻微阻尼，避免进播放页前完整扫描 WAV 造成等待</li>
+  <li>播放页也使用 Canvas 双缓冲推屏；A线在扬声器队列空隙里后台逐格预览，并随播放缓冲增量修正，避免进播放页前完整扫描 WAV 造成等待</li>
   <li>播放入口不再阻塞等待回车松开；启动按键会被非阻塞忽略，音频队列可以立即开始填充</li>
   <li>统一命名：上半区叫 <strong>A线 / 轨道线 / Timeline A</strong>；下半区叫 <strong>B线 / 监听线 / Monitor B</strong></li>
   <li>交互统一为：录音中 Space 暂停/继续、回车保存进列表、Esc 保存并息屏；列表回车播放选中录音；播放中回车暂停/继续、退格回列表、;/.切换上一条/下一条、Esc 息屏</li>
@@ -246,7 +246,7 @@ int amp = (int)(rms * (3.0f * A_HALF) / 32767.0f) * sign;</pre>
   <tr><td>Space</td><td><code>keySpace()</code></td><td>息屏唤醒并直接录音；录音中暂停/继续；播放/列表中进入录音</td></tr>
   <tr><td>Esc</td><td><code>keyEsc()</code></td><td>息屏键；录音中保存并息屏，播放中停止并息屏，列表中退出到息屏</td></tr>
   <tr><td>Enter</td><td><code>keyEnter()</code></td><td>录音结束存盘并回列表；列表播放；回放暂停/继续</td></tr>
-  <tr><td>Backspace / Del</td><td><code>keyDel()</code></td><td>播放中短按退格返回列表；录音/播放/列表中长按2秒删除；未满松开取消</td></tr>
+  <tr><td>Backspace / Del</td><td><code>keyDel()</code></td><td>播放中短按退格返回列表；录音/播放/列表中长按1.2秒删除；未满松开取消</td></tr>
   <tr><td>; / .</td><td><code>keyUp() keyDown()</code></td><td>列表上下翻页；播放中切换上一条/下一条录音</td></tr>
   <tr><td>= / -</td><td><code>keyVolUp() keyVolDn()</code></td><td>回放音量（playVol 0–255）</td></tr>
   <tr><td>W / S</td><td>直接检测</td><td>录音增益（recGain）</td></tr>
@@ -299,7 +299,7 @@ int amp = (int)(rms * (3.0f * A_HALF) / 32767.0f) * sign;</pre>
   <tr><td>首次恢复后很慢</td><td><code>core install</code> / <code>compile --build-path</code> 超时但后台仍有进程</td><td>先查 <code>arduino-cli</code> / <code>xtensa</code> 进程，等待结束后再重试</td></tr>
   <tr><td>编译不等于烧录</td><td>编译成功但机器没有变化</td><td>还要执行 <code>upload --port COM3 --input-dir C:\cardputer\build_fresh\out</code></td></tr>
 </table>
-<div class="note">最近一次烧录成功：COM3，ESP32-S3，编译 <code>1143712 bytes</code> / RAM <code>73700 bytes</code>，写入 <code>1144096 bytes</code>，Hash verified，随后 Hard resetting with RTC WDT。</div>
+<div class="note">最近一次烧录成功：COM3，ESP32-S3，编译 <code>1144304 bytes</code> / RAM <code>73700 bytes</code>，写入 <code>1144688 bytes</code>，Hash verified，随后 Hard resetting with RTC WDT。</div>
 
 <!-- ─── GitHub同步 ─── -->
 <h2 id="git">GitHub 同步</h2>

@@ -4,9 +4,9 @@
  *
  * 录音应用交互:
  *   开机: 自动开始录音
- *   录制中: 空格=暂停/继续; 回车=结束(存盘并进入列表); Esc=存盘并息屏; 长按Del 2秒=取消并删除本条; W/S=音量
- *   录音列表: ;/. 上下选; 回车=播放; Esc=退出到息屏; 长按Del 2秒=删除选中; Ctrl+键(字母/数字)=给该录音绑定快捷键; Alt=降噪
- *   回放: 播放完自动回列表; 回车=暂停/继续; 退格=回列表; ;/.=上一条/下一条; Esc=息屏; +/- (= 与 - 键)=音量; 长按Del 2秒=删除当前录音; 空格=去录音
+ *   录制中: 空格=暂停/继续; 回车=结束(存盘并进入列表); Esc=存盘并息屏; 长按Del 1.2秒=取消并删除本条; W/S=音量
+ *   录音列表: ;/. 上下选; 回车=播放; Esc=退出到息屏; 长按Del 1.2秒=删除选中; Ctrl+键(字母/数字)=给该录音绑定快捷键; Alt=降噪
+ *   回放: 播放完自动回列表; 回车=暂停/继续; 退格=回列表; ;/.=上一条/下一条; Esc=息屏; +/- (= 与 - 键)=音量; 长按Del 1.2秒=删除当前录音; 空格=去录音
  *   绑定的播放键=最高优先级, 任意界面(录音中除外)即按即播, 且播放中按别的键可覆盖切换
  *
  * 方向键(物理): ; = 上, . = 下, , = 左, / = 右
@@ -120,7 +120,7 @@ static void writeWavHeader(File &f, uint32_t rate, uint32_t dataBytes) {
 int g_nextPlay = 0;  // 配合 R_PLAY: 要切换去播放的录音编号
 int g_afterRecord = R_LIST;  // 录音结束后跳转目标
 static int nextRecHint = 0;  // 下一个录音编号缓存, 避免每次从 REC_0001 顺序探测
-static const uint32_t DELETE_HOLD_MS = 2000;
+static const uint32_t DELETE_HOLD_MS = 1200;
 
 // ---------- 按键小工具 ----------
 // 取当前按下的第一个可绑定键(字母转小写, 或数字); 没有则返回 0
@@ -393,12 +393,23 @@ static const int WAVE_BARS = 60;   // 60 × 4px = 240px (CONTENT_W)
 static int8_t waveBars[WAVE_BARS]; // A线采样点: -A_HALF..+A_HALF
 static uint8_t waveBarCounts[WAVE_BARS];
 
+static void mergePlaybackWaveBar(int idx, int amp) {
+  if (idx < 0 || idx >= WAVE_BARS) return;
+  if (amp > A_HALF) amp = A_HALF;
+  if (amp < -A_HALF) amp = -A_HALF;
+  uint8_t c = waveBarCounts[idx];
+  if (c < 8) {
+    waveBars[idx] = (int8_t)(((int)waveBars[idx] * c + amp) / (c + 1));
+    waveBarCounts[idx] = c + 1;
+  } else {
+    waveBars[idx] = (int8_t)(((int)waveBars[idx] * 7 + amp) / 8);
+  }
+}
+
 static void updatePlaybackWaveBars(uint32_t chunkStart, uint32_t dataSize, const int16_t *buf, size_t n) {
   if (!buf || n == 0 || dataSize == 0) return;
   int amp = calcTrackAmp(buf, n);
   amp = (amp * 3) / 4;
-  if (amp > A_HALF) amp = A_HALF;
-  if (amp < -A_HALF) amp = -A_HALF;
 
   uint32_t chunkEnd = chunkStart + (uint32_t)n * 2;
   if (chunkEnd > dataSize) chunkEnd = dataSize;
@@ -406,14 +417,35 @@ static void updatePlaybackWaveBars(uint32_t chunkStart, uint32_t dataSize, const
   int last  = (int)((uint64_t)(chunkEnd ? chunkEnd - 1 : chunkStart) * WAVE_BARS / dataSize);
   if (first < 0) first = 0;
   if (last >= WAVE_BARS) last = WAVE_BARS - 1;
-  for (int i = first; i <= last; i++) {
-    uint8_t c = waveBarCounts[i];
-    if (c < 8) {
-      waveBars[i] = (int8_t)(((int)waveBars[i] * c + amp) / (c + 1));
-      waveBarCounts[i] = c + 1;
-    } else {
-      waveBars[i] = (int8_t)(((int)waveBars[i] * 7 + amp) / 8);
-    }
+  for (int i = first; i <= last; i++) mergePlaybackWaveBar(i, amp);
+}
+
+static bool previewPlaybackWaveBar(File &f, uint32_t dataSize, int bar) {
+  if (bar < 0 || bar >= WAVE_BARS || dataSize == 0 || waveBarCounts[bar] > 0) return true;
+  int16_t tmp[96];
+  uint32_t start = 44 + (uint32_t)((uint64_t)dataSize * bar / WAVE_BARS);
+  uint32_t end   = 44 + (uint32_t)((uint64_t)dataSize * (bar + 1) / WAVE_BARS);
+  uint32_t span  = (end > start) ? (end - start) : 0;
+  uint32_t chunkBytes = min((uint32_t)sizeof(tmp), span) & ~1U;
+  if (chunkBytes == 0) return false;
+
+  uint32_t restore = f.position();
+  uint32_t pos = start;
+  if (span > chunkBytes) pos += ((span - chunkBytes) / 2) & ~1U;
+  int rd = 0;
+  if (f.seek(pos)) rd = f.read((uint8_t *)tmp, chunkBytes);
+  f.seek(restore);
+  int n = rd / 2;
+  if (n <= 0) return false;
+  int amp = calcTrackAmp(tmp, n);
+  mergePlaybackWaveBar(bar, (amp * 3) / 4);
+  return true;
+}
+
+static void previewPlaybackWaveStep(File &f, uint32_t dataSize, int &nextBar, uint8_t budget) {
+  while (budget-- > 0 && nextBar < WAVE_BARS) {
+    previewPlaybackWaveBar(f, dataSize, nextBar);
+    nextBar++;
   }
 }
 
@@ -453,17 +485,18 @@ static void drawPlaybackCanvas(M5Canvas &cv, uint32_t played, uint32_t dataSize,
   int playedBars = dataSize ? (int)((uint64_t)played * WAVE_BARS / dataSize) : 0;
   if (playedBars > WAVE_BARS) playedBars = WAVE_BARS;
 
-  // A线: 时间轴波形进度
+  // A线: 时间轴波形进度。已预览的格子画成小波形柱, 空格子只保留暗基线。
   cv.drawFastHLine(0, A_CY, CONTENT_W, 0x0440);
-  for (int i = 1; i < WAVE_BARS; i++) {
-    int x0 = (i - 1) * CONTENT_W / WAVE_BARS;
-    int x1 = i       * CONTENT_W / WAVE_BARS;
-    int v0 = (int)waveBars[i - 1]; if (v0 > A_HALF) v0 = A_HALF; if (v0 < -A_HALF) v0 = -A_HALF;
-    int v1 = (int)waveBars[i];     if (v1 > A_HALF) v1 = A_HALF; if (v1 < -A_HALF) v1 = -A_HALF;
-    int y0 = A_CY - v0;
-    int y1 = A_CY - v1;
-    uint16_t col = (i <= playedBars) ? COL_GREEN : COL_DIM;
-    cv.drawLine(x0, y0, x1, y1, col);
+  for (int i = 0; i < WAVE_BARS; i++) {
+    if (waveBarCounts[i] == 0) continue;
+    int x0 = i * CONTENT_W / WAVE_BARS;
+    int x1 = (i + 1) * CONTENT_W / WAVE_BARS;
+    int x = (x0 + x1) / 2;
+    int v = abs((int)waveBars[i]);
+    if (v < 1) v = 1;
+    if (v > A_HALF) v = A_HALF;
+    uint16_t col = (i < playedBars) ? COL_GREEN : COL_DIM;
+    cv.drawFastVLine(x, A_CY - v, v * 2 + 1, col);
   }
 
   // B线: 当前播放缓冲实时跳动
@@ -563,6 +596,8 @@ int playbackScreen(const char *path, int recNum, int prevRec, int nextRec) {
   int ret = R_BACK;
   uint32_t played = 0, remaining = dataSize;
   uint32_t lastSeek = 0;
+  uint32_t lastPreviewDraw = 0;
+  int previewBar = 0;
   int pi = 0;
 
   drawStatic();
@@ -632,7 +667,15 @@ int playbackScreen(const char *path, int recNum, int prevRec, int nextRec) {
       }
       delay(8); continue;
     }
-    if (M5Cardputer.Speaker.isPlaying(0) >= 2) { delay(2); continue; }
+    if (M5Cardputer.Speaker.isPlaying(0) >= 2) {
+      previewPlaybackWaveStep(f, dataSize, previewBar, 2);
+      if (millis() - lastPreviewDraw > 90) {
+        lastPreviewDraw = millis();
+        drawProgress(played);
+      }
+      delay(1);
+      continue;
+    }
     size_t want = remaining < sizeof(pbBuf[pi]) ? remaining : sizeof(pbBuf[pi]);
     int got = f.read((uint8_t *)pbBuf[pi], want);
     if (got <= 0) { remaining = 0; continue; }
