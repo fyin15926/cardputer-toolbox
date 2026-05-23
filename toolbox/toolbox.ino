@@ -4,9 +4,9 @@
  *
  * 录音应用交互:
  *   开机: 自动开始录音
- *   录制中: 空格/回车=结束(存盘并进入列表); 长按Del 3秒=取消并删除本条; W/S=音量
- *   录音列表: ;/. 上下选; 回车=播放; 反斜杠=退出到息屏; 长按Del 3秒=删除选中; Ctrl+键(字母/数字)=给该录音绑定快捷键; Alt=降噪
- *   回放: 播放完自动回列表; 回车/反斜杠=回列表; +/- (= 与 - 键)=音量; 长按Del 3秒=删除当前录音; 空格=去录音
+ *   录制中: 空格=暂停/继续; 回车=结束(存盘并进入列表); Esc=存盘并息屏; 长按Del 3秒=取消并删除本条; W/S=音量
+ *   录音列表: ;/. 上下选; 回车=播放; Esc=退出到息屏; 长按Del 3秒=删除选中; Ctrl+键(字母/数字)=给该录音绑定快捷键; Alt=降噪
+ *   回放: 播放完自动回列表; 回车/反斜杠=回列表; Esc=息屏; +/- (= 与 - 键)=音量; 长按Del 3秒=删除当前录音; 空格=去录音
  *   绑定的播放键=最高优先级, 任意界面(录音中除外)即按即播, 且播放中按别的键可覆盖切换
  *
  * 方向键(物理): ; = 上, . = 下, , = 左, / = 右
@@ -135,6 +135,7 @@ static char dispKey(char k) { return (k >= 'a' && k <= 'z') ? (k - 32) : k; }  /
 static bool keyCtrl()  { return M5Cardputer.Keyboard.keysState().ctrl; }
 static bool keyAlt()   { return M5Cardputer.Keyboard.keysState().alt; }
 static bool keySpace() { return M5Cardputer.Keyboard.isKeyPressed(' '); }
+static bool keyEsc()   { return M5Cardputer.Keyboard.isKeyPressed('`'); }  // Cardputer 物理 Esc 键映射为左上角 `
 static bool keyDel()   { return M5Cardputer.Keyboard.keysState().del; }
 static bool keyEnter() { return M5Cardputer.Keyboard.keysState().enter; }
 static bool keyList()  { return M5Cardputer.Keyboard.isKeyPressed('\\'); }
@@ -586,6 +587,7 @@ int playbackScreen(const char *path, int recNum) {
     if (M5Cardputer.Keyboard.isChange() && M5Cardputer.Keyboard.isPressed()) {
       int hk = pressedHotkeyRec();
       if (hk > 0) { g_nextPlay = hk; ret = R_PLAY; stop = true; }   // 按到别的绑定键=立刻覆盖播放
+      else if (keyEsc()) { ret = R_BACK; stop = true; }       // Esc=息屏
       else if (keySpace()) { ret = R_RECORD; stop = true; }   // 空格=去录音
       else if (keyList()) { ret = R_LIST; stop = true; }      // \ = 列表
       else if (keyEnter()) { ret = R_LIST; stop = true; }     // 回车=回列表
@@ -661,6 +663,7 @@ void afterRecordingFlow(int recNum) {
     if (action == R_LIST) { listFlow(0); return; }
     return;
   }
+  if (action == R_BACK) return;
   while (recNum > 0) {
     if (action == R_NOISE) {
       char p[40]; snprintf(p, sizeof(p), "/REC/REC_%04d.wav", recNum);
@@ -781,21 +784,21 @@ void noiseReduce(const char *path) {
 
 // ---------- 录音画面 (canvas: CONTENT_W × 135, 推送到 x=0) ----------
 // A线: waveScroll[] 滚动历史(上半区)  B线: wave[]实时示波器(下半区)
-void drawRecCanvas(M5Canvas &cv, uint32_t elapsedMs, bool blink, int16_t *wave, bool ready = false, uint32_t deleteHeldMs = 0) {
+void drawRecCanvas(M5Canvas &cv, uint32_t elapsedMs, bool blink, int16_t *wave, bool ready = false, bool paused = false, uint32_t deleteHeldMs = 0) {
   cv.fillScreen(COL_BG);
 
   // ── 顶栏 ────────────────────────────────────────────────────────
-  if (ready) {
+  if (ready || paused) {
     cv.fillCircle(8, 7, 5, COL_BG);
-    cv.drawCircle(8, 7, 5, 0x2000);
+    cv.drawCircle(8, 7, 5, paused ? COL_DIM : 0x2000);
   } else {
     if (blink) cv.fillCircle(8, 7, 5, COL_RED);
     else { cv.fillCircle(8, 7, 5, COL_BG); cv.drawCircle(8, 7, 5, 0x2000); }
   }
   cv.setFont(&fonts::efontCN_12);
-  cv.setTextColor(ready ? COL_DIM : COL_GREEN, COL_BG);
+  cv.setTextColor((ready || paused) ? COL_DIM : COL_GREEN, COL_BG);
   cv.setCursor(18, 2);
-  cv.print(ready ? "READY" : "REC");
+  cv.print(ready ? "READY" : (paused ? "PAUSE" : "REC"));
   // 电量 (亮绿, 黑底确保可读)
   int bat = M5.Power.getBatteryLevel();
   cv.fillRect(CONTENT_W - 34, 0, 34, 14, COL_BG);
@@ -870,10 +873,20 @@ int recordingScreen() {
   }
 
   uint32_t dataBytes = 0;
-  M5Cardputer.Mic.record(recBuf[0], REC_N, REC_RATE);
-  M5Cardputer.Mic.record(recBuf[1], REC_N, REC_RATE);
   int b = 0;
-  uint32_t startMs = millis(), lastDraw = 0;
+  uint32_t startMs = millis(), pausedTotal = 0, pauseStart = 0, lastDraw = 0;
+  bool paused = false;
+  auto activeElapsed = [&]() -> uint32_t {
+    uint32_t now = millis();
+    uint32_t currentPause = paused ? (now - pauseStart) : 0;
+    return now - startMs - pausedTotal - currentPause;
+  };
+  auto queueRecordBuffers = [&]() {
+    b = 0;
+    M5Cardputer.Mic.record(recBuf[0], REC_N, REC_RATE);
+    M5Cardputer.Mic.record(recBuf[1], REC_N, REC_RATE);
+  };
+  queueRecordBuffers();
   drawRecCanvas(cv, 0, true, nullptr);
   cv.pushSprite(0, 0);
   bool stop = false;
@@ -881,17 +894,33 @@ int recordingScreen() {
   uint32_t delHoldStart = 0;
   uint32_t lastDelDraw = 0;
   bool ignoreStartKey = M5Cardputer.Keyboard.isPressed();
-  uint32_t bufCount = 0;
   int32_t lpf = 0;
-  uint32_t headSkip = micWasReady ? 4 : 8;   // 准备阶段已热机, 只短掐头防按键声
+  uint32_t skipBuffers = micWasReady ? 4 : 8;   // 准备阶段已热机, 只短掐头防按键声
 
   while (!stop) {
-    while (M5Cardputer.Mic.isRecording() >= 2) {
+    while (true) {
       M5Cardputer.update();
       if (ignoreStartKey) {
         if (!M5Cardputer.Keyboard.isPressed()) ignoreStartKey = false;
       } else if (M5Cardputer.Keyboard.isChange() && M5Cardputer.Keyboard.isPressed()) {
-        if (keySpace()) { g_afterRecord = R_LIST; stop = true; break; }
+        if (keySpace()) {
+          if (paused) {
+            paused = false;
+            pausedTotal += millis() - pauseStart;
+            if (skipBuffers < 2) skipBuffers = 2;
+            queueRecordBuffers();
+            drawRecCanvas(cv, activeElapsed(), true, nullptr);
+            cv.pushSprite(0, 0);
+          } else {
+            paused = true;
+            pauseStart = millis();
+            while (M5Cardputer.Mic.isRecording() > 0) { M5Cardputer.update(); delay(1); }
+            drawRecCanvas(cv, activeElapsed(), false, nullptr, false, true);
+            cv.pushSprite(0, 0);
+          }
+          waitRelease();
+        }
+        else if (keyEsc()) { g_afterRecord = R_BACK; stop = true; break; }
         else if (keyEnter()) { g_afterRecord = R_LIST; stop = true; break; }
         else if (keyList()) { g_afterRecord = R_LIST; stop = true; break; }
         else if (keyAlt()) { g_afterRecord = R_NOISE; stop = true; break; }
@@ -906,31 +935,35 @@ int recordingScreen() {
           if (held >= DELETE_HOLD_MS) { cancelRec = true; g_afterRecord = R_BACK; stop = true; break; }
           if (millis() - lastDelDraw > 60) {
             lastDelDraw = millis();
-            drawRecCanvas(cv, millis() - startMs, false, nullptr, false, held);
+            drawRecCanvas(cv, activeElapsed(), false, nullptr, false, paused, held);
             cv.pushSprite(0, 0);
           }
         } else if (delHoldStart != 0) {
           delHoldStart = 0;
-          drawRecCanvas(cv, millis() - startMs, false, nullptr);
+          drawRecCanvas(cv, activeElapsed(), false, nullptr, false, paused);
           cv.pushSprite(0, 0);
         }
       }
+      if (stop) break;
+      if (paused) { delay(8); continue; }
+      if (M5Cardputer.Mic.isRecording() < 2) break;
       delay(1);
     }
     if (stop) break;
+    if (paused) continue;
     int16_t *filled = recBuf[b];
     processMicBuffer(filled, REC_N, lpf);
-    bufCount++;
-    if (bufCount > headSkip) { f.write((uint8_t *)filled, REC_N * sizeof(int16_t)); dataBytes += REC_N * sizeof(int16_t); }
+    if (skipBuffers > 0) skipBuffers--;
+    else { f.write((uint8_t *)filled, REC_N * sizeof(int16_t)); dataBytes += REC_N * sizeof(int16_t); }
     uint32_t now = millis();
     if (now - lastDraw > 33) {
       lastDraw = now;
       bool blink = ((now / 400) % 2) == 0;
-      uint32_t elapsed = now - startMs;
+      uint32_t elapsed = activeElapsed();
       memmove(waveScroll, waveScroll + 1, (CONTENT_W - 1) * sizeof(int8_t));
       waveScroll[CONTENT_W - 1] = calcTrackAmp(filled, REC_N);
       uint32_t held = delHoldStart ? millis() - delHoldStart : 0;
-      drawRecCanvas(cv, elapsed, blink, filled, false, held);
+      drawRecCanvas(cv, elapsed, blink, filled, false, false, held);
       cv.pushSprite(0, 0);
     }
     M5Cardputer.Mic.record(filled, REC_N, REC_RATE);
@@ -957,7 +990,7 @@ int recordingScreen() {
   return (effData > 0) ? idx : idx;   // 即使很短也保留, 返回编号
 }
 
-// ---------- 录音列表: ;/.选, 回车放, Ctrl+键绑定, Alt降噪, 空格录音, 反斜杠退出, 长按Del删除 ----------
+// ---------- 录音列表: ;/.选, 回车放, Ctrl+键绑定, Alt降噪, 空格录音, Esc退出, 长按Del删除 ----------
 // 返回 R_BACK(退出列表并息屏) 或 R_RECORD(去录音)
 static void deleteRecording(int recNum) {
   if (!sdMount()) return;
@@ -1008,13 +1041,13 @@ int listScreen(int selectIdx) {
     d.setFont(&fonts::efontCN_16); d.setTextColor(COL_DIM, COL_BG);
     d.setCursor(12, 56); d.print("还没有录音");
     d.setFont(&fonts::efontCN_12); d.setTextColor(COL_DIM, COL_BG);
-    d.setCursor(4, 120); d.print("空格录音  \\返回");
+    d.setCursor(4, 120); d.print("空格录音  Esc息屏");
     waitRelease();
     while (true) {
       M5Cardputer.update();
       if (M5Cardputer.Keyboard.isChange() && M5Cardputer.Keyboard.isPressed()) {
         if (keySpace()) return R_RECORD;
-        if (keyList())  return R_BACK;
+        if (keyEsc())   return R_BACK;
         if (keyDel())   return R_BACK;
       }
       delay(8);
@@ -1080,7 +1113,7 @@ int listScreen(int selectIdx) {
       if (first + visRows < recCount) { d.setCursor(CONTENT_W - 10, top + (visRows - 1) * rowH); d.print("v"); }
       // 底部操作提示
       d.drawFastHLine(0, 120, CONTENT_W, COL_DIM);
-      d.setCursor(4, 122); d.print(";/.选 回车放 \\退 长Del删");
+      d.setCursor(4, 122); d.print(";/.选 回车放 Esc退 长Del删");
     }
 
     M5Cardputer.update();
@@ -1112,6 +1145,7 @@ int listScreen(int selectIdx) {
       if (hk > 0) {                                     // 绑定键=最高优先级, 立刻播放(可覆盖)
         int r = playFlow(hk);
         if (r == R_RECORD) return R_RECORD;
+        if (r == R_BACK) return R_BACK;
         if (r == R_LIST) { redraw = true; waitRelease(); continue; }
         redraw = true; waitRelease();
       }
@@ -1120,12 +1154,14 @@ int listScreen(int selectIdx) {
         if (bk) { setHotkey(bk, recList[sel]); redraw = true; waitRelease(); }
       }
       else if (keySpace()) { return R_RECORD; }         // 空格=去录音
-      else if (keyList())  { return R_BACK; }           // 列表键再次按下: 退出列表并息屏
+      else if (keyEsc())   { return R_BACK; }           // Esc=退出列表并息屏
+      else if (keyList())  { waitRelease(); }           // 列表里再按列表键: 无效
       else if (keyUp())    { if (sel > 0) sel--; redraw = true; waitRelease(); }
       else if (keyDown())  { if (sel < recCount - 1) sel++; redraw = true; waitRelease(); }
       else if (keyEnter()) {
         int r = playFlow(recList[sel]);
         if (r == R_RECORD) return R_RECORD;             // 回放里按空格 -> 去录音
+        if (r == R_BACK) return R_BACK;                 // 回放里按 Esc -> 息屏
         if (r == R_LIST) { redraw = true; waitRelease(); continue; }
         redraw = true; waitRelease();
       }
@@ -1142,7 +1178,7 @@ int listScreen(int selectIdx) {
   }
 }
 
-// 列表流程: 列表 <-> 录音 循环; 反斜杠退出到息屏
+// 列表流程: 列表 <-> 录音 循环; Esc退出到息屏
 void listFlow(int sel) {
   while (true) {
     int r = listScreen(sel);
