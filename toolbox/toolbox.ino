@@ -64,6 +64,7 @@ int hotkeyCount = 0;
 static bool micInputReady = false;
 static bool forceMicRearm = true;  // 开机/唤醒后的第一次正式录音要强制重建输入链路
 static bool autoRecordPending = true;
+static bool speakerOutputReady = false;
 
 // ---------- SD 辅助 ----------
 static bool sdMount() {
@@ -159,6 +160,7 @@ static bool prepareMicInput(bool force = false) {
   }
   if (micInputReady) return true;
   M5Cardputer.Speaker.end();
+  speakerOutputReady = false;
   M5Cardputer.In_I2C.writeRegister8(0x18, 0x13, 0x00, 400000);  // HP drive OFF
   M5Cardputer.In_I2C.writeRegister8(0x18, 0x12, 0xFC, 400000);  // DAC 掉电
   M5Cardputer.In_I2C.writeRegister8(0x18, 0x32, 0x00, 400000);  // DAC→HP 混音器断开
@@ -367,6 +369,10 @@ static void scanRecordings() {
 
 // ---------- 切换编解码器到扬声器(含手动开 DAC) ----------
 static void speakerOn() {
+  if (speakerOutputReady) {
+    M5Cardputer.Speaker.setVolume(playVol);
+    return;
+  }
   micInputReady = false;
   M5Cardputer.Mic.end();       // 关麦(释放共用编解码器)
   M5Cardputer.Speaker.begin();
@@ -380,46 +386,35 @@ static void speakerOn() {
   M5Cardputer.In_I2C.writeRegister8(ES, 0x13, 0x10, 400000);
   M5Cardputer.In_I2C.writeRegister8(ES, 0x32, 0xBF, 400000);
   M5Cardputer.In_I2C.writeRegister8(ES, 0x37, 0x08, 400000);
+  speakerOutputReady = true;
 }
 
 static const int WAVE_BARS = 60;   // 60 × 4px = 240px (CONTENT_W)
 static int8_t waveBars[WAVE_BARS]; // A线采样点: -A_HALF..+A_HALF
+static uint8_t waveBarCounts[WAVE_BARS];
 
-static void loadWaveBars(File &f, uint32_t dataSize) {
-  int16_t tmp[REC_N];
-  for (int i = 0; i < WAVE_BARS; i++) {
-    uint32_t start = 44 + (uint32_t)((uint64_t)dataSize * i / WAVE_BARS);
-    uint32_t end   = 44 + (uint32_t)((uint64_t)dataSize * (i + 1) / WAVE_BARS);
-    uint32_t span  = (end > start) ? (end - start) : 0;
-    if (span == 0) { waveBars[i] = 0; continue; }
+static void updatePlaybackWaveBars(uint32_t chunkStart, uint32_t dataSize, const int16_t *buf, size_t n) {
+  if (!buf || n == 0 || dataSize == 0) return;
+  int amp = calcTrackAmp(buf, n);
+  amp = (amp * 3) / 4;
+  if (amp > A_HALF) amp = A_HALF;
+  if (amp < -A_HALF) amp = -A_HALF;
 
-    uint32_t chunkBytes = min((uint32_t)sizeof(tmp), span) & ~1U;
-    int samples = chunkBytes / 2;
-    int chunks = (span >= (uint32_t)sizeof(tmp) * 3) ? 3 : 1;
-    int ampSum = 0, signSum = 0, gotChunks = 0;
-    for (int c = 0; c < chunks; c++) {
-      uint32_t pos = start;
-      if (chunks > 1) {
-        uint32_t usable = (span > chunkBytes) ? (span - chunkBytes) : 0;
-        pos = start + (uint32_t)((uint64_t)usable * c / (chunks - 1));
-      }
-      pos &= ~1U;
-      int rd = 0;
-      if (samples > 0 && f.seek(pos)) rd = f.read((uint8_t *)tmp, chunkBytes);
-      int n = rd / 2;
-      if (n <= 0) continue;
-      int amp = calcTrackAmp(tmp, n);
-      ampSum += abs(amp);
-      signSum += amp;
-      gotChunks++;
+  uint32_t chunkEnd = chunkStart + (uint32_t)n * 2;
+  if (chunkEnd > dataSize) chunkEnd = dataSize;
+  int first = (int)((uint64_t)chunkStart * WAVE_BARS / dataSize);
+  int last  = (int)((uint64_t)(chunkEnd ? chunkEnd - 1 : chunkStart) * WAVE_BARS / dataSize);
+  if (first < 0) first = 0;
+  if (last >= WAVE_BARS) last = WAVE_BARS - 1;
+  for (int i = first; i <= last; i++) {
+    uint8_t c = waveBarCounts[i];
+    if (c < 8) {
+      waveBars[i] = (int8_t)(((int)waveBars[i] * c + amp) / (c + 1));
+      waveBarCounts[i] = c + 1;
+    } else {
+      waveBars[i] = (int8_t)(((int)waveBars[i] * 7 + amp) / 8);
     }
-    if (gotChunks == 0) { waveBars[i] = 0; continue; }
-    int amp = (ampSum + gotChunks / 2) / gotChunks;
-    amp = (amp * 3) / 4;  // 压缩整段录音时稍作阻尼, 避免单段峰值顶满A线
-    if (amp > A_HALF) amp = A_HALF;
-    waveBars[i] = (int8_t)((signSum >= 0) ? amp : -amp);
   }
-  f.seek(44);
 }
 
 static int deleteProgressW(uint32_t heldMs) {
@@ -528,6 +523,7 @@ int playbackScreen(const char *path, int recNum, int prevRec, int nextRec) {
   if (dataSize == 0 || dataSize > fileData) dataSize = fileData;
   f.seek(44);
   memset(waveBars, 0, sizeof(waveBars));
+  memset(waveBarCounts, 0, sizeof(waveBarCounts));
 
   M5Canvas cv(&d);
   cv.createSprite(CONTENT_W, d.height());
@@ -569,40 +565,43 @@ int playbackScreen(const char *path, int recNum, int prevRec, int nextRec) {
   uint32_t lastSeek = 0;
   int pi = 0;
 
-  drawStatic(); drawProgress(0);
-  loadWaveBars(f, dataSize);
+  drawStatic();
   drawProgress(0);
   speakerOn();
-  waitRelease();
+  bool ignoreKeysUntilRelease = M5Cardputer.Keyboard.isPressed();
 
   while (!stop) {
     M5Cardputer.update();
-    if (keyDel()) {
-      if (delHoldStart == 0) { delHoldStart = millis(); lastDelDraw = 0; }
-      uint32_t held = millis() - delHoldStart;
-      if (held >= DELETE_HOLD_MS) { ret = R_DELETE; stop = true; }
-      else if (millis() - lastDelDraw > 60) { lastDelDraw = millis(); drawProgress(played); }
-    } else if (delHoldStart != 0) {
-      delHoldStart = 0;
-      ret = R_LIST; stop = true;                         // 退格短按=回上一层
-    }
-    if (stop) break;
-
-    if (M5Cardputer.Keyboard.isChange() && M5Cardputer.Keyboard.isPressed()) {
-      int hk = pressedHotkeyRec();
-      if (hk > 0) { g_nextPlay = hk; ret = R_PLAY; stop = true; }   // 按到别的绑定键=立刻覆盖播放
-      else if (keyEsc()) { ret = R_BACK; stop = true; }       // Esc=息屏
-      else if (keySpace()) { ret = R_RECORD; stop = true; }   // 空格=去录音
-      else if (keyUp() && prevRec > 0) { g_nextPlay = prevRec; ret = R_PLAY; stop = true; }
-      else if (keyDown() && nextRec > 0) { g_nextPlay = nextRec; ret = R_PLAY; stop = true; }
-      else if (keyEnter()) {
-        paused = !paused;
-        if (paused) M5Cardputer.Speaker.stop();
-        drawProgress(played);
-        waitRelease();
+    if (ignoreKeysUntilRelease) {
+      if (!M5Cardputer.Keyboard.isPressed()) ignoreKeysUntilRelease = false;
+    } else {
+      if (keyDel()) {
+        if (delHoldStart == 0) { delHoldStart = millis(); lastDelDraw = 0; }
+        uint32_t held = millis() - delHoldStart;
+        if (held >= DELETE_HOLD_MS) { ret = R_DELETE; stop = true; }
+        else if (millis() - lastDelDraw > 60) { lastDelDraw = millis(); drawProgress(played); }
+      } else if (delHoldStart != 0) {
+        delHoldStart = 0;
+        ret = R_LIST; stop = true;                         // 退格短按=回上一层
       }
-      else if (keyVolUp()) { playVol = min(255, playVol + 25); M5Cardputer.Speaker.setVolume(playVol); }
-      else if (keyVolDn()) { playVol = max(0,   playVol - 25); M5Cardputer.Speaker.setVolume(playVol); }
+      if (stop) break;
+
+      if (M5Cardputer.Keyboard.isChange() && M5Cardputer.Keyboard.isPressed()) {
+        int hk = pressedHotkeyRec();
+        if (hk > 0) { g_nextPlay = hk; ret = R_PLAY; stop = true; }   // 按到别的绑定键=立刻覆盖播放
+        else if (keyEsc()) { ret = R_BACK; stop = true; }       // Esc=息屏
+        else if (keySpace()) { ret = R_RECORD; stop = true; }   // 空格=去录音
+        else if (keyUp() && prevRec > 0) { g_nextPlay = prevRec; ret = R_PLAY; stop = true; }
+        else if (keyDown() && nextRec > 0) { g_nextPlay = nextRec; ret = R_PLAY; stop = true; }
+        else if (keyEnter()) {
+          paused = !paused;
+          if (paused) M5Cardputer.Speaker.stop();
+          drawProgress(played);
+          waitRelease();
+        }
+        else if (keyVolUp()) { playVol = min(255, playVol + 25); M5Cardputer.Speaker.setVolume(playVol); }
+        else if (keyVolDn()) { playVol = max(0,   playVol - 25); M5Cardputer.Speaker.setVolume(playVol); }
+      }
     }
     if (stop) break;
     if (paused) { delay(8); continue; }
@@ -640,6 +639,7 @@ int playbackScreen(const char *path, int recNum, int prevRec, int nextRec) {
     remaining -= got;
     int16_t *liveWave = pbBuf[pi];
     size_t liveN = got / 2;
+    updatePlaybackWaveBars(played, dataSize, liveWave, liveN);
     M5Cardputer.Speaker.playRaw(liveWave, liveN, REC_RATE, false, 1, 0, false);
     pi ^= 1;
     played += got;
