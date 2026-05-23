@@ -401,6 +401,17 @@ Hash of data verified.
 Hard resetting with RTC WDT...
 ```
 
+2026-05-23 播放 A线 60 柱快速抽样后烧录成功记录：
+```text
+Serial port COM3
+Chip is ESP32-S3
+Sketch uses 1145220 bytes (87%)
+Global variables use 73972 bytes (22%)
+Wrote 1145600 bytes
+Hash of data verified.
+Hard resetting with RTC WDT...
+```
+
 ## 9. 快速参考：一键脚本
 
 将以下内容保存为 `C:\cardputer\tools\build_and_flash.ps1`，需要时直接运行：

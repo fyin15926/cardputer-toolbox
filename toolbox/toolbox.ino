@@ -462,24 +462,35 @@ static void feedPlaybackWaveBars(uint32_t chunkStart, uint32_t dataSize, const i
   for (int i = first; i <= last; i++) mergePlaybackWaveBar(i, amp);
 }
 
-static bool previewPlaybackWaveChunk(File &f, uint32_t dataSize, uint32_t &previewPos) {
-  if (previewPos >= dataSize) return false;
+static bool previewPlaybackWaveBar(File &f, uint32_t dataSize, uint8_t &previewBar) {
+  if (previewBar >= WAVE_BARS || dataSize == 0) return false;
   static int16_t tmp[REC_N];
   uint32_t restore = f.position();
-  uint32_t want = dataSize - previewPos;
-  if (want > sizeof(tmp)) want = sizeof(tmp);
-  want &= ~1U;
-  int rd = 0;
-  if (want > 0 && f.seek(44 + previewPos)) rd = f.read((uint8_t *)tmp, want);
+  uint32_t segStart = (uint32_t)((uint64_t)dataSize * previewBar / WAVE_BARS);
+  uint32_t segEnd = (uint32_t)((uint64_t)dataSize * (previewBar + 1) / WAVE_BARS);
+  if (segEnd <= segStart) segEnd = segStart + 2;
+  if (segEnd > dataSize) segEnd = dataSize;
+  uint32_t span = segEnd - segStart;
+  for (uint8_t s = 0; s < 3; s++) {
+    uint32_t pos = segStart + (uint32_t)((uint64_t)span * (s + 1) / 4);
+    if (pos + sizeof(tmp) > segEnd) pos = (segEnd > sizeof(tmp)) ? (segEnd - sizeof(tmp)) : segStart;
+    pos &= ~1U;
+    uint32_t want = dataSize - pos;
+    if (want > sizeof(tmp)) want = sizeof(tmp);
+    if (want > segEnd - pos) want = segEnd - pos;
+    want &= ~1U;
+    if (want == 0) continue;
+    int rd = 0;
+    if (f.seek(44 + pos)) rd = f.read((uint8_t *)tmp, want);
+    if (rd > 0) feedPlaybackWaveBars(pos, dataSize, tmp, rd / 2);
+  }
   f.seek(restore);
-  if (rd <= 0) return false;
-  feedPlaybackWaveBars(previewPos, dataSize, tmp, rd / 2);
-  previewPos += (uint32_t)rd;
+  previewBar++;
   return true;
 }
 
-static void previewPlaybackWaveStep(File &f, uint32_t dataSize, uint32_t &previewPos, uint8_t budget) {
-  while (budget-- > 0 && previewPlaybackWaveChunk(f, dataSize, previewPos)) {}
+static void previewPlaybackWaveStep(File &f, uint32_t dataSize, uint8_t &previewBar, uint8_t budget) {
+  while (budget-- > 0 && previewPlaybackWaveBar(f, dataSize, previewBar)) {}
 }
 
 static int deleteProgressW(uint32_t heldMs) {
@@ -645,7 +656,7 @@ int playbackScreen(const char *path, int recNum, int prevRec, int nextRec) {
   uint32_t played = 0, remaining = dataSize;
   uint32_t lastSeek = 0;
   uint32_t lastPreviewDraw = 0;
-  uint32_t previewPos = 0;
+  uint8_t previewBar = 0;
   int pi = 0;
 
   drawStatic();
@@ -721,8 +732,8 @@ int playbackScreen(const char *path, int recNum, int prevRec, int nextRec) {
       delay(8); continue;
     }
     if (M5Cardputer.Speaker.isPlaying(0) >= 2) {
-      previewPlaybackWaveStep(f, dataSize, previewPos, 3);
-      if (millis() - lastPreviewDraw > 90) {
+      previewPlaybackWaveStep(f, dataSize, previewBar, 12);
+      if (millis() - lastPreviewDraw > 45) {
         lastPreviewDraw = millis();
         drawProgress(played);
       }
@@ -736,6 +747,7 @@ int playbackScreen(const char *path, int recNum, int prevRec, int nextRec) {
     int16_t *liveWave = pbBuf[pi];
     size_t liveN = got / 2;
     M5Cardputer.Speaker.playRaw(liveWave, liveN, REC_RATE, false, 1, 0, false);
+    previewPlaybackWaveStep(f, dataSize, previewBar, 4);
     pi ^= 1;
     played += got;
     drawProgress(played, liveWave, liveN);
