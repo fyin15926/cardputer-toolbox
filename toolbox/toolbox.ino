@@ -6,7 +6,7 @@
  *   开机: 自动开始录音
  *   录制中: 空格/回车=结束(存盘并进入列表); Del两次=取消并删除本条; W/S=音量
  *   录音列表: ;/. 上下选; 回车=播放; 退格=退出到息屏; Ctrl+键(字母/数字)=给该录音绑定快捷键; Alt=降噪
- *   回放: 回车/反斜杠=回列表; +/- (= 与 - 键)=音量; 退格=返回; 空格=去录音
+ *   回放: 回车/反斜杠=回列表; +/- (= 与 - 键)=音量; Del两次=删除当前录音; 空格=去录音
  *   绑定的播放键=最高优先级, 任意界面(录音中除外)即按即播, 且播放中按别的键可覆盖切换
  *
  * 方向键(物理): ; = 上, . = 下, , = 左, / = 右
@@ -115,6 +115,7 @@ static void writeWavHeader(File &f, uint32_t rate, uint32_t dataBytes) {
 #define R_PLAY   2   // 按下某个已绑定的播放键: 立刻去播放(可覆盖当前播放)
 #define R_LIST   3   // 列表键: 进入录音列表
 #define R_NOISE  4   // Alt: 对最近/当前录音降噪
+#define R_DELETE 5   // Del二次确认后删除当前录音
 int g_nextPlay = 0;  // 配合 R_PLAY: 要切换去播放的录音编号
 int g_afterRecord = R_LIST;  // 录音结束后跳转目标
 static int nextRecHint = 0;  // 下一个录音编号缓存, 避免每次从 REC_0001 顺序探测
@@ -421,7 +422,7 @@ static void loadWaveBars(File &f, uint32_t dataSize) {
 }
 
 // 播放画面: A线=轨道线/Timeline A, B线=监听线/Monitor B(播放缓冲)
-static void drawPlaybackCanvas(M5Canvas &cv, uint32_t played, uint32_t dataSize, int16_t *liveWave, size_t liveN) {
+static void drawPlaybackCanvas(M5Canvas &cv, uint32_t played, uint32_t dataSize, int16_t *liveWave, size_t liveN, bool deleteArmed = false) {
   // --- 波形区 ---
   cv.fillRect(0, WAVE_TOP, CONTENT_W, WAVE_H, COL_BG);
 
@@ -469,15 +470,20 @@ static void drawPlaybackCanvas(M5Canvas &cv, uint32_t played, uint32_t dataSize,
   cv.setTextColor(COL_GREEN, COL_BG);
   cv.setCursor(4, WAVE_BOT + 2);
   cv.printf("%02lu:%02lu", (unsigned long)(cur / 60), (unsigned long)(cur % 60));
-  // 右侧暗色总时长
   cv.setFont(&fonts::efontCN_12);
-  cv.setTextColor(COL_DIM, COL_BG);
-  cv.setCursor(CONTENT_W - 44, WAVE_BOT + 8);
-  cv.printf("/%02lu:%02lu", (unsigned long)(tot / 60), (unsigned long)(tot % 60));
+  if (deleteArmed) {
+    cv.setTextColor(COL_RED, COL_BG);
+    cv.setCursor(CONTENT_W - 76, WAVE_BOT + 8);
+    cv.print("再按Del删除");
+  } else {
+    cv.setTextColor(COL_DIM, COL_BG);
+    cv.setCursor(CONTENT_W - 44, WAVE_BOT + 8);
+    cv.printf("/%02lu:%02lu", (unsigned long)(tot / 60), (unsigned long)(tot % 60));
+  }
 }
 
-// ---------- 回放界面: 回车/反斜杠回列表, +/- 音量, 退格返回, 空格去录音 ----------
-// 返回 R_BACK(返回上一层), R_LIST(回列表) 或 R_RECORD(去录音)
+// ---------- 回放界面: 回车/反斜杠回列表, +/- 音量, Del两次删除, 空格去录音 ----------
+// 返回 R_BACK(返回上一层), R_LIST(回列表), R_RECORD(去录音) 或 R_DELETE(删除当前录音)
 int playbackScreen(const char *path, int recNum) {
   auto &d = M5Cardputer.Display;
   if (!sdMount()) { showMsg("播放", "SD 读取失败", COL_RED); return R_BACK; }
@@ -513,8 +519,10 @@ int playbackScreen(const char *path, int recNum) {
     cv.drawFastHLine(0, WAVE_TOP - 1, CONTENT_W, 0x0820);
     cv.drawFastHLine(0, WAVE_BOT + 1, CONTENT_W, 0x0820);
   };
+  bool deleteArmed = false;
+  uint32_t deleteArmedAt = 0;
   auto drawProgress = [&](uint32_t played, int16_t *liveWave = nullptr, size_t liveN = 0) {
-    drawPlaybackCanvas(cv, played, dataSize, liveWave, liveN);
+    drawPlaybackCanvas(cv, played, dataSize, liveWave, liveN, deleteArmed);
     cv.pushSprite(0, 0);
   };
 
@@ -532,12 +540,24 @@ int playbackScreen(const char *path, int recNum) {
 
   while (!stop) {
     M5Cardputer.update();
+    if (deleteArmed && millis() - deleteArmedAt > 2500) {
+      deleteArmed = false;
+      drawProgress(played);
+    }
     if (M5Cardputer.Keyboard.isChange() && M5Cardputer.Keyboard.isPressed()) {
       int hk = pressedHotkeyRec();
       if (hk > 0) { g_nextPlay = hk; ret = R_PLAY; stop = true; }   // 按到别的绑定键=立刻覆盖播放
       else if (keySpace()) { ret = R_RECORD; stop = true; }   // 空格=去录音
       else if (keyList()) { ret = R_LIST; stop = true; }      // \ = 列表
-      else if (keyDel()) { ret = R_BACK; stop = true; }       // 退格=返回
+      else if (keyDel()) {
+        if (deleteArmed) { ret = R_DELETE; stop = true; }     // 第二次 Del=删除当前录音
+        else {
+          deleteArmed = true;
+          deleteArmedAt = millis();
+          drawProgress(played);
+          waitRelease();
+        }
+      }
       else if (keyEnter()) { ret = R_LIST; stop = true; }     // 回车=回列表
       else if (keyVolUp()) { playVol = min(255, playVol + 25); M5Cardputer.Speaker.setVolume(playVol); }
       else if (keyVolDn()) { playVol = max(0,   playVol - 25); M5Cardputer.Speaker.setVolume(playVol); }
@@ -589,13 +609,15 @@ int playbackScreen(const char *path, int recNum) {
 void noiseReduce(const char *path);
 void listFlow(int sel);
 int recordingScreen();
+static void deleteRecording(int recNum);
 
-// 播放流程: 支持"播放中按别的绑定键 -> 立刻切到那条"(覆盖). 返回 R_BACK 或 R_RECORD.
+// 播放流程: 支持"播放中按别的绑定键 -> 立刻切到那条"(覆盖). 返回 R_BACK/R_LIST/R_RECORD.
 int playFlow(int recNum) {
   while (true) {
     char p[40]; snprintf(p, sizeof(p), "/REC/REC_%04d.wav", recNum);
     int r = playbackScreen(p, recNum);
     if (r == R_PLAY) { recNum = g_nextPlay; continue; }
+    if (r == R_DELETE) { deleteRecording(recNum); return R_LIST; }
     return r;
   }
 }
