@@ -247,6 +247,18 @@ static void drawActionToast(const char *msg, uint16_t col = COL_GREEN) {
   d.print(msg);
 }
 
+static void drawCanvasToast(M5Canvas &cv, const char *msg, uint16_t col = COL_GREEN) {
+  cv.fillRect(86, 58, 68, 20, COL_BG);
+  cv.drawRect(86, 58, 68, 20, col);
+  cv.setFont(&fonts::efontCN_12);
+  cv.setTextColor(col, COL_BG);
+  int x = 120 - (int)strlen(msg) * 3;
+  if (x < 88) x = 88;
+  cv.setCursor(x, 62);
+  cv.print(msg);
+  cv.pushSprite(0, 0);
+}
+
 static void showMsg(const char *title, const char *msg, uint16_t col) {
   auto &d = M5Cardputer.Display;
   d.fillScreen(COL_BG);
@@ -331,6 +343,28 @@ static const int MAX_REC = 9999;
 int recList[MAX_REC];
 int recCount = 0;
 
+static int recListIndexOf(int recNum) {
+  for (int i = 0; i < recCount; i++) if (recList[i] == recNum) return i;
+  return -1;
+}
+
+static void insertRecListSorted(int recNum) {
+  if (recNum <= 0 || recCount >= MAX_REC || recListIndexOf(recNum) >= 0) return;
+  int pos = recCount;
+  while (pos > 0 && recList[pos - 1] > recNum) {
+    recList[pos] = recList[pos - 1];
+    pos--;
+  }
+  recList[pos] = recNum;
+  recCount++;
+}
+
+static void removeRecListAt(int idx) {
+  if (idx < 0 || idx >= recCount) return;
+  for (int i = idx; i < recCount - 1; i++) recList[i] = recList[i + 1];
+  recCount--;
+}
+
 static int nextRecordingIndex() {
   char p[40];
   if (nextRecHint > 0 && nextRecHint <= 9999) {
@@ -339,12 +373,16 @@ static int nextRecordingIndex() {
   }
 
   int maxIdx = 0;
+  recCount = 0;
   File dir = SD.open("/REC");
   if (dir && dir.isDirectory()) {
     File e;
     while ((e = dir.openNextFile())) {
       int n = parseRecordingNumber(e.name());
-      if (n > maxIdx) maxIdx = n;
+      if (n > 0) {
+        if (n > maxIdx) maxIdx = n;
+        insertRecListSorted(n);
+      }
       e.close();
     }
     dir.close();
@@ -375,11 +413,6 @@ static void scanRecordings() {
   }
   nextRecHint = (recCount > 0 && recList[recCount - 1] < 9999) ? recList[recCount - 1] + 1 : 1;
   SD.end();
-}
-
-static int recListIndexOf(int recNum) {
-  for (int i = 0; i < recCount; i++) if (recList[i] == recNum) return i;
-  return -1;
 }
 
 // ---------- 提示音 "滴" (淡入淡出) ----------
@@ -440,7 +473,7 @@ static void updatePlaybackWaveBars(uint32_t chunkStart, uint32_t dataSize, const
 
 static bool previewPlaybackWaveBar(File &f, uint32_t dataSize, int bar) {
   if (bar < 0 || bar >= WAVE_BARS || dataSize == 0 || waveBarCounts[bar] > 0) return true;
-  int16_t tmp[96];
+  int16_t tmp[128];
   uint32_t start = 44 + (uint32_t)((uint64_t)dataSize * bar / WAVE_BARS);
   uint32_t end   = 44 + (uint32_t)((uint64_t)dataSize * (bar + 1) / WAVE_BARS);
   uint32_t span  = (end > start) ? (end - start) : 0;
@@ -448,15 +481,31 @@ static bool previewPlaybackWaveBar(File &f, uint32_t dataSize, int bar) {
   if (chunkBytes == 0) return false;
 
   uint32_t restore = f.position();
-  uint32_t pos = start;
-  if (span > chunkBytes) pos += ((span - chunkBytes) / 2) & ~1U;
-  int rd = 0;
-  if (f.seek(pos)) rd = f.read((uint8_t *)tmp, chunkBytes);
+  int chunks = (span >= (uint32_t)sizeof(tmp) * 3) ? 3 : 1;
+  int ampSum = 0, signSum = 0, gotChunks = 0;
+  for (int c = 0; c < chunks; c++) {
+    uint32_t pos = start;
+    if (chunks > 1) {
+      uint32_t usable = (span > chunkBytes) ? (span - chunkBytes) : 0;
+      pos = start + (uint32_t)((uint64_t)usable * c / (chunks - 1));
+    } else if (span > chunkBytes) {
+      pos += ((span - chunkBytes) / 2) & ~1U;
+    }
+    pos &= ~1U;
+    int rd = 0;
+    if (f.seek(pos)) rd = f.read((uint8_t *)tmp, chunkBytes);
+    int n = rd / 2;
+    if (n <= 0) continue;
+    int amp = calcTrackAmp(tmp, n);
+    ampSum += abs(amp);
+    signSum += amp;
+    gotChunks++;
+  }
   f.seek(restore);
-  int n = rd / 2;
-  if (n <= 0) return false;
-  int amp = calcTrackAmp(tmp, n);
-  mergePlaybackWaveBar(bar, (amp * 3) / 4);
+  if (gotChunks == 0) return false;
+  int amp = (ampSum + gotChunks / 2) / gotChunks;
+  amp = (amp * 3) / 4;
+  mergePlaybackWaveBar(bar, (signSum >= 0) ? amp : -amp);
   return true;
 }
 
@@ -500,9 +549,6 @@ static void drawPlaybackCanvas(M5Canvas &cv, uint32_t played, uint32_t dataSize,
   // --- 波形区 ---
   cv.fillRect(0, WAVE_TOP, CONTENT_W, WAVE_H, COL_BG);
 
-  int playedBars = dataSize ? (int)((uint64_t)played * WAVE_BARS / dataSize) : 0;
-  if (playedBars > WAVE_BARS) playedBars = WAVE_BARS;
-
   // A线: 时间轴波形进度。已预览的格子画成小波形柱, 空格子只保留暗基线。
   cv.drawFastHLine(0, A_CY, CONTENT_W, 0x0440);
   for (int i = 0; i < WAVE_BARS; i++) {
@@ -513,8 +559,7 @@ static void drawPlaybackCanvas(M5Canvas &cv, uint32_t played, uint32_t dataSize,
     int v = abs((int)waveBars[i]);
     if (v < 1) v = 1;
     if (v > A_HALF) v = A_HALF;
-    uint16_t col = (i < playedBars) ? COL_GREEN : COL_DIM;
-    cv.drawFastVLine(x, A_CY - v, v * 2 + 1, col);
+    cv.drawFastVLine(x, A_CY - v, v * 2 + 1, COL_GREEN);
   }
 
   // B线: 当前播放缓冲实时跳动
@@ -560,15 +605,7 @@ static void drawPlaybackCanvas(M5Canvas &cv, uint32_t played, uint32_t dataSize,
 }
 
 static void drawPlaybackAction(M5Canvas &cv, const char *msg, uint16_t col = COL_GREEN) {
-  cv.fillRect(86, 58, 68, 20, COL_BG);
-  cv.drawRect(86, 58, 68, 20, col);
-  cv.setFont(&fonts::efontCN_12);
-  cv.setTextColor(col, COL_BG);
-  int x = 120 - (int)strlen(msg) * 3;
-  if (x < 88) x = 88;
-  cv.setCursor(x, 62);
-  cv.print(msg);
-  cv.pushSprite(0, 0);
+  drawCanvasToast(cv, msg, col);
 }
 
 // ---------- 回放界面: 播放完自动回列表, 回车暂停/继续, 退格回列表, ;/.切换, +/- 音量, 长按Del删除, 空格去录音 ----------
@@ -1016,9 +1053,9 @@ int recordingScreen() {
           }
           waitRelease();
         }
-        else if (keyEsc()) { g_afterRecord = R_BACK; stop = true; break; }
-        else if (keyEnter()) { g_afterRecord = R_LIST; stop = true; break; }
-        else if (keyAlt()) { g_afterRecord = R_NOISE; stop = true; break; }
+        else if (keyEsc()) { drawCanvasToast(cv, "SLEEP", COL_DIM); g_afterRecord = R_BACK; stop = true; break; }
+        else if (keyEnter()) { drawCanvasToast(cv, "SAVE", COL_GREEN); g_afterRecord = R_LIST; stop = true; break; }
+        else if (keyAlt()) { drawCanvasToast(cv, "NOISE", COL_GREEN); g_afterRecord = R_NOISE; stop = true; break; }
         else if (M5Cardputer.Keyboard.isKeyPressed('w') || M5Cardputer.Keyboard.isKeyPressed('W')) { if (recGain < 200) recGain += 4; }
         else if (M5Cardputer.Keyboard.isKeyPressed('s') || M5Cardputer.Keyboard.isKeyPressed('S')) { if (recGain > 2) recGain -= 4; }
       }
@@ -1069,7 +1106,7 @@ int recordingScreen() {
   uint32_t tailTrim = REC_RATE * 6 / 10;
   uint32_t effData = (dataBytes > tailTrim) ? (dataBytes - tailTrim) : 0;
   if (!cancelRec) writeWavHeader(f, REC_RATE, effData);
-  f.flush(); f.close();
+  f.close();
   if (cancelRec) {
     SD.remove(path);
     nextRecHint = idx;
@@ -1082,6 +1119,7 @@ int recordingScreen() {
   M5Cardputer.In_I2C.writeRegister8(ES, 0x0D, 0x01, 400000);  // 立即恢复偏置(不加 delay)
   M5Cardputer.In_I2C.writeRegister8(ES, 0x00, 0x80, 400000);  // CSM 上电
   if (cancelRec) return 0;
+  insertRecListSorted(idx);
   return (effData > 0) ? idx : idx;   // 即使很短也保留, 返回编号
 }
 
@@ -1092,13 +1130,15 @@ static void deleteRecording(int recNum) {
   char p[40]; snprintf(p, sizeof(p), "/REC/REC_%04d.wav", recNum);
   SD.remove(p);
   SD.end();
+  bool hotkeyRemoved = false;
   for (int i = 0; i < hotkeyCount; i++) {
     if (hotkeys[i].idx == recNum) {
       for (int j = i; j < hotkeyCount - 1; j++) hotkeys[j] = hotkeys[j + 1];
       hotkeyCount--; i--;
+      hotkeyRemoved = true;
     }
   }
-  saveHotkeys();
+  if (hotkeyRemoved) saveHotkeys();
 }
 
 static bool confirmNoiseReduce(int recNum) {
@@ -1127,7 +1167,7 @@ static bool confirmNoiseReduce(int recNum) {
 
 int listScreen(int selectIdx) {
   auto &d = M5Cardputer.Display;
-  scanRecordings();
+  if (recCount <= 0 || (selectIdx > 0 && recListIndexOf(selectIdx) < 0)) scanRecordings();
 
   // 空列表
   if (recCount == 0) {
@@ -1216,8 +1256,10 @@ int listScreen(int selectIdx) {
       if (delHoldStart == 0) delHoldStart = millis();
       uint32_t held = millis() - delHoldStart;
       if (held >= DELETE_HOLD_MS) {
-        deleteRecording(recList[sel]);
-        scanRecordings();
+        int recNum = recList[sel];
+        drawActionToast("DEL", COL_RED);
+        deleteRecording(recNum);
+        removeRecListAt(sel);
         if (recCount == 0) return R_BACK;
         if (sel >= recCount) sel = recCount - 1;
         delHoldStart = 0;
