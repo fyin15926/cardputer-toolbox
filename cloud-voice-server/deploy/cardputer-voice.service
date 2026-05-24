@@ -1,0 +1,21 @@
+[Unit]
+Description=Cardputer Cloud Voice Upload Server
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/cardputer-voice
+EnvironmentFile=/etc/cardputer-voice.env
+ExecStart=/usr/bin/node /opt/cardputer-voice/server.js
+Restart=always
+RestartSec=3
+User=root
+Group=root
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ReadWritePaths=/opt/cardputer-voice/uploads /opt/cardputer-voice/jobs /opt/cardputer-voice/logs
+
+[Install]
+WantedBy=multi-user.target

@@ -32,19 +32,23 @@ function timingSafeEqualText(a, b) {
   return left.length === right.length && crypto.timingSafeEqual(left, right);
 }
 
-function sanitizeRecordingName(name) {
-  const fallback = `REC_${new Date().toISOString().replace(/[-:.TZ]/g, '').slice(0, 14)}.wav`;
-  const base = path.basename(String(name || fallback)).replace(/[^\w.-]/g, '_');
-  const candidate = base || fallback;
-  return candidate.toLowerCase().endsWith('.wav') ? candidate : `${candidate}.wav`;
-}
+function normalizeRecordingName(name) {
+  const raw = String(name || '').trim();
+  const base = path.basename(raw).replace(/[^\w.-]/g, '_');
+  if (!base || base === '.' || base === '..') {
+    return null;
+  }
 
-function makeJobId(deviceId, recordingName) {
-  const stamp = new Date().toISOString().replace(/[-:.TZ]/g, '').slice(0, 14);
-  const safeDevice = String(deviceId || 'unknown').replace(/[^\w.-]/g, '_').slice(0, 40);
-  const safeName = path.basename(recordingName, '.wav').replace(/[^\w.-]/g, '_').slice(0, 80);
-  const suffix = crypto.randomBytes(3).toString('hex');
-  return `${stamp}_${safeDevice}_${safeName}_${suffix}`;
+  const withoutExt = base.toLowerCase().endsWith('.wav') ? base.slice(0, -4) : base;
+  const id = withoutExt.replace(/[^\w.-]/g, '_').slice(0, 80);
+  if (!id || id === '.' || id === '..') {
+    return null;
+  }
+
+  return {
+    id,
+    recordingName: `${id}.wav`
+  };
 }
 
 async function ensureRuntimeDirs() {
@@ -80,12 +84,33 @@ async function handleUpload(req, res) {
     return;
   }
 
-  const deviceId = String(req.headers['x-device-id'] || 'unknown').slice(0, 80);
-  const recordingName = sanitizeRecordingName(req.headers['x-recording-name']);
-  const jobId = makeJobId(deviceId, recordingName);
-  const uploadPath = path.join(UPLOAD_DIR, `${jobId}_${recordingName}`);
+  const rawDeviceId = String(req.headers['x-device-id'] || '').trim();
+  const rawRecordingName = String(req.headers['x-recording-name'] || '').trim();
+  if (!rawDeviceId || !rawRecordingName) {
+    sendJson(res, 400, {
+      ok: false,
+      error: 'X-Device-Id and X-Recording-Name are required'
+    });
+    return;
+  }
+
+  const normalized = normalizeRecordingName(rawRecordingName);
+  if (!normalized) {
+    sendJson(res, 400, { ok: false, error: 'invalid recording name' });
+    return;
+  }
+
+  const deviceId = rawDeviceId.replace(/[^\w.-]/g, '_').slice(0, 80);
+  const { id: jobId, recordingName } = normalized;
+  const uploadPath = path.join(UPLOAD_DIR, recordingName);
   const jobPath = path.join(JOB_DIR, `${jobId}.json`);
   const startedAt = new Date().toISOString();
+
+  if (fs.existsSync(uploadPath) || fs.existsSync(jobPath)) {
+    req.resume();
+    sendJson(res, 409, { ok: false, error: 'recording already exists', id: jobId });
+    return;
+  }
 
   let bytes = 0;
   const out = fs.createWriteStream(uploadPath, { flags: 'wx' });
@@ -113,13 +138,13 @@ async function handleUpload(req, res) {
       deviceId,
       recordingName,
       bytes,
-      uploadPath,
+      uploadPath: path.relative(DATA_ROOT, uploadPath),
       createdAt: startedAt,
       updatedAt: new Date().toISOString()
     };
 
     await fsp.writeFile(jobPath, `${JSON.stringify(job, null, 2)}\n`, 'utf8');
-    sendJson(res, 201, { ok: true, job });
+    sendJson(res, 201, { ok: true, id: jobId });
   } catch (error) {
     out.destroy();
     await fsp.rm(uploadPath, { force: true }).catch(() => {});

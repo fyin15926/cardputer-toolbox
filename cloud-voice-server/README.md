@@ -1,6 +1,8 @@
 # Cardputer Cloud Voice Server
 
-Phase 1 minimal server for receiving Cardputer WAV recordings.
+Phase 1 minimal server for receiving Cardputer WAV recordings. This stage only
+accepts uploads, saves WAV files, and writes job metadata. It does not call
+Alibaba Cloud transcription or flomo yet.
 
 ## Run
 
@@ -24,6 +26,9 @@ npm start
 - `POST /upload`: accepts raw `audio/wav` bytes with `X-Upload-Token`.
 - `GET /jobs/:id`: returns saved upload metadata.
 
+Production deployment notes and nginx/systemd templates are in
+`DEPLOYMENT.md` and `deploy/`.
+
 Upload headers:
 
 ```text
@@ -44,4 +49,14 @@ curl -X POST http://127.0.0.1:3000/upload \
   --data-binary @REC_0123.wav
 ```
 
-Runtime output is written to `uploads/` and `jobs/`. These directories are intentionally ignored by Git.
+Successful response:
+
+```json
+{
+  "ok": true,
+  "id": "REC_0123"
+}
+```
+
+Runtime output is written as `uploads/REC_0123.wav` and `jobs/REC_0123.json`.
+These directories are intentionally ignored by Git.
