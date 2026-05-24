@@ -217,6 +217,7 @@ static bool keySpace() { return M5Cardputer.Keyboard.isKeyPressed(' '); }
 static bool keyEsc()   { return M5Cardputer.Keyboard.isKeyPressed('`'); }  // Cardputer 物理 Esc 键映射为左上角 `
 static bool keyDel()   { return M5Cardputer.Keyboard.keysState().del; }
 static bool keyEnter() { return M5Cardputer.Keyboard.keysState().enter; }
+static bool keyTab()   { return M5Cardputer.Keyboard.keysState().tab; }
 static bool keyUp()    { return M5Cardputer.Keyboard.isKeyPressed(';'); }
 static bool keyDown()  { return M5Cardputer.Keyboard.isKeyPressed('.'); }
 static bool keyLeft()  { return M5Cardputer.Keyboard.isKeyPressed(','); }
@@ -1858,6 +1859,7 @@ int recordingScreen() {
   cv.pushSprite(0, 0);
   bool stop = false;
   bool cancelRec = false;
+  bool recScreenOff = false;
   uint32_t delHoldStart = 0;
   uint32_t lastDelDraw = 0;
   bool ignoreStartKey = M5Cardputer.Keyboard.isPressed();
@@ -1869,8 +1871,26 @@ int recordingScreen() {
       M5Cardputer.update();
       if (ignoreStartKey) {
         if (!M5Cardputer.Keyboard.isPressed()) ignoreStartKey = false;
+      } else if (recScreenOff) {
+        if (M5Cardputer.Keyboard.isChange() && M5Cardputer.Keyboard.isPressed()) {
+          if (keyTab() || keySpace() || keyDel() || keyEnter()) {
+            recScreenOff = false;
+            ignoreStartKey = true;
+            delHoldStart = 0;
+            lastDelDraw = 0;
+            M5Cardputer.Display.setBrightness(120);
+            drawRecCanvas(cv, activeElapsed(), true, nullptr, false, paused);
+            cv.pushSprite(0, 0);
+          }
+        }
       } else if (M5Cardputer.Keyboard.isChange() && M5Cardputer.Keyboard.isPressed()) {
-        if (keySpace()) {
+        if (keyTab()) {
+          recScreenOff = true;
+          delHoldStart = 0;
+          lastDelDraw = 0;
+          M5Cardputer.Display.setBrightness(0);
+        }
+        else if (keySpace()) {
           if (paused) {
             paused = false;
             pausedTotal += millis() - pauseStart;
@@ -1896,7 +1916,7 @@ int recordingScreen() {
         else if (M5Cardputer.Keyboard.isKeyPressed('s') || M5Cardputer.Keyboard.isKeyPressed('S')) { if (recGain > 2) recGain -= 4; }
       }
 
-      if (!ignoreStartKey) {
+      if (!ignoreStartKey && !recScreenOff) {
         if (keyDel()) {
           if (delHoldStart == 0) { delHoldStart = millis(); lastDelDraw = 0; }
           uint32_t held = millis() - delHoldStart;
@@ -1930,12 +1950,15 @@ int recordingScreen() {
       uint32_t elapsed = activeElapsed();
       pushTrackBar(calcTrackAmp(filled, REC_N));
       uint32_t held = delHoldStart ? millis() - delHoldStart : 0;
-      drawRecCanvas(cv, elapsed, blink, filled, false, false, held);
-      cv.pushSprite(0, 0);
+      if (!recScreenOff) {
+        drawRecCanvas(cv, elapsed, blink, filled, false, false, held);
+        cv.pushSprite(0, 0);
+      }
     }
     M5Cardputer.Mic.record(filled, REC_N, REC_RATE);
     b ^= 1;
   }
+  if (recScreenOff) M5Cardputer.Display.setBrightness(120);
   cv.deleteSprite();
   // 掐尾 ~0.3s.
   uint32_t tailTrim = REC_RATE * 6 / 10;
