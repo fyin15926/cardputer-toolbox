@@ -1,8 +1,7 @@
 # Cardputer Cloud Voice Server
 
-Phase 1 minimal server for receiving Cardputer WAV recordings. This stage only
-accepts uploads, saves WAV files, and writes job metadata. It does not call
-Alibaba Cloud transcription or flomo yet.
+Cloud service for receiving Cardputer WAV recordings, transcribing them with
+Alibaba Cloud DashScope Paraformer, and sending the transcript to flomo.
 
 ## Run
 
@@ -25,6 +24,8 @@ npm start
 - `GET /health`: health check.
 - `POST /upload`: accepts raw `audio/wav` bytes with `X-Upload-Token`.
 - `GET /jobs/:id`: returns saved upload metadata.
+- `POST /jobs/:id/process`: manually queues a saved job for transcription.
+- `GET /audio/:recordingName?token=...`: private audio URL for DashScope fetch.
 
 Production deployment notes and nginx/systemd templates are in
 `DEPLOYMENT.md` and `deploy/`.
@@ -60,3 +61,6 @@ Successful response:
 
 Runtime output is written as `uploads/REC_0123.wav` and `jobs/REC_0123.json`.
 These directories are intentionally ignored by Git.
+
+When transcription is configured, output is also written to
+`transcripts/REC_0123.txt` and sent to flomo.
