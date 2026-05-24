@@ -956,6 +956,7 @@ int playbackScreen(const char *path, int recNum, int prevRec, int nextRec) {
 }
 
 void noiseReduce(const char *path);
+static bool suppressKeyFriction(const char *path, uint32_t dataBytes);
 void listFlow(int sel);
 int recordingScreen();
 static void deleteRecording(int recNum);
@@ -1003,6 +1004,74 @@ void afterRecordingFlow(int recNum) {
     listFlow(recNum);
     return;
   }
+}
+
+// ---------- 按键摩擦后处理: 只压低低能量、高变化率的细碎刮擦声 ----------
+static bool suppressKeyFriction(const char *path, uint32_t dataBytes) {
+  if (dataBytes < REC_N * 2) return false;
+  char tmp[48];
+  snprintf(tmp, sizeof(tmp), "%s.s", path);
+
+  File in = SD.open(path, FILE_READ);
+  if (!in || in.size() <= 44) { if (in) in.close(); return false; }
+  SD.remove(tmp);
+  File out = SD.open(tmp, FILE_WRITE);
+  if (!out) { in.close(); return false; }
+
+  writeWavHeader(out, REC_RATE, 0);
+  in.seek(44);
+
+  static int16_t scratchBuf[REC_N];
+  uint32_t remaining = dataBytes;
+  uint32_t outBytes = 0;
+  int hold = 0;
+  int32_t lp = 0;
+
+  while (remaining > 0) {
+    size_t want = remaining < sizeof(scratchBuf) ? remaining : sizeof(scratchBuf);
+    int rd = in.read((uint8_t *)scratchBuf, want);
+    if (rd <= 0) break;
+    int got = rd / 2;
+
+    int64_t sumSq = 0;
+    int64_t sumDiff = 0;
+    for (int i = 0; i < got; i++) {
+      int32_t s = scratchBuf[i];
+      sumSq += (int64_t)s * s;
+      if (i > 0) sumDiff += abs((int)(scratchBuf[i] - scratchBuf[i - 1]));
+    }
+    int32_t rms = (int32_t)sqrtf((float)((double)sumSq / got));
+    int32_t avgDiff = (got > 1) ? (int32_t)(sumDiff / (got - 1)) : 0;
+    bool scratch = ((rms < 1900 && avgDiff > 140 && ((int64_t)avgDiff * 256 > (int64_t)rms * 90)) ||
+                    (rms < 2200 && avgDiff > 300));
+    if (scratch) hold = 2;
+
+    if (scratch || hold > 0) {
+      for (int i = 0; i < got; i++) {
+        lp += (int32_t)(((int64_t)(scratchBuf[i] - lp) * 96) >> 8);
+        int32_t hi = (int32_t)scratchBuf[i] - lp;
+        int32_t y = lp + ((hi * 64) >> 8);
+        if (y > 32767) y = 32767;
+        if (y < -32768) y = -32768;
+        scratchBuf[i] = (int16_t)y;
+      }
+      if (hold > 0) hold--;
+    } else if (got > 0) {
+      lp = scratchBuf[got - 1];
+    }
+
+    out.write((uint8_t *)scratchBuf, got * 2);
+    outBytes += got * 2;
+    remaining -= got * 2;
+  }
+
+  writeWavHeader(out, REC_RATE, outBytes);
+  out.flush();
+  out.close();
+  in.close();
+  if (outBytes == 0) { SD.remove(tmp); return false; }
+  SD.remove(path);
+  return SD.rename(tmp, path);
 }
 
 // ---------- 降噪: FFT 谱减法(后处理) ----------
@@ -1299,6 +1368,7 @@ int recordingScreen() {
   uint32_t effData = (dataBytes > tailTrim) ? (dataBytes - tailTrim) : 0;
   if (!cancelRec) writeWavHeader(f, REC_RATE, effData);
   f.close();
+  if (!cancelRec && effData > 0) suppressKeyFriction(path, effData);
   if (cancelRec) {
     SD.remove(path);
     nextRecHint = idx;

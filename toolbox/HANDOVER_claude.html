@@ -338,6 +338,24 @@ int amp = (int)(rms * (3.0f * A_HALF) / 32767.0f) * sign;</pre>
   <tr><td>Bulk cleanup</td><td>List screen <code>Ctrl+Del</code> confirms and deletes only ordinary <code>/REC/REC_XXXX.wav</code> files; <code>/SHORTCUT</code> and <code>/IMPORTANT</code> are preserved.</td></tr>
 </table>
 
+<h2 id="audio-quality-20260524">2026-05-24 Recording Quality / Key Friction Notes</h2>
+<div class="note">
+  Current usable audio version keeps the GitHub baseline real-time recorder path and adds
+  a conservative post-save key-friction suppressor. Do not reintroduce the failed strong
+  real-time AGC / voice gate / long block attenuation experiments; they made speech muddy
+  or choppy while not reliably removing key rub.
+</div>
+<table>
+  <tr><th>Area</th><th>Current parameter / behavior</th></tr>
+  <tr><td>Real-time recording baseline</td><td><code>REC_RATE=16000</code>, <code>REC_N=256</code>, <code>recGain=50</code>, mic <code>magnification=1</code>, <code>noise_filter_level=3</code>.</td></tr>
+  <tr><td>Real-time DSP</td><td><code>processMicBuffer()</code> remains the stable chain: software gain, one-pole LPF coefficient <code>160</code>, then <code>tanhf</code> soft limiting.</td></tr>
+  <tr><td>Sample evidence</td><td><code>REC_0399.wav</code> is pure finger/key friction; <code>REC_0400.wav</code> is voice with friction. Friction has low RMS, so A-line barely moves, but it has high adjacent-sample variation and a high-frequency character. Voice frames have much higher RMS and lower spectral centroid.</td></tr>
+  <tr><td>Post-save friction suppressor</td><td><code>suppressKeyFriction(path, effData)</code> runs after the WAV header is finalized. It scans 256-sample blocks and only treats low-energy, high-variation frames as key rub.</td></tr>
+  <tr><td>Detection rule</td><td>Scratch if <code>rms &lt; 1900 &amp;&amp; avgDiff &gt; 140 &amp;&amp; avgDiff*256 &gt; rms*90</code>, or <code>rms &lt; 2200 &amp;&amp; avgDiff &gt; 300</code>. A hit holds for 2 buffers.</td></tr>
+  <tr><td>Processing rule</td><td>Do not attenuate the whole block. Use a one-pole low-pass <code>lp += (sample-lp)*96/256</code>, split <code>hi=sample-lp</code>, and write <code>lp + hi*64/256</code>. This shaves high-frequency rub while preserving speech body.</td></tr>
+  <tr><td>Known tradeoff</td><td>Friction is reduced but not erased. Stronger suppression quickly causes speech dropouts or dullness. If more quality is needed, do a PC/server-side denoise using the saved WAV rather than stronger on-device real-time gates.</td></tr>
+</table>
+
 <!-- ─── GitHub同步 ─── -->
 <h2 id="git">GitHub 同步</h2>
 <div class="note">端口22被封，使用 SSH-over-443（HTTPS PAT无写权限）。</div>
