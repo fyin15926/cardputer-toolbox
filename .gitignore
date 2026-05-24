@@ -23,6 +23,13 @@ Thumbs.db
 *.bak
 *.log
 
+# Cardputer cloud voice server runtime data
+cloud-voice-server/uploads/
+cloud-voice-server/transcripts/
+cloud-voice-server/jobs/
+cloud-voice-server/logs/
+cloud-voice-server/.env
+
 # Large binaries (arduino-cli can be downloaded separately)
 tools/arduino-cli/arduino-cli.exe
 tools/arduino-cli.zip

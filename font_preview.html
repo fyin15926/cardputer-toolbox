@@ -1,0 +1,1016 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Cardputer 数字字体预览</title>
+  <style>
+    @import url('https://fonts.googleapis.com/css2?family=Micro+5&family=Share+Tech+Mono&family=Sixtyfour&family=Tiny5&family=VT323&display=swap');
+
+    @font-face {
+      font-family: "DSEG7Classic";
+      src: url("https://cdn.jsdelivr.net/npm/dseg@0.46.0/fonts/DSEG7-Classic/DSEG7Classic-Regular.woff2") format("woff2");
+      font-weight: 400;
+      font-style: normal;
+    }
+
+    @font-face {
+      font-family: "DSEG14Classic";
+      src: url("https://cdn.jsdelivr.net/npm/dseg@0.46.0/fonts/DSEG14-Classic/DSEG14Classic-Regular.woff2") format("woff2");
+      font-weight: 400;
+      font-style: normal;
+    }
+
+    @font-face {
+      font-family: "DSEG14ClassicMini";
+      src: url("https://cdn.jsdelivr.net/npm/dseg@0.46.0/fonts/DSEG14-Classic-MINI/DSEG14ClassicMini-Regular.woff2") format("woff2");
+      font-weight: 400;
+      font-style: normal;
+    }
+
+    @font-face {
+      font-family: "DSEG14ClassicMiniLight";
+      src: url("https://cdn.jsdelivr.net/npm/dseg@0.46.0/fonts/DSEG14-Classic-MINI/DSEG14ClassicMini-Light.woff2") format("woff2");
+    }
+
+    @font-face {
+      font-family: "DSEG14ClassicMiniBold";
+      src: url("https://cdn.jsdelivr.net/npm/dseg@0.46.0/fonts/DSEG14-Classic-MINI/DSEG14ClassicMini-Bold.woff2") format("woff2");
+    }
+
+    @font-face {
+      font-family: "DSEG14ClassicMiniItalic";
+      src: url("https://cdn.jsdelivr.net/npm/dseg@0.46.0/fonts/DSEG14-Classic-MINI/DSEG14ClassicMini-Italic.woff2") format("woff2");
+    }
+
+    @font-face {
+      font-family: "DSEG14Modern";
+      src: url("https://cdn.jsdelivr.net/npm/dseg@0.46.0/fonts/DSEG14-Modern/DSEG14Modern-Regular.woff2") format("woff2");
+    }
+
+    @font-face {
+      font-family: "DSEG14ModernMini";
+      src: url("https://cdn.jsdelivr.net/npm/dseg@0.46.0/fonts/DSEG14-Modern-MINI/DSEG14ModernMini-Regular.woff2") format("woff2");
+    }
+
+    @font-face {
+      font-family: "DSEG14ModernMiniLight";
+      src: url("https://cdn.jsdelivr.net/npm/dseg@0.46.0/fonts/DSEG14-Modern-MINI/DSEG14ModernMini-Light.woff2") format("woff2");
+    }
+
+    @font-face {
+      font-family: "DSEG14ModernMiniBold";
+      src: url("https://cdn.jsdelivr.net/npm/dseg@0.46.0/fonts/DSEG14-Modern-MINI/DSEG14ModernMini-Bold.woff2") format("woff2");
+    }
+
+    @font-face {
+      font-family: "DSEG14ModernMiniItalic";
+      src: url("https://cdn.jsdelivr.net/npm/dseg@0.46.0/fonts/DSEG14-Modern-MINI/DSEG14ModernMini-Italic.woff2") format("woff2");
+    }
+
+    @font-face {
+      font-family: "DSEG7ClassicMini";
+      src: url("https://cdn.jsdelivr.net/npm/dseg@0.46.0/fonts/DSEG7-Classic-MINI/DSEG7ClassicMini-Regular.woff2") format("woff2");
+    }
+
+    @font-face {
+      font-family: "DSEG7ModernMini";
+      src: url("https://cdn.jsdelivr.net/npm/dseg@0.46.0/fonts/DSEG7-Modern-MINI/DSEG7ModernMini-Regular.woff2") format("woff2");
+    }
+
+    @font-face {
+      font-family: "DSEG7SeggChanMini";
+      src: url("https://cdn.jsdelivr.net/npm/dseg@0.46.0/fonts/DSEG7-7SEGG-CHAN/DSEG7SEGGCHANMINI-Regular.woff2") format("woff2");
+    }
+
+    :root {
+      --bg: #050805;
+      --green: #00ff66;
+      --dim: #187a36;
+      --red: #ff2b2b;
+      --line: #0b361a;
+      --panel: #081108;
+      --text: #ccffd9;
+    }
+
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      background: #030503;
+      color: var(--text);
+      font-family: "Microsoft YaHei UI", system-ui, sans-serif;
+      padding: 28px;
+    }
+
+    h1 {
+      font-size: 24px;
+      margin: 0 0 8px;
+      color: var(--green);
+      letter-spacing: 0;
+    }
+
+    .note {
+      max-width: 980px;
+      color: #8ac79b;
+      font-size: 14px;
+      line-height: 1.7;
+      margin-bottom: 22px;
+    }
+
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(360px, 1fr));
+      gap: 18px;
+    }
+
+    .card {
+      background: #071007;
+      border: 1px solid #164a26;
+      border-radius: 8px;
+      padding: 14px;
+    }
+
+    .card h2 {
+      margin: 0 0 4px;
+      color: var(--green);
+      font-size: 18px;
+      letter-spacing: 0;
+    }
+
+    .meta {
+      color: #78a986;
+      font-size: 13px;
+      margin-bottom: 12px;
+      min-height: 38px;
+      line-height: 1.45;
+    }
+
+    .device {
+      width: 240px;
+      height: 135px;
+      background: var(--bg);
+      border: 1px solid #0b4a20;
+      box-shadow: 0 0 0 3px #020402, 0 0 18px rgba(0, 255, 102, 0.16);
+      image-rendering: pixelated;
+      margin-bottom: 12px;
+      position: relative;
+      overflow: hidden;
+    }
+
+    .status {
+      position: absolute;
+      left: 0;
+      top: 0;
+      width: 240px;
+      height: 21px;
+      border-bottom: 1px solid var(--line);
+      color: var(--green);
+    }
+
+    .tabs {
+      position: absolute;
+      left: 4px;
+      top: 1px;
+      display: flex;
+      gap: 6px;
+    }
+
+    .tab {
+      width: 38px;
+      height: 16px;
+      border: 1px solid var(--dim);
+      color: var(--dim);
+      text-align: center;
+      line-height: 16px;
+    }
+
+    .tab.active {
+      background: var(--green);
+      color: var(--bg);
+      border-color: var(--green);
+    }
+
+    .count {
+      position: absolute;
+      left: 142px;
+      top: 1px;
+    }
+
+    .battery {
+      position: absolute;
+      right: 4px;
+      top: 1px;
+      color: var(--green);
+    }
+
+    .row {
+      position: absolute;
+      left: 0;
+      width: 240px;
+      height: 20px;
+      color: var(--dim);
+      line-height: 20px;
+    }
+
+    .row.sel {
+      background: #003418;
+      color: var(--green);
+    }
+
+    .name { position: absolute; left: 14px; top: 0; }
+    .dur { position: absolute; right: 28px; top: 0; }
+    .cursor { position: absolute; left: 2px; top: 0; }
+
+    .wave {
+      position: absolute;
+      left: 0;
+      top: 16px;
+      width: 240px;
+      height: 93px;
+      border-top: 1px solid var(--line);
+      border-bottom: 1px solid var(--line);
+      background:
+        linear-gradient(to bottom, transparent 22px, #082712 23px, transparent 24px),
+        linear-gradient(to bottom, transparent 68px, #082712 69px, transparent 70px);
+    }
+
+    .bars {
+      position: absolute;
+      left: 8px;
+      top: 30px;
+      width: 224px;
+      height: 62px;
+      background: repeating-linear-gradient(
+        90deg,
+        rgba(0,255,102,.8) 0 1px,
+        transparent 1px 6px
+      );
+      opacity: .28;
+      clip-path: polygon(0 42%, 6% 28%, 12% 55%, 18% 38%, 24% 70%, 30% 36%, 36% 52%, 42% 25%, 48% 62%, 54% 44%, 60% 72%, 66% 32%, 72% 58%, 78% 40%, 84% 66%, 90% 36%, 100% 54%, 100% 100%, 0 100%);
+    }
+
+    .timer {
+      position: absolute;
+      left: 4px;
+      top: 113px;
+      color: var(--green);
+    }
+
+    .small-total {
+      position: absolute;
+      right: 4px;
+      top: 118px;
+      color: var(--dim);
+    }
+
+    .ascii16 {
+      font-family: "Courier New", "Consolas", monospace;
+      font-size: 16px;
+      font-weight: 700;
+      letter-spacing: 0;
+      text-rendering: geometricPrecision;
+    }
+
+    .c64 {
+      font-family: "Courier New", "Consolas", monospace;
+      font-size: 16px;
+      font-weight: 900;
+      letter-spacing: 0;
+      text-shadow: 1px 0 currentColor;
+      image-rendering: pixelated;
+    }
+
+    .font4 {
+      font-family: "Arial Black", Impact, sans-serif;
+      font-size: 24px;
+      font-weight: 900;
+      letter-spacing: 0;
+    }
+
+    .orbitron {
+      font-family: "Orbitron", "Eurostile", "Bank Gothic", "Arial Narrow", sans-serif;
+      font-size: 18px;
+      font-weight: 300;
+      letter-spacing: 0;
+    }
+
+    .timer.orbitron { font-size: 24px; top: 110px; }
+    .timer.font4 { top: 108px; }
+
+    .dseg7 {
+      font-family: "DSEG7Classic", monospace;
+      font-size: 24px;
+      letter-spacing: 0;
+    }
+
+    .dseg14 {
+      font-family: "DSEG14Classic", monospace;
+      font-size: 20px;
+      letter-spacing: 0;
+    }
+
+    .dseg14mini {
+      font-family: "DSEG14ClassicMini", monospace;
+      font-size: 16px;
+      letter-spacing: 0;
+    }
+
+    .dseg14mini-light {
+      font-family: "DSEG14ClassicMiniLight", monospace;
+      font-size: 16px;
+      letter-spacing: 0;
+    }
+
+    .dseg14mini-bold {
+      font-family: "DSEG14ClassicMiniBold", monospace;
+      font-size: 16px;
+      letter-spacing: 0;
+    }
+
+    .dseg14mini-italic {
+      font-family: "DSEG14ClassicMiniItalic", monospace;
+      font-size: 16px;
+      letter-spacing: 0;
+    }
+
+    .dseg14modern {
+      font-family: "DSEG14Modern", monospace;
+      font-size: 19px;
+      letter-spacing: 0;
+    }
+
+    .dseg14modern-mini {
+      font-family: "DSEG14ModernMini", monospace;
+      font-size: 16px;
+      letter-spacing: 0;
+    }
+
+    .dseg14modern-mini-light {
+      font-family: "DSEG14ModernMiniLight", monospace;
+      font-size: 16px;
+      letter-spacing: 0;
+    }
+
+    .dseg14modern-mini-bold {
+      font-family: "DSEG14ModernMiniBold", monospace;
+      font-size: 16px;
+      letter-spacing: 0;
+    }
+
+    .dseg14modern-mini-italic {
+      font-family: "DSEG14ModernMiniItalic", monospace;
+      font-size: 16px;
+      letter-spacing: 0;
+    }
+
+    .dseg7-mini {
+      font-family: "DSEG7ClassicMini", monospace;
+      font-size: 22px;
+      letter-spacing: 0;
+    }
+
+    .dseg7-modern-mini {
+      font-family: "DSEG7ModernMini", monospace;
+      font-size: 22px;
+      letter-spacing: 0;
+    }
+
+    .dseg7-chan-mini {
+      font-family: "DSEG7SeggChanMini", monospace;
+      font-size: 22px;
+      letter-spacing: 0;
+    }
+
+    .tiny5 {
+      font-family: "Tiny5", monospace;
+      font-size: 22px;
+      letter-spacing: 0;
+    }
+
+    .micro5 {
+      font-family: "Micro 5", monospace;
+      font-size: 24px;
+      letter-spacing: 0;
+    }
+
+    .sixtyfour {
+      font-family: "Sixtyfour", monospace;
+      font-size: 14px;
+      letter-spacing: 0;
+    }
+
+    .vt323 {
+      font-family: "VT323", monospace;
+      font-size: 24px;
+      letter-spacing: 0;
+    }
+
+    canvas.timer-canvas {
+      position: absolute;
+      left: 4px;
+      top: 113px;
+      width: 150px;
+      height: 18px;
+      image-rendering: pixelated;
+    }
+
+    canvas.bigseg-canvas {
+      position: absolute;
+      left: 4px;
+      top: 86px;
+      width: 228px;
+      height: 46px;
+      image-rendering: pixelated;
+    }
+
+    canvas.mid-canvas {
+      position: absolute;
+      left: 4px;
+      top: 111px;
+      width: 150px;
+      height: 22px;
+      image-rendering: pixelated;
+    }
+
+    canvas.list-canvas {
+      position: absolute;
+      right: 26px;
+      top: 1px;
+      width: 54px;
+      height: 18px;
+      image-rendering: pixelated;
+    }
+
+    .glowline {
+      filter: drop-shadow(0 0 4px rgba(0, 255, 102, .9));
+    }
+
+    .choice {
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+      color: #97d7a8;
+      font-size: 13px;
+    }
+
+    .pill {
+      border: 1px solid #1d6834;
+      padding: 4px 7px;
+      border-radius: 4px;
+      background: #081608;
+    }
+
+    .ok { color: var(--green); }
+    .warn { color: #ffd166; }
+  </style>
+</head>
+<body>
+  <h1>Cardputer 数字字体预览</h1>
+  <div class="note">
+    机器上的 M5GFX 内置字体不能直接在浏览器里 1:1 加载，所以这个页面用 CSS/canvas 模拟观感。
+    “M5GFX 内置”代表固件里可以直接切换；“自绘”代表我需要在固件里写一个小数字绘制器，但能做到更稳定的像素风。
+  </div>
+
+  <div class="grid">
+    <section class="card">
+      <h2>A. AsciiFont8x16</h2>
+      <div class="meta">M5GFX 内置。固定宽、清楚、老终端感。适合状态栏、电量、列表文件名、列表时长。</div>
+      <div class="device ascii16">
+        <div class="status">
+          <div class="tabs"><div class="tab active">REC</div><div class="tab">KEY</div><div class="tab">IMP</div></div>
+          <div class="count">128</div><div class="battery">87%</div>
+        </div>
+        <div class="row sel" style="top:26px"><span class="cursor">&gt;</span><span class="name">REC_0400</span><span class="dur">02:18</span></div>
+        <div class="row" style="top:47px"><span class="name">REC_0399</span><span class="dur">00:12</span></div>
+        <div class="row" style="top:68px"><span class="name">REC_0398*</span><span class="dur">18:44~</span></div>
+        <div class="row" style="top:89px"><span class="name">REC_0397</span><span class="dur">01:03</span></div>
+      </div>
+      <div class="choice"><span class="pill ok">推荐：小字/列表</span><span class="pill">清晰</span><span class="pill">低风险</span></div>
+    </section>
+
+    <section class="card">
+      <h2>B. Font8x8C64 放大 2 倍</h2>
+      <div class="meta">M5GFX 内置。更像 Commodore/C64 复古像素。适合主计时器，也可用于少量标题数字。</div>
+      <div class="device c64">
+        <div class="status"><span style="position:absolute;left:4px;top:1px">REC</span><span class="battery">87%</span></div>
+        <div class="wave"><div class="bars"></div></div>
+        <div class="timer c64">02:18</div>
+        <div class="small-total ascii16">/20:00</div>
+      </div>
+      <div class="choice"><span class="pill ok">当前主计时方案</span><span class="pill">像素味最强</span><span class="pill">可读</span></div>
+    </section>
+
+    <section class="card">
+      <h2>C. 自绘 5x7 点阵数字</h2>
+      <div class="meta">需要我写固件自绘函数。最像小仪器屏幕，数字规整、很省空间，能精确控制大小和间距。</div>
+      <div class="device ascii16">
+        <div class="status"><span style="position:absolute;left:4px;top:1px">REC_0400</span><span class="battery">87%</span></div>
+        <div class="wave"><div class="bars"></div></div>
+        <canvas class="timer-canvas" width="150" height="18" data-mode="dot" data-text="02:18"></canvas>
+        <canvas class="timer-canvas" style="left:184px;top:118px;width:52px;height:9px" width="52" height="9" data-mode="dot-small" data-text="/20:00"></canvas>
+      </div>
+      <div class="choice"><span class="pill ok">我的审美推荐</span><span class="pill">最可控</span><span class="pill">需要新增绘制代码</span></div>
+    </section>
+
+    <section class="card">
+      <h2>D. 自绘迷你七段数码管</h2>
+      <div class="meta">需要自绘。比 M5GFX 的 Font7 小很多，可以放进底栏；未来主义更强，但没有点阵那么“电脑味”。</div>
+      <div class="device ascii16">
+        <div class="status"><span style="position:absolute;left:4px;top:1px">REC</span><span class="battery">87%</span></div>
+        <div class="wave"><div class="bars"></div></div>
+        <canvas class="timer-canvas" width="150" height="18" data-mode="seg" data-text="02:18"></canvas>
+        <canvas class="timer-canvas" style="left:182px;top:118px;width:54px;height:9px" width="54" height="9" data-mode="seg-small" data-text="/20:00"></canvas>
+      </div>
+      <div class="choice"><span class="pill ok">未来感强</span><span class="pill">底栏可放下</span><span class="pill">需要新增绘制代码</span></div>
+    </section>
+
+    <section class="card">
+      <h2>E. Font4</h2>
+      <div class="meta">M5GFX 内置。之前主计时器用的风格。清楚但比较普通，不够像素复古。</div>
+      <div class="device font4">
+        <div class="status ascii16"><span style="position:absolute;left:4px;top:1px">REC</span><span class="battery">87%</span></div>
+        <div class="wave"><div class="bars"></div></div>
+        <div class="timer font4">02:18</div>
+        <div class="small-total ascii16">/20:00</div>
+      </div>
+      <div class="choice"><span class="pill">内置</span><span class="pill">清楚</span><span class="pill warn">风格偏普通</span></div>
+    </section>
+
+    <section class="card">
+      <h2>F. Orbitron Light</h2>
+      <div class="meta">M5GFX 内置 24/32。科幻感强，但不是像素风；24px 在状态栏偏大，比较适合大标题或全屏计时。</div>
+      <div class="device orbitron">
+        <div class="status"><span style="position:absolute;left:4px;top:1px">REC</span><span class="battery">87%</span></div>
+        <div class="wave"><div class="bars"></div></div>
+        <div class="timer orbitron">02:18</div>
+        <div class="small-total ascii16">/20:00</div>
+      </div>
+      <div class="choice"><span class="pill">内置</span><span class="pill">科幻</span><span class="pill warn">不够像素</span></div>
+    </section>
+
+    <section class="card">
+      <h2>G. M5GFX Font7</h2>
+      <div class="meta">M5GFX 内置七段数码管，真正数码表味。但高度 48px，当前底栏放不下，除非重排录音/播放界面。</div>
+      <div class="device ascii16">
+        <div class="status"><span style="position:absolute;left:4px;top:1px">REC</span><span class="battery">87%</span></div>
+        <div class="wave"><div class="bars"></div></div>
+        <canvas class="bigseg-canvas" width="228" height="46" data-mode="seg-big" data-text="02:18"></canvas>
+      </div>
+      <div class="choice"><span class="pill">内置</span><span class="pill">七段数码管</span><span class="pill warn">需要改布局</span></div>
+    </section>
+
+    <section class="card">
+      <h2>H. 方角晶体管七段</h2>
+      <div class="meta">自绘。线段都是硬直矩形，像电子表/老计算器模块。比 D 更硬，更“晶体管”。</div>
+      <div class="device ascii16">
+        <div class="status">
+          <span style="position:absolute;left:4px;top:1px">REC</span>
+          <canvas class="list-canvas" width="54" height="18" data-mode="sharp-small" data-text="87%"></canvas>
+        </div>
+        <div class="wave"><div class="bars"></div></div>
+        <canvas class="mid-canvas" width="150" height="22" data-mode="sharp" data-text="02:18"></canvas>
+      </div>
+      <div class="choice"><span class="pill ok">晶体管味强</span><span class="pill">底栏可放</span><span class="pill">自绘</span></div>
+    </section>
+
+    <section class="card">
+      <h2>I. 斜体 LCD 计算器</h2>
+      <div class="meta">自绘。七段数字整体右倾，像便携式电子表和计算器液晶屏。速度感更强，但复古感稍轻。</div>
+      <div class="device ascii16">
+        <div class="status">
+          <span style="position:absolute;left:4px;top:1px">REC_0400</span>
+          <canvas class="list-canvas" width="54" height="18" data-mode="lcd-small" data-text="87%"></canvas>
+        </div>
+        <div class="wave"><div class="bars"></div></div>
+        <canvas class="mid-canvas" width="150" height="22" data-mode="lcd" data-text="02:18"></canvas>
+      </div>
+      <div class="choice"><span class="pill">老电子表</span><span class="pill">偏薄</span><span class="pill">自绘</span></div>
+    </section>
+
+    <section class="card">
+      <h2>J. VFD 荧光数码管</h2>
+      <div class="meta">自绘。七段骨架 + 绿色辉光，像老录音机/车载仪表的真空荧光显示。屏幕上会很有氛围。</div>
+      <div class="device ascii16">
+        <div class="status"><span style="position:absolute;left:4px;top:1px">REC</span><span class="battery">87%</span></div>
+        <div class="wave"><div class="bars"></div></div>
+        <canvas class="mid-canvas glowline" width="150" height="22" data-mode="vfd" data-text="02:18"></canvas>
+        <canvas class="timer-canvas glowline" style="left:182px;top:118px;width:54px;height:9px" width="54" height="9" data-mode="vfd-small" data-text="/20:00"></canvas>
+      </div>
+      <div class="choice"><span class="pill ok">最有仪器氛围</span><span class="pill">可读</span><span class="pill">自绘</span></div>
+    </section>
+
+    <section class="card">
+      <h2>K. 十四段晶体管字母数字</h2>
+      <div class="meta">自绘。能画字母和数字，适合 `REC_0400` 这种混合文字；很像老设备的 alphanumeric display。</div>
+      <div class="device ascii16">
+        <div class="status"><canvas style="position:absolute;left:4px;top:1px;width:120px;height:18px" width="120" height="18" data-mode="fourteen-small" data-text="REC0400"></canvas><span class="battery">87%</span></div>
+        <div class="row sel" style="top:26px"><span class="cursor">&gt;</span><canvas style="position:absolute;left:14px;top:1px;width:92px;height:18px" width="92" height="18" data-mode="fourteen-small" data-text="REC0400"></canvas><span class="dur">02:18</span></div>
+        <div class="row" style="top:47px"><span class="name">REC_0399</span><span class="dur">00:12</span></div>
+        <div class="row" style="top:68px"><span class="name">REC_0398</span><span class="dur">18:44</span></div>
+      </div>
+      <div class="choice"><span class="pill ok">适合文件名</span><span class="pill">老设备感</span><span class="pill">自绘稍复杂</span></div>
+    </section>
+
+    <section class="card">
+      <h2>L. LED 点阵模块</h2>
+      <div class="meta">自绘。不是七段，而是一格格 LED 点阵，像早期电子招牌/仪器面板。数字和字母都能统一。</div>
+      <div class="device ascii16">
+        <div class="status"><canvas style="position:absolute;left:4px;top:1px;width:120px;height:18px" width="120" height="18" data-mode="led-small" data-text="REC0400"></canvas><span class="battery">87%</span></div>
+        <div class="wave"><div class="bars"></div></div>
+        <canvas class="mid-canvas" width="150" height="22" data-mode="led" data-text="02:18"></canvas>
+      </div>
+      <div class="choice"><span class="pill">点阵味</span><span class="pill">字母数字统一</span><span class="pill">自绘</span></div>
+    </section>
+
+    <section class="card">
+      <h2>M. DSEG7 Classic</h2>
+      <div class="meta">网上字体。真正 7 段 LCD/LED 字体，DSEG 系列，OFL 授权。非常接近你说的晶体管/数码管方向。</div>
+      <div class="device ascii16">
+        <div class="status"><span style="position:absolute;left:4px;top:1px">REC</span><span class="battery">87%</span></div>
+        <div class="wave"><div class="bars"></div></div>
+        <div class="timer dseg7" style="top:106px">02:18</div>
+        <div class="small-total ascii16">/20:00</div>
+      </div>
+      <div class="choice"><span class="pill ok">网上字体</span><span class="pill ok">强烈候选</span><span class="pill">需转换进固件</span></div>
+    </section>
+
+    <section class="card">
+      <h2>N. DSEG14 Classic</h2>
+      <div class="meta">网上字体。14 段显示，可以显示字母和数字，适合 `REC0400` 这类混合内容，比纯 7 段更像高级仪器。</div>
+      <div class="device dseg14">
+        <div class="status"><span style="position:absolute;left:4px;top:1px">REC0400</span><span class="battery ascii16">87%</span></div>
+        <div class="row sel" style="top:26px"><span class="cursor ascii16">&gt;</span><span class="name">REC0400</span><span class="dur ascii16">02:18</span></div>
+        <div class="row" style="top:47px"><span class="name">REC0399</span><span class="dur ascii16">00:12</span></div>
+        <div class="row" style="top:68px"><span class="name">REC0398</span><span class="dur ascii16">18:44</span></div>
+      </div>
+      <div class="choice"><span class="pill ok">文件名候选</span><span class="pill">仪表感</span><span class="pill">需转换进固件</span></div>
+    </section>
+
+    <section class="card">
+      <h2>O. DSEG14 Classic Mini</h2>
+      <div class="meta">网上字体。DSEG14 的迷你版，更适合小屏状态栏和列表；如果要全界面统一，这个比普通 DSEG14 更实用。</div>
+      <div class="device dseg14mini">
+        <div class="status"><span style="position:absolute;left:4px;top:1px">REC0400</span><span class="battery ascii16">87%</span></div>
+        <div class="row sel" style="top:26px"><span class="cursor ascii16">&gt;</span><span class="name">REC0400</span><span class="dur">02:18</span></div>
+        <div class="row" style="top:47px"><span class="name">REC0399</span><span class="dur">00:12</span></div>
+        <div class="row" style="top:68px"><span class="name">REC0398</span><span class="dur">18:44</span></div>
+      </div>
+      <div class="choice"><span class="pill ok">小屏友好</span><span class="pill ok">统一感强</span><span class="pill">需转换进固件</span></div>
+    </section>
+
+    <section class="card">
+      <h2>T. DSEG14 Classic Mini Light</h2>
+      <div class="meta">同一风格的细线版本。更像 LCD 灰绿液晶屏，精密、克制，但在 135px 小屏上可能偏细。</div>
+      <div class="device dseg14mini-light">
+        <div class="status"><span style="position:absolute;left:4px;top:1px">REC0400</span><span class="battery ascii16">87%</span></div>
+        <div class="row sel" style="top:26px"><span class="cursor ascii16">&gt;</span><span class="name">REC0400</span><span class="dur">02:18</span></div>
+        <div class="row" style="top:47px"><span class="name">REC0399</span><span class="dur">00:12</span></div>
+        <div class="row" style="top:68px"><span class="name">REC0398</span><span class="dur">18:44</span></div>
+      </div>
+      <div class="choice"><span class="pill">更精密</span><span class="pill">更轻</span><span class="pill warn">可能偏细</span></div>
+    </section>
+
+    <section class="card">
+      <h2>U. DSEG14 Classic Mini Bold</h2>
+      <div class="meta">同一风格的粗线版本。更像亮 LED 管，远看更清楚；如果你觉得 O 太淡，这个很可能更适合实机。</div>
+      <div class="device dseg14mini-bold">
+        <div class="status"><span style="position:absolute;left:4px;top:1px">REC0400</span><span class="battery ascii16">87%</span></div>
+        <div class="row sel" style="top:26px"><span class="cursor ascii16">&gt;</span><span class="name">REC0400</span><span class="dur">02:18</span></div>
+        <div class="row" style="top:47px"><span class="name">REC0399</span><span class="dur">00:12</span></div>
+        <div class="row" style="top:68px"><span class="name">REC0398</span><span class="dur">18:44</span></div>
+      </div>
+      <div class="choice"><span class="pill ok">小屏可读</span><span class="pill">亮 LED 感</span><span class="pill">候选</span></div>
+    </section>
+
+    <section class="card">
+      <h2>V. DSEG14 Classic Mini Italic</h2>
+      <div class="meta">轻微倾斜版。更像运动设备/车载仪表，速度感强；但文件列表可能没有直立版稳。</div>
+      <div class="device dseg14mini-italic">
+        <div class="status"><span style="position:absolute;left:4px;top:1px">REC0400</span><span class="battery ascii16">87%</span></div>
+        <div class="row sel" style="top:26px"><span class="cursor ascii16">&gt;</span><span class="name">REC0400</span><span class="dur">02:18</span></div>
+        <div class="row" style="top:47px"><span class="name">REC0399</span><span class="dur">00:12</span></div>
+        <div class="row" style="top:68px"><span class="name">REC0398</span><span class="dur">18:44</span></div>
+      </div>
+      <div class="choice"><span class="pill">速度感</span><span class="pill">车载仪表</span><span class="pill warn">列表稳定性一般</span></div>
+    </section>
+
+    <section class="card">
+      <h2>W. DSEG14 Modern Mini</h2>
+      <div class="meta">Modern 比 Classic 更方、更硬，电子模块感更强。它是 O 的近亲，但更冷峻一点。</div>
+      <div class="device dseg14modern-mini">
+        <div class="status"><span style="position:absolute;left:4px;top:1px">REC0400</span><span class="battery ascii16">87%</span></div>
+        <div class="row sel" style="top:26px"><span class="cursor ascii16">&gt;</span><span class="name">REC0400</span><span class="dur">02:18</span></div>
+        <div class="row" style="top:47px"><span class="name">REC0399</span><span class="dur">00:12</span></div>
+        <div class="row" style="top:68px"><span class="name">REC0398</span><span class="dur">18:44</span></div>
+      </div>
+      <div class="choice"><span class="pill ok">更硬朗</span><span class="pill">模块感</span><span class="pill">候选</span></div>
+    </section>
+
+    <section class="card">
+      <h2>X. DSEG14 Modern Mini Bold</h2>
+      <div class="meta">Modern Mini 的粗线版本。电子仪表味很强，也比常规版更容易在小屏读出来。</div>
+      <div class="device dseg14modern-mini-bold">
+        <div class="status"><span style="position:absolute;left:4px;top:1px">REC0400</span><span class="battery ascii16">87%</span></div>
+        <div class="row sel" style="top:26px"><span class="cursor ascii16">&gt;</span><span class="name">REC0400</span><span class="dur">02:18</span></div>
+        <div class="row" style="top:47px"><span class="name">REC0399</span><span class="dur">00:12</span></div>
+        <div class="row" style="top:68px"><span class="name">REC0398</span><span class="dur">18:44</span></div>
+      </div>
+      <div class="choice"><span class="pill ok">强可读</span><span class="pill ok">硬朗</span><span class="pill">候选</span></div>
+    </section>
+
+    <section class="card">
+      <h2>Y. DSEG14 Modern Mini Light</h2>
+      <div class="meta">Modern 的细线版本。很像低功耗 LCD 字符屏，气质高级，但实机可读性要谨慎。</div>
+      <div class="device dseg14modern-mini-light">
+        <div class="status"><span style="position:absolute;left:4px;top:1px">REC0400</span><span class="battery ascii16">87%</span></div>
+        <div class="row sel" style="top:26px"><span class="cursor ascii16">&gt;</span><span class="name">REC0400</span><span class="dur">02:18</span></div>
+        <div class="row" style="top:47px"><span class="name">REC0399</span><span class="dur">00:12</span></div>
+        <div class="row" style="top:68px"><span class="name">REC0398</span><span class="dur">18:44</span></div>
+      </div>
+      <div class="choice"><span class="pill">低功耗 LCD 感</span><span class="pill">细腻</span><span class="pill warn">可能偏细</span></div>
+    </section>
+
+    <section class="card">
+      <h2>Z. DSEG7 Classic Mini</h2>
+      <div class="meta">7 段迷你版，只适合数字，不适合 `REC` 字母。可以用于主计时器和时长，搭配 DSEG14 做文件名。</div>
+      <div class="device ascii16">
+        <div class="status"><span style="position:absolute;left:4px;top:1px">REC</span><span class="battery">87%</span></div>
+        <div class="wave"><div class="bars"></div></div>
+        <div class="timer dseg7-mini" style="top:108px">02:18</div>
+        <div class="small-total ascii16">/20:00</div>
+      </div>
+      <div class="choice"><span class="pill">数字专用</span><span class="pill">主计时器候选</span><span class="pill">搭配用</span></div>
+    </section>
+
+    <section class="card">
+      <h2>AA. DSEG7 Modern Mini</h2>
+      <div class="meta">7 段 Modern 迷你版，比 Z 更方。适合主计时器，如果想数字更像电子模块，可以选这个。</div>
+      <div class="device ascii16">
+        <div class="status"><span style="position:absolute;left:4px;top:1px">REC</span><span class="battery">87%</span></div>
+        <div class="wave"><div class="bars"></div></div>
+        <div class="timer dseg7-modern-mini" style="top:108px">02:18</div>
+        <div class="small-total ascii16">/20:00</div>
+      </div>
+      <div class="choice"><span class="pill ok">硬朗数字</span><span class="pill">主计时器候选</span><span class="pill">搭配用</span></div>
+    </section>
+
+    <section class="card">
+      <h2>AB. DSEG7 7SEGG-CHAN Mini</h2>
+      <div class="meta">DSEG 里更个性的 7 段变体，带一点玩具感/电子宠物感。不是最严肃，但很有记忆点。</div>
+      <div class="device ascii16">
+        <div class="status"><span style="position:absolute;left:4px;top:1px">REC</span><span class="battery">87%</span></div>
+        <div class="wave"><div class="bars"></div></div>
+        <div class="timer dseg7-chan-mini" style="top:108px">02:18</div>
+        <div class="small-total ascii16">/20:00</div>
+      </div>
+      <div class="choice"><span class="pill">个性强</span><span class="pill">玩具电子感</span><span class="pill warn">不够严肃</span></div>
+    </section>
+
+    <section class="card">
+      <h2>P. Tiny5</h2>
+      <div class="meta">Google Fonts。5 像素变量字体，灵感来自 80/90 年代计算器和数字设备；复古电子感强，但不是七段。</div>
+      <div class="device tiny5">
+        <div class="status"><span style="position:absolute;left:4px;top:1px">REC_0400</span><span class="battery">87%</span></div>
+        <div class="row sel" style="top:26px"><span class="cursor ascii16">&gt;</span><span class="name">REC_0400</span><span class="dur">02:18</span></div>
+        <div class="row" style="top:47px"><span class="name">REC_0399</span><span class="dur">00:12</span></div>
+        <div class="row" style="top:68px"><span class="name">REC_0398</span><span class="dur">18:44</span></div>
+      </div>
+      <div class="choice"><span class="pill">网上字体</span><span class="pill">像素电子</span><span class="pill">需转换进固件</span></div>
+    </section>
+
+    <section class="card">
+      <h2>Q. Micro 5</h2>
+      <div class="meta">Google Fonts。很窄、很数字设备，像低分辨率标签屏；适合列表，但数字可读性要实机确认。</div>
+      <div class="device micro5">
+        <div class="status"><span style="position:absolute;left:4px;top:1px">REC_0400</span><span class="battery">87%</span></div>
+        <div class="row sel" style="top:26px"><span class="cursor ascii16">&gt;</span><span class="name">REC_0400</span><span class="dur">02:18</span></div>
+        <div class="row" style="top:47px"><span class="name">REC_0399</span><span class="dur">00:12</span></div>
+        <div class="row" style="top:68px"><span class="name">REC_0398</span><span class="dur">18:44</span></div>
+      </div>
+      <div class="choice"><span class="pill">网上字体</span><span class="pill">很复古</span><span class="pill warn">偏窄</span></div>
+    </section>
+
+    <section class="card">
+      <h2>R. Sixtyfour</h2>
+      <div class="meta">Google Fonts。LED 点阵显示风格，字母和数字都统一；但细节多，小屏上可能会显得密。</div>
+      <div class="device sixtyfour">
+        <div class="status"><span style="position:absolute;left:4px;top:1px">REC0400</span><span class="battery ascii16">87%</span></div>
+        <div class="row sel" style="top:26px"><span class="cursor ascii16">&gt;</span><span class="name">REC0400</span><span class="dur ascii16">02:18</span></div>
+        <div class="row" style="top:47px"><span class="name">REC0399</span><span class="dur ascii16">00:12</span></div>
+        <div class="row" style="top:68px"><span class="name">REC0398</span><span class="dur ascii16">18:44</span></div>
+      </div>
+      <div class="choice"><span class="pill">网上字体</span><span class="pill">点阵 LED</span><span class="pill warn">可能太密</span></div>
+    </section>
+
+    <section class="card">
+      <h2>S. VT323</h2>
+      <div class="meta">Google Fonts。经典 CRT 终端味，数字很好看；不算晶体管，但很复古，适合做备用方向。</div>
+      <div class="device vt323">
+        <div class="status"><span style="position:absolute;left:4px;top:1px">REC_0400</span><span class="battery">87%</span></div>
+        <div class="row sel" style="top:26px"><span class="cursor ascii16">&gt;</span><span class="name">REC_0400</span><span class="dur">02:18</span></div>
+        <div class="row" style="top:47px"><span class="name">REC_0399</span><span class="dur">00:12</span></div>
+        <div class="row" style="top:68px"><span class="name">REC_0398</span><span class="dur">18:44</span></div>
+      </div>
+      <div class="choice"><span class="pill">网上字体</span><span class="pill">CRT 终端</span><span class="pill">备用方向</span></div>
+    </section>
+  </div>
+
+  <script>
+    const dot = {
+      "0":["111","101","101","101","101","101","111"],
+      "1":["010","110","010","010","010","010","111"],
+      "2":["111","001","001","111","100","100","111"],
+      "3":["111","001","001","111","001","001","111"],
+      "4":["101","101","101","111","001","001","001"],
+      "5":["111","100","100","111","001","001","111"],
+      "6":["111","100","100","111","101","101","111"],
+      "7":["111","001","001","010","010","010","010"],
+      "8":["111","101","101","111","101","101","111"],
+      "9":["111","101","101","111","001","001","111"],
+      ":":["0","1","0","0","1","0","0"],
+      "/":["001","001","010","010","010","100","100"],
+      " ":["0","0","0","0","0","0","0"]
+    };
+
+    const segs = {
+      "0":"abcfed", "1":"bc", "2":"abged", "3":"abgcd", "4":"fgbc",
+      "5":"afgcd", "6":"afgecd", "7":"abc", "8":"abcdefg", "9":"abfgcd"
+    };
+
+    function drawDot(ctx, text, scale) {
+      ctx.clearRect(0, 0, ctx.canvas.width, ctx.canvas.height);
+      ctx.fillStyle = "#00ff66";
+      let x = 0;
+      for (const ch of text) {
+        const glyph = dot[ch] || dot[" "];
+        const w = Math.max(...glyph.map(r => r.length));
+        for (let y = 0; y < glyph.length; y++) {
+          for (let col = 0; col < glyph[y].length; col++) {
+            if (glyph[y][col] === "1") ctx.fillRect(x + col * scale, y * scale, scale, scale);
+          }
+        }
+        x += (w + 1) * scale;
+      }
+    }
+
+    function drawSeven(ctx, text, scale, thick) {
+      ctx.clearRect(0, 0, ctx.canvas.width, ctx.canvas.height);
+      ctx.fillStyle = "#00ff66";
+      let x = 0;
+      const w = 8 * scale, h = 14 * scale, t = thick;
+      const draw = (name, ox) => {
+        if (name === "a") ctx.fillRect(ox + t, 0, w - 2*t, t);
+        if (name === "b") ctx.fillRect(ox + w - t, t, t, h/2 - t);
+        if (name === "c") ctx.fillRect(ox + w - t, h/2, t, h/2 - t);
+        if (name === "d") ctx.fillRect(ox + t, h - t, w - 2*t, t);
+        if (name === "e") ctx.fillRect(ox, h/2, t, h/2 - t);
+        if (name === "f") ctx.fillRect(ox, t, t, h/2 - t);
+        if (name === "g") ctx.fillRect(ox + t, h/2 - t/2, w - 2*t, t);
+      };
+      for (const ch of text) {
+        if (ch === ":") {
+          ctx.fillRect(x + 2*scale, 4*scale, thick, thick);
+          ctx.fillRect(x + 2*scale, 9*scale, thick, thick);
+          x += 4 * scale;
+        } else if (ch === "/") {
+          ctx.fillRect(x + 3*scale, 2*scale, thick, 3*scale);
+          ctx.fillRect(x + 2*scale, 6*scale, thick, 3*scale);
+          ctx.fillRect(x + scale, 10*scale, thick, 3*scale);
+          x += 5 * scale;
+        } else {
+          for (const s of (segs[ch] || "")) draw(s, x);
+          x += 10 * scale;
+        }
+      }
+    }
+
+    function drawSharp(ctx, text, scale, thick, slant = 0, glow = false) {
+      ctx.clearRect(0, 0, ctx.canvas.width, ctx.canvas.height);
+      ctx.save();
+      ctx.fillStyle = "#00ff66";
+      if (glow) {
+        ctx.shadowColor = "#00ff66";
+        ctx.shadowBlur = 6;
+      }
+      let x = 0;
+      const w = 8 * scale, h = 14 * scale, t = thick;
+      const rect = (rx, ry, rw, rh) => {
+        ctx.beginPath();
+        ctx.moveTo(x + rx + slant * ry, ry);
+        ctx.lineTo(x + rx + rw + slant * ry, ry);
+        ctx.lineTo(x + rx + rw + slant * (ry + rh), ry + rh);
+        ctx.lineTo(x + rx + slant * (ry + rh), ry + rh);
+        ctx.closePath();
+        ctx.fill();
+      };
+      const draw = (name) => {
+        if (name === "a") rect(t, 0, w - 2*t, t);
+        if (name === "b") rect(w - t, t, t, h/2 - t);
+        if (name === "c") rect(w - t, h/2, t, h/2 - t);
+        if (name === "d") rect(t, h - t, w - 2*t, t);
+        if (name === "e") rect(0, h/2, t, h/2 - t);
+        if (name === "f") rect(0, t, t, h/2 - t);
+        if (name === "g") rect(t, h/2 - t/2, w - 2*t, t);
+      };
+      for (const ch of text) {
+        if (ch === ":") {
+          rect(2*scale, 4*scale, t, t);
+          rect(2*scale, 9*scale, t, t);
+          x += 4 * scale;
+        } else if (ch === "/" || ch === "%") {
+          rect(3*scale, 2*scale, t, 3*scale);
+          rect(2*scale, 6*scale, t, 3*scale);
+          rect(scale, 10*scale, t, 3*scale);
+          x += 5 * scale;
+        } else {
+          for (const s of (segs[ch] || "")) draw(s);
+          x += 10 * scale;
+        }
+      }
+      ctx.restore();
+    }
+
+    const matrix = {
+      R:["1110","1001","1001","1110","1010","1001","1001"],
+      E:["1111","1000","1000","1110","1000","1000","1111"],
+      C:["1111","1000","1000","1000","1000","1000","1111"],
+      "_":["0000","0000","0000","0000","0000","0000","1111"]
+    };
+
+    function drawMatrix(ctx, text, scale, round = false) {
+      ctx.clearRect(0, 0, ctx.canvas.width, ctx.canvas.height);
+      ctx.fillStyle = "#00ff66";
+      let x = 0;
+      for (const raw of text) {
+        const ch = raw === "_" ? "_" : raw.toUpperCase();
+        const glyph = matrix[ch] || dot[ch] || dot[" "];
+        const w = Math.max(...glyph.map(r => r.length));
+        for (let y = 0; y < glyph.length; y++) {
+          for (let col = 0; col < glyph[y].length; col++) {
+            if (glyph[y][col] !== "1") continue;
+            if (round) {
+              ctx.beginPath();
+              ctx.arc(x + col * scale + scale / 2, y * scale + scale / 2, scale * .42, 0, Math.PI * 2);
+              ctx.fill();
+            } else {
+              ctx.fillRect(x + col * scale, y * scale, scale, scale);
+            }
+          }
+        }
+        x += (w + 1) * scale;
+      }
+    }
+
+    function drawFourteen(ctx, text, scale) {
+      ctx.clearRect(0, 0, ctx.canvas.width, ctx.canvas.height);
+      ctx.strokeStyle = "#00ff66";
+      ctx.lineWidth = Math.max(1, scale);
+      ctx.lineCap = "square";
+      let x = 0;
+      const drawLine = (x1, y1, x2, y2) => {
+        ctx.beginPath();
+        ctx.moveTo(x + x1 * scale, y1 * scale);
+        ctx.lineTo(x + x2 * scale, y2 * scale);
+        ctx.stroke();
+      };
+      const use = {
+        R:["a","f","b","g","j","m","e"], E:["a","f","g","e","d"], C:["a","f","e","d"],
+        "0":["a","b","c","d","e","f"], "1":["b","c"], "2":["a","b","g","e","d"],
+        "3":["a","b","g","c","d"], "4":["f","g","b","c"], "5":["a","f","g","c","d"],
+        "6":["a","f","g","e","c","d"], "7":["a","b","c"], "8":["a","b","c","d","e","f","g"],
+        "9":["a","b","c","d","f","g"]
+      };
+      const map = {
+        a:[1,0,7,0], b:[8,1,8,6], c:[8,8,8,13], d:[1,14,7,14],
+        e:[0,8,0,13], f:[0,1,0,6], g:[1,7,7,7],
+        j:[1,1,7,6], m:[1,13,7,8]
+      };
+      for (const raw of text) {
+        const ch = raw.toUpperCase();
+        for (const s of (use[ch] || [])) drawLine(...map[s]);
+        x += 11 * scale;
+      }
+    }
+
+    document.querySelectorAll("canvas[data-mode]").forEach(c => {
+      const ctx = c.getContext("2d");
+      const mode = c.dataset.mode;
+      const text = c.dataset.text;
+      if (mode === "dot") drawDot(ctx, text, 2);
+      if (mode === "dot-small") drawDot(ctx, text, 1);
+      if (mode === "seg") drawSeven(ctx, text, 1, 2);
+      if (mode === "seg-small") drawSeven(ctx, text, 0.55, 1);
+      if (mode === "seg-big") drawSeven(ctx, text, 3, 5);
+      if (mode === "sharp") drawSharp(ctx, text, 1.15, 3);
+      if (mode === "sharp-small") drawSharp(ctx, text, .7, 1.5);
+      if (mode === "lcd") drawSharp(ctx, text, 1.1, 2, .18);
+      if (mode === "lcd-small") drawSharp(ctx, text, .7, 1.2, .18);
+      if (mode === "vfd") drawSharp(ctx, text, 1.1, 2, 0, true);
+      if (mode === "vfd-small") drawSharp(ctx, text, .55, 1, 0, true);
+      if (mode === "fourteen-small") drawFourteen(ctx, text, 1.15);
+      if (mode === "led") drawMatrix(ctx, text, 2, true);
+      if (mode === "led-small") drawMatrix(ctx, text, 1.15, true);
+    });
+  </script>
+</body>
+</html>
