@@ -2,8 +2,10 @@
  * 我的工具箱 (My Toolbox) for M5Stack Cardputer-Adv
  * 风格: 纯黑背景 + 黑客帝国荧光绿 + 线性 + 中文界面 + 横屏(240x135)
  *
+ * 工具箱交互:
+ *   开机: 自动开始录音; 息屏: 空格=录音, 回车=录音列表, F=番茄钟, Ctrl=应用列表
+ *
  * 录音应用交互:
- *   开机: 自动开始录音; 息屏: 空格=录音, 回车=列表
  *   录制中: 空格=暂停/继续; 回车=结束(存盘并进入列表); Esc=存盘并息屏; 长按Del 1.2秒=取消并删除本条; W/S=音量
  *   录音列表: 左/右切 REC/KEY/IMP; ;/. 上下选; 回车=播放; Esc=息屏; 长按Del=删除; Ctrl+键=绑定快捷; Ctrl+Enter=标重要; Alt=降噪
  *   回放: 播放完自动回列表; 回车=暂停/继续; 退格=回列表; ;/.=上一条/下一条; Esc=息屏; +/- (= 与 - 键)=音量; 长按Del 1.2秒=删除当前录音; 空格=去录音
@@ -16,6 +18,11 @@
 #include <SPI.h>
 #include "esp_sleep.h"   // 轻睡眠(息屏省电)
 #include "driver/gpio.h" // 键盘中断唤醒(GPIO11)
+
+#define UPLOAD_WIFI_ENABLED 1  // 需要使用 8MB Flash + 3MB APP 分区编译
+#if UPLOAD_WIFI_ENABLED
+#include <WiFi.h>
+#endif
 
 // ---------- 屏幕方向 ----------
 // 横屏: 1 或 3. 若上下颠倒, 改另一个即可.
@@ -72,6 +79,19 @@ static int16_t pbBuf[2][PB_N];           // 播放双缓冲(放一块/读另一�
 static int16_t seekToneBuf[384];
 int recGain = 50;                        // 录音软件增益默认值(W/S 现场可调, 带削波保护)
 int playVol = 200;                       // 回放音量(+/- 可调, 0..255)
+static uint32_t lastUploadTickMs = 0;
+
+#define UPSTAT_IDLE     0
+#define UPSTAT_QUEUED   1
+#define UPSTAT_DONE     2
+#define UPSTAT_NO_CFG   3
+#define UPSTAT_BAD_URL  4
+#define UPSTAT_WIFI_ERR 5
+#define UPSTAT_HTTP_ERR 6
+#define UPSTAT_NO_SD    7
+#define UPSTAT_NO_FILE  8
+#define UPSTAT_ABORTED  9
+static uint8_t g_uploadStatus = UPSTAT_IDLE;
 
 // SD 引脚(运行时由 M5Unified 按机型给出, 失败则回退到 Adv 已知值)
 int sdSCLK = 40, sdMISO = 39, sdMOSI = 14, sdCS = 12;
@@ -83,6 +103,10 @@ static const char *HOTKEY_PATH = "/SHORTCUT/keys.txt";
 static const char *OLD_IMPORTANT_HOTKEY_PATH = "/IMPORTANT/keys.txt";
 static const char *OLD_HOTKEY_PATH = "/REC/keys.txt";
 static const char *NEXT_INDEX_PATH = "/REC/.next";
+static const char *UPLOAD_DIR = "/UPLOAD";
+static const char *UPLOAD_QUEUE_PATH = "/UPLOAD/queue.txt";
+static const char *UPLOAD_DONE_PATH = "/UPLOAD/done.txt";
+static const char *UPLOAD_CONFIG_PATH = "/UPLOAD/net.txt";
 static const int MAX_REC = 9999;
 static const uint16_t FRICTION_NOW_SEC = 60;
 static const uint16_t FRICTION_IDLE_MAX_SEC = 20 * 60;
@@ -108,8 +132,14 @@ static bool hotkeysLoaded = false;
 static bool micInputReady = false;
 static bool forceMicRearm = true;  // 开机/唤醒后的第一次正式录音要强制重建输入链路
 static bool autoRecordPending = true;
-static int wakeAction = 1;  // R_RECORD, 这里早于返回码宏定义
 static bool speakerOutputReady = false;
+
+#define APP_REC_RECORD 1
+#define APP_REC_LIST   2
+#define APP_LAUNCHER   3
+#define APP_POMODORO   4
+
+static uint8_t wakeApp = APP_REC_RECORD;
 
 // ---------- SD 辅助 ----------
 static bool sdMount() {
@@ -165,6 +195,7 @@ static void writeWavHeader(File &f, uint32_t rate, uint32_t dataBytes) {
 #define R_DELETE 5   // Del长按确认后删除当前录音
 int g_nextPlay = 0;  // 配合 R_PLAY: 要切换去播放的录音编号
 int g_afterRecord = R_LIST;  // 录音结束后跳转目标
+static bool g_uploadAfterRecord = false;
 int g_listReturnRec = 0;     // 播放页返回列表时应重新选中的录音
 int g_carryDeleteRec = 0;
 uint32_t g_carryDeleteStart = 0;
@@ -223,8 +254,29 @@ static bool keyUp()    { return M5Cardputer.Keyboard.isKeyPressed(';'); }
 static bool keyDown()  { return M5Cardputer.Keyboard.isKeyPressed('.'); }
 static bool keyLeft()  { return M5Cardputer.Keyboard.isKeyPressed(','); }
 static bool keyRight() { return M5Cardputer.Keyboard.isKeyPressed('/'); }
+static bool keyUpload() { return M5Cardputer.Keyboard.isKeyPressed('\\') || M5Cardputer.Keyboard.isKeyPressed('|'); }
 static bool keyVolUp() { return M5Cardputer.Keyboard.isKeyPressed('=') || M5Cardputer.Keyboard.isKeyPressed('+'); }
 static bool keyVolDn() { return M5Cardputer.Keyboard.isKeyPressed('-') || M5Cardputer.Keyboard.isKeyPressed('_'); }
+
+static bool wakeAppFromPressedKeys(uint8_t &app) {
+  if (keySpace()) {
+    app = APP_REC_RECORD;
+    return true;
+  }
+  if (keyEnter()) {
+    app = APP_REC_LIST;
+    return true;
+  }
+  if (M5Cardputer.Keyboard.isKeyPressed('f') || M5Cardputer.Keyboard.isKeyPressed('F')) {
+    app = APP_POMODORO;
+    return true;
+  }
+  if (keyCtrl()) {
+    app = APP_LAUNCHER;
+    return true;
+  }
+  return false;
+}
 
 static void adjustPlayVolume(int delta) {
   playVol = max(0, min(255, playVol + delta));
@@ -702,6 +754,8 @@ static uint8_t shortcutBits[(MAX_REC + 8) / 8];
 static uint8_t importantBits[(MAX_REC + 8) / 8];
 static uint8_t frictionDoneBits[(MAX_REC + 8) / 8];
 static uint8_t frictionPendingBits[(MAX_REC + 8) / 8];
+static uint8_t uploadQueuedBits[(MAX_REC + 8) / 8];
+static uint8_t uploadDoneBits[(MAX_REC + 8) / 8];
 static uint16_t recDurationSec[MAX_REC];
 
 static void clearImportantBits() {
@@ -727,6 +781,30 @@ static bool frictionDone(int recNum) { return bitIsSet(frictionDoneBits, recNum)
 static bool frictionPending(int recNum) { return bitIsSet(frictionPendingBits, recNum); }
 static void setFrictionDone(int recNum, bool on) { setBit(frictionDoneBits, recNum, on); }
 static void setFrictionPending(int recNum, bool on) { setBit(frictionPendingBits, recNum, on); }
+static bool uploadQueued(int recNum) { return bitIsSet(uploadQueuedBits, recNum); }
+static bool uploadDone(int recNum) { return bitIsSet(uploadDoneBits, recNum); }
+static void setUploadQueued(int recNum, bool on) { setBit(uploadQueuedBits, recNum, on); }
+static void setUploadDone(int recNum, bool on) { setBit(uploadDoneBits, recNum, on); }
+
+static void loadUploadBitFile(const char *path, uint8_t *bits) {
+  File f = SD.open(path, FILE_READ);
+  if (!f) return;
+  char line[32];
+  while (f.available()) {
+    int n = f.readBytesUntil('\n', line, sizeof(line) - 1);
+    line[n] = 0;
+    int recNum = atoi(line);
+    if (recNum > 0) setBit(bits, recNum, true);
+  }
+  f.close();
+}
+
+static void loadUploadStateMounted() {
+  memset(uploadQueuedBits, 0, sizeof(uploadQueuedBits));
+  memset(uploadDoneBits, 0, sizeof(uploadDoneBits));
+  loadUploadBitFile(UPLOAD_QUEUE_PATH, uploadQueuedBits);
+  loadUploadBitFile(UPLOAD_DONE_PATH, uploadDoneBits);
+}
 
 static uint16_t durationFromFileSize(uint32_t fileSize) {
   if (fileSize <= 44) return 0;
@@ -890,6 +968,7 @@ static void scanRecordings(bool compactNext = false) {
   scanRecordingDir(REC_DIR, REC_NORMAL, maxIdx);
   scanRecordingDir(SHORTCUT_DIR, REC_SHORTCUT, maxIdx);
   scanRecordingDir(IMPORTANT_DIR, REC_IMPORTANT, maxIdx);
+  loadUploadStateMounted();
   nextRecHint = lowestAvailableRecordingIndex();
   writeNextIndexCache(nextRecHint);
   SD.end();
@@ -1540,6 +1619,302 @@ void afterRecordingFlow(int recNum) {
   }
 }
 
+// ---------- 系统层上传服务: 录音应用只入队, 盒子负责 Wi-Fi / 调度 / 重试 ----------
+struct UploadConfig {
+  char ssid[33];
+  char password[65];
+  char url[129];
+  char token[65];
+  char device[25];
+};
+static UploadConfig uploadCfg;
+
+static void strTrim(char *s) {
+  if (!s) return;
+  size_t len = strlen(s);
+  while (len > 0 && (s[len - 1] == '\r' || s[len - 1] == '\n' || s[len - 1] == ' ' || s[len - 1] == '\t')) s[--len] = 0;
+  char *p = s;
+  while (*p == ' ' || *p == '\t') p++;
+  if (p != s) memmove(s, p, strlen(p) + 1);
+}
+
+static void copyCfgValue(char *dst, size_t dstLen, const char *src) {
+  if (!dst || dstLen == 0) return;
+  if (!src) { dst[0] = 0; return; }
+  strlcpy(dst, src, dstLen);
+  strTrim(dst);
+}
+
+static bool loadUploadConfig() {
+  memset(&uploadCfg, 0, sizeof(uploadCfg));
+  strlcpy(uploadCfg.device, "cardputer-001", sizeof(uploadCfg.device));
+  if (!SD.exists(UPLOAD_CONFIG_PATH)) return false;
+  File f = SD.open(UPLOAD_CONFIG_PATH, FILE_READ);
+  if (!f) return false;
+  char line[180];
+  while (f.available()) {
+    int n = f.readBytesUntil('\n', line, sizeof(line) - 1);
+    line[n] = 0;
+    strTrim(line);
+    if (line[0] == 0 || line[0] == '#') continue;
+    char *eq = strchr(line, '=');
+    if (!eq) continue;
+    *eq++ = 0;
+    strTrim(line);
+    strTrim(eq);
+    if (strcmp(line, "ssid") == 0) copyCfgValue(uploadCfg.ssid, sizeof(uploadCfg.ssid), eq);
+    else if (strcmp(line, "password") == 0) copyCfgValue(uploadCfg.password, sizeof(uploadCfg.password), eq);
+    else if (strcmp(line, "url") == 0) copyCfgValue(uploadCfg.url, sizeof(uploadCfg.url), eq);
+    else if (strcmp(line, "token") == 0) copyCfgValue(uploadCfg.token, sizeof(uploadCfg.token), eq);
+    else if (strcmp(line, "device") == 0) copyCfgValue(uploadCfg.device, sizeof(uploadCfg.device), eq);
+  }
+  f.close();
+  return uploadCfg.ssid[0] && uploadCfg.url[0] && uploadCfg.token[0];
+}
+
+static bool uploadLineHasRec(const char *path, int recNum) {
+  File f = SD.open(path, FILE_READ);
+  if (!f) return false;
+  char line[32];
+  while (f.available()) {
+    int n = f.readBytesUntil('\n', line, sizeof(line) - 1);
+    line[n] = 0;
+    if (atoi(line) == recNum) { f.close(); return true; }
+  }
+  f.close();
+  return false;
+}
+
+static bool enqueueUploadMounted(int recNum, uint8_t kind) {
+  if (recNum <= 0) return false;
+  if (!SD.exists(UPLOAD_DIR)) SD.mkdir(UPLOAD_DIR);
+  if (uploadLineHasRec(UPLOAD_DONE_PATH, recNum)) {
+    setUploadDone(recNum, true);
+    return true;
+  }
+  if (uploadLineHasRec(UPLOAD_QUEUE_PATH, recNum)) {
+    setUploadQueued(recNum, true);
+    return true;
+  }
+  File f = SD.open(UPLOAD_QUEUE_PATH, FILE_APPEND);
+  if (!f) return false;
+  f.printf("%d %u\n", recNum, (unsigned)kind);
+  f.close();
+  setUploadQueued(recNum, true);
+  return true;
+}
+
+static bool uploadReadFirstJob(int &recNum, uint8_t &kind) {
+  recNum = 0;
+  kind = REC_NORMAL;
+  File f = SD.open(UPLOAD_QUEUE_PATH, FILE_READ);
+  if (!f) return false;
+  char line[32];
+  while (f.available()) {
+    int n = f.readBytesUntil('\n', line, sizeof(line) - 1);
+    line[n] = 0;
+    strTrim(line);
+    if (!line[0]) continue;
+    int k = 0;
+    if (sscanf(line, "%d %d", &recNum, &k) >= 1 && recNum > 0) {
+      if (k >= REC_NORMAL && k <= REC_IMPORTANT) kind = (uint8_t)k;
+      f.close();
+      return true;
+    }
+  }
+  f.close();
+  return false;
+}
+
+static void uploadDropFirstJob() {
+  File in = SD.open(UPLOAD_QUEUE_PATH, FILE_READ);
+  if (!in) return;
+  const char *tmp = "/UPLOAD/queue.tmp";
+  SD.remove(tmp);
+  File out = SD.open(tmp, FILE_WRITE);
+  bool dropped = false;
+  int droppedRec = 0;
+  char line[48];
+  while (in.available()) {
+    int n = in.readBytesUntil('\n', line, sizeof(line) - 1);
+    line[n] = 0;
+    if (!dropped) {
+      dropped = true;
+      droppedRec = atoi(line);
+      continue;
+    }
+    if (out) out.printf("%s\n", line);
+  }
+  in.close();
+  if (out) {
+    out.close();
+    SD.remove(UPLOAD_QUEUE_PATH);
+    SD.rename(tmp, UPLOAD_QUEUE_PATH);
+  } else {
+    SD.remove(tmp);
+  }
+  if (droppedRec > 0) setUploadQueued(droppedRec, false);
+}
+
+static void uploadMarkDone(int recNum) {
+  if (!SD.exists(UPLOAD_DIR)) SD.mkdir(UPLOAD_DIR);
+  File f = SD.open(UPLOAD_DONE_PATH, FILE_APPEND);
+  if (!f) return;
+  f.printf("%d\n", recNum);
+  f.close();
+  setUploadDone(recNum, true);
+  setUploadQueued(recNum, false);
+}
+
+#if UPLOAD_WIFI_ENABLED
+static bool ensureWifiConnected() {
+  if (WiFi.status() == WL_CONNECTED) return true;
+  WiFi.mode(WIFI_STA);
+  WiFi.begin(uploadCfg.ssid, uploadCfg.password);
+  uint32_t start = millis();
+  while (WiFi.status() != WL_CONNECTED && millis() - start < 8000) {
+    M5Cardputer.update();
+    if (M5Cardputer.Keyboard.isPressed()) return false;
+    delay(100);
+  }
+  return WiFi.status() == WL_CONNECTED;
+}
+
+static bool parseHttpUrl(const char *url, char *host, size_t hostLen, uint16_t &port, char *path, size_t pathLen) {
+  const char *prefix = "http://";
+  if (strncmp(url, prefix, 7) != 0) return false;
+  const char *p = url + 7;
+  const char *slash = strchr(p, '/');
+  const char *hostEnd = slash ? slash : (p + strlen(p));
+  const char *colon = nullptr;
+  for (const char *q = p; q < hostEnd; q++) {
+    if (*q == ':') { colon = q; break; }
+  }
+  size_t hLen = (colon ? colon : hostEnd) - p;
+  if (hLen == 0 || hLen >= hostLen) return false;
+  memcpy(host, p, hLen);
+  host[hLen] = 0;
+  port = colon ? (uint16_t)atoi(colon + 1) : 80;
+  if (port == 0) port = 80;
+  strlcpy(path, slash ? slash : "/", pathLen);
+  return true;
+}
+
+static uint8_t validateUploadConfigMounted() {
+  if (!loadUploadConfig()) return UPSTAT_NO_CFG;
+  char host[65], urlPath[96];
+  uint16_t port = 80;
+  if (!parseHttpUrl(uploadCfg.url, host, sizeof(host), port, urlPath, sizeof(urlPath))) return UPSTAT_BAD_URL;
+  return UPSTAT_IDLE;
+}
+
+static bool uploadOneJobMounted() {
+  if (!loadUploadConfig()) { g_uploadStatus = UPSTAT_NO_CFG; return false; }
+  int recNum = 0;
+  uint8_t kind = REC_NORMAL;
+  if (!uploadReadFirstJob(recNum, kind)) return false;
+  char path[40];
+  uint8_t currentKind = recKindOf(recNum);
+  recordingPathKind(recNum, currentKind, path, sizeof(path));
+  if (!SD.exists(path) && currentKind != kind) recordingPathKind(recNum, kind, path, sizeof(path));
+  if (!SD.exists(path)) {
+    uploadDropFirstJob();
+    g_uploadStatus = UPSTAT_NO_FILE;
+    return true;
+  }
+  if (!ensureWifiConnected()) { g_uploadStatus = UPSTAT_WIFI_ERR; return false; }
+  File f = SD.open(path, FILE_READ);
+  if (!f || f.size() <= 44) { if (f) f.close(); uploadDropFirstJob(); g_uploadStatus = UPSTAT_NO_FILE; return true; }
+  char host[65], urlPath[96];
+  uint16_t port = 80;
+  if (!parseHttpUrl(uploadCfg.url, host, sizeof(host), port, urlPath, sizeof(urlPath))) { f.close(); g_uploadStatus = UPSTAT_BAD_URL; return false; }
+  char name[18];
+  char hostHeader[72];
+  snprintf(name, sizeof(name), "REC_%04d.wav", recNum);
+  if (port == 80) snprintf(hostHeader, sizeof(hostHeader), "%s", host);
+  else snprintf(hostHeader, sizeof(hostHeader), "%s:%u", host, (unsigned)port);
+  WiFiClient client;
+  client.setTimeout(8000);
+  if (!client.connect(host, port)) { f.close(); g_uploadStatus = UPSTAT_HTTP_ERR; return false; }
+  client.printf("POST %s HTTP/1.1\r\n", urlPath);
+  client.printf("Host: %s\r\n", hostHeader);
+  client.print("Connection: close\r\n");
+  client.print("Content-Type: audio/wav\r\n");
+  client.printf("Content-Length: %u\r\n", (unsigned)f.size());
+  client.printf("X-Upload-Token: %s\r\n", uploadCfg.token);
+  client.printf("X-Device-Id: %s\r\n", uploadCfg.device);
+  client.printf("X-Recording-Name: %s\r\n\r\n", name);
+  uint8_t buf[512];
+  while (f.available()) {
+    size_t n = f.read(buf, sizeof(buf));
+    if (n == 0) break;
+    if (client.write(buf, n) != n) { client.stop(); f.close(); g_uploadStatus = UPSTAT_HTTP_ERR; return false; }
+    M5Cardputer.update();
+    if (M5Cardputer.Keyboard.isPressed()) { client.stop(); f.close(); g_uploadStatus = UPSTAT_ABORTED; return false; }
+    delay(1);
+  }
+  uint32_t start = millis();
+  while (!client.available() && client.connected() && millis() - start < 8000) {
+    M5Cardputer.update();
+    if (M5Cardputer.Keyboard.isPressed()) { client.stop(); f.close(); g_uploadStatus = UPSTAT_ABORTED; return false; }
+    delay(20);
+  }
+  int code = 0;
+  if (client.available()) {
+    String status = client.readStringUntil('\n');
+    int sp = status.indexOf(' ');
+    if (sp >= 0) code = status.substring(sp + 1).toInt();
+  }
+  client.stop();
+  f.close();
+  if ((code >= 200 && code < 300) || code == 409) {
+    uploadMarkDone(recNum);
+    uploadDropFirstJob();
+    g_uploadStatus = UPSTAT_DONE;
+    return true;
+  }
+  g_uploadStatus = UPSTAT_HTTP_ERR;
+  return false;
+}
+#else
+static bool uploadOneJobMounted() {
+  return false;
+}
+
+static uint8_t validateUploadConfigMounted() {
+  return UPSTAT_IDLE;
+}
+#endif
+
+static const char *uploadStatusLabel(uint8_t status) {
+  switch (status) {
+    case UPSTAT_QUEUED: return "UPLOAD";
+    case UPSTAT_DONE: return "OK";
+    case UPSTAT_NO_CFG: return "NO CFG";
+    case UPSTAT_BAD_URL: return "BAD URL";
+    case UPSTAT_WIFI_ERR: return "WIFI ERR";
+    case UPSTAT_HTTP_ERR: return "HTTP ERR";
+    case UPSTAT_NO_SD: return "NO SD";
+    case UPSTAT_NO_FILE: return "NO FILE";
+    case UPSTAT_ABORTED: return "ABORT";
+    default: return "UPLOAD";
+  }
+}
+
+static bool systemIdleTick() {
+#if !UPLOAD_WIFI_ENABLED
+  return false;
+#endif
+  if (M5Cardputer.Keyboard.isPressed()) return false;
+  uint32_t now = millis();
+  if (now - lastUploadTickMs < 30000) return false;
+  lastUploadTickMs = now;
+  if (!sdMount()) { g_uploadStatus = UPSTAT_NO_SD; return false; }
+  bool changed = uploadOneJobMounted();
+  SD.end();
+  return changed;
+}
+
 // ---------- 按键摩擦后处理: 只压低低能量、高变化率的细碎刮擦声 ----------
 static bool suppressKeyFriction(const char *path, uint32_t dataBytes, bool abortOnKey) {
   if (dataBytes < REC_N * 2) return false;
@@ -1800,6 +2175,7 @@ void drawRecCanvas(M5Canvas &cv, uint32_t elapsedMs, bool blink, int16_t *wave, 
 int recordingScreen() {
   auto &d = M5Cardputer.Display;
   g_afterRecord = R_LIST;
+  g_uploadAfterRecord = false;
 
   // 准备阶段仍显示 READY, 真正开始采样后才亮 REC 红点
   memset(waveBars, 0, sizeof(waveBars));
@@ -1865,7 +2241,7 @@ int recordingScreen() {
         if (!M5Cardputer.Keyboard.isPressed()) ignoreStartKey = false;
       } else if (recScreenOff) {
         if (M5Cardputer.Keyboard.isChange() && M5Cardputer.Keyboard.isPressed()) {
-          if (keyTab() || keySpace() || keyDel() || keyEnter()) {
+          if (keyTab() || keySpace() || keyDel() || keyEnter() || keyUpload()) {
             recScreenOff = false;
             ignoreStartKey = true;
             delHoldStart = 0;
@@ -1900,6 +2276,7 @@ int recordingScreen() {
           waitRelease();
         }
         else if (keyEsc()) { g_afterRecord = R_BACK; stop = true; break; }
+        else if (keyUpload()) { drawCanvasToast(cv, "UPLOAD", COL_GREEN); g_uploadAfterRecord = true; g_afterRecord = R_LIST; stop = true; break; }
         else if (keyEnter()) { drawCanvasSaveBadge(cv); g_afterRecord = R_LIST; stop = true; break; }
         else if (keyAlt()) { drawCanvasToast(cv, "WAIT", COL_GREEN); g_afterRecord = R_NOISE; stop = true; break; }
         else if (keyVolUp()) { adjustPlayVolume(25); drawCanvasVolumeToast(cv, COL_GREEN); waitRelease(); }
@@ -1960,6 +2337,10 @@ int recordingScreen() {
   f.close();
   if (!cancelRec && effData > 0) {
     setRecDuration(idx, 44 + effData);
+    if (g_uploadAfterRecord) {
+      enqueueUploadMounted(idx, REC_NORMAL);
+      lastUploadTickMs = 0;
+    }
     uint16_t dur = getRecDuration(idx);
     if (dur <= FRICTION_NOW_SEC) {
       if (suppressKeyFriction(path, effData)) setFrictionDone(idx, true);
@@ -1983,6 +2364,7 @@ int recordingScreen() {
   }
   if (cancelRec) return 0;
   insertRecListSorted(idx);
+  if (g_uploadAfterRecord) setUploadQueued(idx, true);
   nextRecHint = (idx < 9999) ? idx + 1 : 9999;
   writeNextIndexCache(nextRecHint);
   return idx;
@@ -2004,6 +2386,8 @@ static void deleteRecording(int recNum) {
   setImportantRec(recNum, false);
   setFrictionDone(recNum, false);
   setFrictionPending(recNum, false);
+  setUploadQueued(recNum, false);
+  setUploadDone(recNum, false);
   if (recNum > 0 && recNum <= MAX_REC) recDurationSec[recNum - 1] = 0;
   bool hotkeyRemoved = false;
   for (int i = 0; i < hotkeyCount; i++) {
@@ -2147,6 +2531,7 @@ int listScreen(int selectIdx) {
         if (keyEsc())   return R_BACK;
         if (keyDel())   return R_BACK;
       }
+      systemIdleTick();
       delay(8);
     }
   }
@@ -2179,6 +2564,7 @@ int listScreen(int selectIdx) {
       const int rowH = 21;
       const int top = 26;
       const int keyX = 126;
+      const int uploadX = 110;
       const int durX = CONTENT_W - 72;
   int visRows = (d.height() - top - 18) / rowH;   // 底部留 18px 给提示
   if (visRows < 1) visRows = 1;
@@ -2233,6 +2619,11 @@ int listScreen(int selectIdx) {
           drawDseg14Text(d, keyX, y, keyLabel, on ? COL_GREEN : COL_DIM);
         } else if (imp && g_listMode != REC_IMPORTANT) {
           drawDseg14Text(d, keyX, y, "IMP", on ? COL_GREEN : COL_DIM);
+        }
+        if (uploadDone(recList[i])) {
+          drawDseg14Text(d, uploadX, y, "OK", on ? COL_GREEN : COL_DIM);
+        } else if (uploadQueued(recList[i])) {
+          drawDseg14Text(d, uploadX, y, "UP", on ? COL_GREEN : COL_DIM);
         }
         char dur[8];
         formatDuration(getRecDuration(recList[i]), dur, sizeof(dur));
@@ -2348,6 +2739,33 @@ int listScreen(int selectIdx) {
           redraw = true; waitRelease();
         }
       }
+      else if (keyUpload() && sel >= 0) {
+        uint8_t status = UPSTAT_NO_SD;
+        if (sdMount()) {
+          enqueueUploadMounted(recList[sel], recKindOf(recList[sel]));
+          status = validateUploadConfigMounted();
+          if (status == UPSTAT_IDLE) {
+            status = UPSTAT_QUEUED;
+            SD.end();
+            g_uploadStatus = status;
+            drawActionToast(uploadStatusLabel(status), COL_GREEN);
+            waitRelease();
+            if (sdMount()) {
+              uploadOneJobMounted();
+              status = g_uploadStatus;
+              SD.end();
+            } else {
+              status = UPSTAT_NO_SD;
+            }
+          } else {
+            SD.end();
+          }
+        }
+        g_uploadStatus = status;
+        drawActionToast(uploadStatusLabel(status), (status == UPSTAT_QUEUED || status == UPSTAT_DONE) ? COL_GREEN : COL_RED);
+        redraw = true;
+        if (M5Cardputer.Keyboard.isPressed()) waitRelease();
+      }
       else if (keySpace()) { return R_RECORD; }         // 空格=去录音
       else if (keyEsc())   { return R_BACK; }           // Esc=退出列表并息屏
       else if (keyLeft())  { g_listMode = (g_listMode + 2) % 3; sel = nearestVisibleIndex(sel, g_listMode); redraw = true; waitRelease(); }
@@ -2379,6 +2797,7 @@ int listScreen(int selectIdx) {
         redraw = true; waitRelease();
       }
     }
+    if (systemIdleTick()) redraw = true;
     delay(8);
   }
 }
@@ -2402,6 +2821,147 @@ void listFlow(int sel) {
   }
 }
 
+static uint8_t launcherScreen() {
+  struct LauncherEntry { const char *key; const char *name; uint8_t app; };
+  static const LauncherEntry apps[] = {
+    {"SPC", "录音", APP_REC_RECORD},
+    {"ENT", "列表", APP_REC_LIST},
+    {"F",   "番茄钟", APP_POMODORO},
+  };
+  const int appCount = sizeof(apps) / sizeof(apps[0]);
+  int sel = 0;
+  bool redraw = true;
+  waitRelease();
+
+  while (true) {
+    M5Cardputer.update();
+    if (redraw) {
+      auto &d = M5Cardputer.Display;
+      d.fillScreen(COL_BG);
+      drawHeader("工具箱");
+      FONT_ASCII(d);
+      for (int i = 0; i < appCount; i++) {
+        int y = 30 + i * 24;
+        bool on = (i == sel);
+        if (on) d.fillRect(0, y - 3, CONTENT_W, 20, 0x0320);
+        d.setTextColor(on ? COL_GREEN : COL_DIM, on ? 0x0320 : COL_BG);
+        d.setCursor(6, y);
+        d.print(on ? ">" : " ");
+        d.setCursor(24, y);
+        d.print(apps[i].key);
+        FONT_CN_16(d);
+        d.setTextColor(on ? COL_GREEN : COL_DIM, on ? 0x0320 : COL_BG);
+        d.setCursor(76, y - 1);
+        d.print(apps[i].name);
+        FONT_ASCII(d);
+      }
+      drawFooter(";/.选择  回车进入  Esc息屏");
+      redraw = false;
+    }
+
+    if (M5Cardputer.Keyboard.isChange() && M5Cardputer.Keyboard.isPressed()) {
+      if (keyEsc()) { waitRelease(); return APP_LAUNCHER; }
+      if (keySpace()) { waitRelease(); return APP_REC_RECORD; }
+      if (keyEnter()) { uint8_t app = apps[sel].app; waitRelease(); return app; }
+      if (M5Cardputer.Keyboard.isKeyPressed('f') || M5Cardputer.Keyboard.isKeyPressed('F')) {
+        waitRelease();
+        return APP_POMODORO;
+      }
+      if (keyUp()) {
+        sel = (sel + appCount - 1) % appCount;
+        redraw = true;
+      } else if (keyDown()) {
+        sel = (sel + 1) % appCount;
+        redraw = true;
+      }
+    }
+    systemIdleTick();
+    delay(8);
+  }
+}
+
+static uint8_t pomodoroScreen() {
+  bool running = false;
+  uint32_t remainSec = 25 * 60;
+  uint32_t lastTick = millis();
+  bool redraw = true;
+  waitRelease();
+
+  while (true) {
+    M5Cardputer.update();
+    uint32_t now = millis();
+    if (running && now - lastTick >= 1000) {
+      uint32_t ticks = (now - lastTick) / 1000;
+      lastTick += ticks * 1000;
+      if (remainSec > ticks) remainSec -= ticks;
+      else { remainSec = 0; running = false; }
+      redraw = true;
+    }
+
+    if (redraw) {
+      auto &d = M5Cardputer.Display;
+      char buf[8];
+      snprintf(buf, sizeof(buf), "%02lu:%02lu", (unsigned long)(remainSec / 60), (unsigned long)(remainSec % 60));
+      d.fillScreen(COL_BG);
+      drawHeader("番茄钟");
+      FONT_TIMER(d);
+      d.setTextColor(remainSec == 0 ? COL_RED : COL_GREEN, COL_BG);
+      d.setCursor(40, 52);
+      d.print(buf);
+      FONT_CN_12(d);
+      d.setTextColor(running ? COL_GREEN : COL_DIM, COL_BG);
+      d.setCursor(76, 88);
+      d.print(running ? "工作中" : (remainSec == 0 ? "已完成" : "暂停"));
+      drawFooter("回车开始/暂停  Del重置  Esc返回");
+      redraw = false;
+    }
+
+    if (M5Cardputer.Keyboard.isChange() && M5Cardputer.Keyboard.isPressed()) {
+      if (keyEsc()) { waitRelease(); return APP_LAUNCHER; }
+      if (keySpace()) { waitRelease(); return APP_REC_RECORD; }
+      if (keyEnter()) {
+        if (remainSec == 0) remainSec = 25 * 60;
+        running = !running;
+        lastTick = millis();
+        redraw = true;
+        waitRelease();
+      } else if (keyDel()) {
+        running = false;
+        remainSec = 25 * 60;
+        redraw = true;
+        waitRelease();
+      }
+    }
+    systemIdleTick();
+    delay(8);
+  }
+}
+
+static void runApp(uint8_t app) {
+  while (true) {
+    if (app == APP_REC_RECORD) {
+      int n = recordingScreen();
+      afterRecordingFlow(n);
+      return;
+    }
+    if (app == APP_REC_LIST) {
+      listFlow(0);
+      return;
+    }
+    if (app == APP_POMODORO) {
+      app = pomodoroScreen();
+      continue;
+    }
+    if (app == APP_LAUNCHER) {
+      uint8_t next = launcherScreen();
+      if (next == APP_LAUNCHER) return;
+      app = next;
+      continue;
+    }
+    return;
+  }
+}
+
 // ---------- 麦克风预热(开机 / 唤醒后调用): 空跑消耗冷启动不稳定, 之后保持常开 ----------
 static void micWarmup(bool rearmAfterWarmup = true, int warmBuffers = 24) {
   // 开机/唤醒的第一条录音也必须走完整输入链路配置; 否则首次录音增益会偏低。
@@ -2416,7 +2976,7 @@ static void micWarmup(bool rearmAfterWarmup = true, int warmBuffers = 24) {
   // 不 Mic.end(): 保持常开
 }
 
-// ---------- 息屏(轻睡眠): 关背光; 一直睡到"键盘中断"才醒; 空格=录音, 回车=列表 ----------
+// ---------- 息屏(轻睡眠): 关背光; 一直睡到"键盘中断"才醒; 空格=录音, 回车=列表, F=番茄钟, Ctrl=应用列表 ----------
 // 核心思路: 不调 Mic.end() → ES8311 模拟段保持通电, 没有掉电瞬态, 没有爆音.
 // CONFIG_PM_ENABLE 未启用: I2S 不持有阻止轻睡眠的电源锁, 可直接 esp_light_sleep_start().
 // I2S 任务在睡眠期间被 RTOS 暂停, APB 时钟门控; 唤醒后自动续跑.
@@ -2452,8 +3012,9 @@ static void goSleep() {
   if (cleanAborted) {
     d.setBrightness(120);
     M5Cardputer.update();
-    if (keySpace()) wakeAction = R_RECORD;
-    else wakeAction = R_LIST;
+    uint8_t app = APP_REC_LIST;
+    wakeAppFromPressedKeys(app);
+    wakeApp = app;
     autoRecordPending = true;
     waitRelease();
     return;
@@ -2468,19 +3029,25 @@ static void goSleep() {
     M5Cardputer.update();                                          // 排空键盘事件
     M5Cardputer.In_I2C.writeRegister8(0x34, 0x02, 0x03, 400000);  // 清中断标志 -> INT 线复位为高
     esp_light_sleep_start();                                       // 一直睡到 GPIO11 变低
-    delay(6);
-    M5Cardputer.update();
-    if (M5Cardputer.Keyboard.isChange() && M5Cardputer.Keyboard.isPressed()) {
-      if (keySpace()) { wakeAction = R_RECORD; break; }
-      if (keyEnter()) { wakeAction = R_LIST; break; }
+    bool recognized = false;
+    for (int i = 0; i < 10; i++) {
+      delay(8);
+      M5Cardputer.update();
+      uint8_t app = APP_REC_RECORD;
+      if (M5Cardputer.Keyboard.isPressed() && wakeAppFromPressedKeys(app)) {
+        wakeApp = app;
+        recognized = true;
+        break;
+      }
     }
+    if (recognized) break;
   }
 
   // 唤醒: 关掉唤醒源 + 键盘中断
   gpio_wakeup_disable(GPIO_NUM_11);
   M5Cardputer.In_I2C.writeRegister8(0x34, 0x01, 0x00, 400000);   // CFG: 关键盘中断
   d.setBrightness(120);
-  if (wakeAction == R_RECORD) micWarmup(false, 16);  // 息屏唤醒复用预热链路, 减少开始爆音和等待
+  if (wakeApp == APP_REC_RECORD) micWarmup(false, 16);  // 息屏唤醒复用预热链路, 减少开始爆音和等待
   autoRecordPending = true;
   waitRelease();
 }
@@ -2518,14 +3085,9 @@ void loop() {
 
   if (autoRecordPending) {
     autoRecordPending = false;
-    if (wakeAction == R_LIST) {
-      wakeAction = R_RECORD;
-      listFlow(0);
-    } else {
-      wakeAction = R_RECORD;
-      int n = recordingScreen();
-      afterRecordingFlow(n);
-    }
+    uint8_t app = wakeApp;
+    wakeApp = APP_REC_RECORD;
+    runApp(app);
     goSleep();
     return;
   }

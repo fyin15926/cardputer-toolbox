@@ -108,7 +108,7 @@ async function handleUpload(req, res) {
 
   if (fs.existsSync(uploadPath) || fs.existsSync(jobPath)) {
     req.resume();
-    sendJson(res, 409, { ok: false, error: 'recording already exists', id: jobId });
+    sendJson(res, 200, { ok: true, id: jobId, duplicate: true });
     return;
   }
 
