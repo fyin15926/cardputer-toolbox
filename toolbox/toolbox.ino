@@ -100,7 +100,7 @@ static void recordingPath(int recNum, bool important, char *p, size_t n) {
 
 // ---------- 快捷键绑定 (字母键 -> 录音编号), 存到 SD 卡 /SHORTCUT/keys.txt ----------
 struct HotKey { char key; int idx; };
-static const int MAX_HOTKEY = 24;
+static const int MAX_HOTKEY = 36;
 HotKey hotkeys[MAX_HOTKEY];
 int hotkeyCount = 0;
 static bool hotkeysLoaded = false;
@@ -627,7 +627,7 @@ static void loadHotkeys() {
       String line = f.readStringUntil('\n');
       line.trim();
       if (line.length() < 3) continue;        // 格式: "<键> <编号>"
-      char k = line.charAt(0);
+      char k = normalizeBindKey(line.charAt(0));
       int idx = line.substring(2).toInt();
       if (k && idx > 0) { hotkeys[hotkeyCount].key = k; hotkeys[hotkeyCount].idx = idx; hotkeyCount++; }
     }
@@ -646,23 +646,30 @@ static void ensureHotkeysLoaded() {
 static void saveHotkeys() {
   if (!sdMount()) return;
   if (!SD.exists(SHORTCUT_DIR)) SD.mkdir(SHORTCUT_DIR);
-  SD.remove(HOTKEY_PATH);
-  File f = SD.open(HOTKEY_PATH, FILE_WRITE);
+  const char *tmp = "/SHORTCUT/keys.tmp";
+  SD.remove(tmp);
+  File f = SD.open(tmp, FILE_WRITE);
   if (f) {
     for (int i = 0; i < hotkeyCount; i++) f.printf("%c %d\n", hotkeys[i].key, hotkeys[i].idx);
     f.flush();
     f.close();
+    SD.remove(HOTKEY_PATH);
+    if (!SD.rename(tmp, HOTKEY_PATH)) SD.remove(tmp);
   }
   SD.end();
 }
 
 static int findHotkey(char k) {
+  k = normalizeBindKey(k);
+  if (!k) return -1;
   for (int i = 0; i < hotkeyCount; i++) if (hotkeys[i].key == k) return hotkeys[i].idx;
   return -1;
 }
 
 // 给某录音编号绑定一个键(同键覆盖, 同编号原有的键先清掉, 保证一键一录音)
 static void setHotkey(char k, int idx) {
+  k = normalizeBindKey(k);
+  if (!k || idx <= 0) return;
   for (int i = 0; i < hotkeyCount; i++) {
     if (hotkeys[i].key == k || hotkeys[i].idx == idx) {
       for (int j = i; j < hotkeyCount - 1; j++) hotkeys[j] = hotkeys[j + 1];
@@ -824,6 +831,7 @@ static int readNextIndexCache() {
 static void writeNextIndexCache(int idx) {
   if (idx < 1) idx = 1;
   if (idx > 9999) idx = 9999;
+  SD.remove(NEXT_INDEX_PATH);
   File f = SD.open(NEXT_INDEX_PATH, FILE_WRITE);
   if (!f) return;
   f.printf("%d\n", idx);
@@ -917,19 +925,29 @@ static void scanRecordings(bool compactNext = false) {
 static bool copyFileOnSD(const char *from, const char *to) {
   File in = SD.open(from, FILE_READ);
   if (!in) return false;
-  SD.remove(to);
-  File out = SD.open(to, FILE_WRITE);
+  char tmp[48];
+  snprintf(tmp, sizeof(tmp), "%s.t", to);
+  SD.remove(tmp);
+  File out = SD.open(tmp, FILE_WRITE);
   if (!out) { in.close(); return false; }
   uint8_t buf[512];
   while (in.available()) {
     int n = in.read(buf, sizeof(buf));
     if (n <= 0) break;
-    if (out.write(buf, n) != (size_t)n) { in.close(); out.close(); return false; }
+    if (out.write(buf, n) != (size_t)n) {
+      in.close();
+      out.close();
+      SD.remove(tmp);
+      return false;
+    }
   }
   out.flush();
   in.close();
   out.close();
-  return true;
+  SD.remove(to);
+  if (SD.rename(tmp, to)) return true;
+  SD.remove(tmp);
+  return false;
 }
 
 static bool moveRecordingToKind(int recNum, uint8_t targetKind) {
@@ -941,14 +959,13 @@ static bool moveRecordingToKind(int recNum, uint8_t targetKind) {
   char src[40], dst[40];
   recordingPathKind(recNum, recKindOf(recNum), src, sizeof(src));
   recordingPathKind(recNum, targetKind, dst, sizeof(dst));
-  bool ok = SD.exists(dst);
-  if (!ok && SD.exists(src)) ok = SD.rename(src, dst);
+  bool ok = false;
+  if (SD.exists(src)) ok = SD.rename(src, dst);
   if (!ok && SD.exists(src)) {
     ok = copyFileOnSD(src, dst);
     if (ok) SD.remove(src);
-  } else if (ok && SD.exists(src)) {
-    SD.remove(src);
   }
+  if (!ok && !SD.exists(src) && SD.exists(dst)) ok = true;
   SD.end();
   if (ok) {
     setShortcutRec(recNum, targetKind == REC_SHORTCUT);
@@ -1700,6 +1717,7 @@ void noiseReduce(const char *path) {
   }
 
   char tmp[48]; snprintf(tmp, sizeof(tmp), "%s.t", path);
+  SD.remove(tmp);
   File out = SD.open(tmp, FILE_WRITE);
   if (!out) { in.close(); SD.end(); showMsg("降噪", "无法写临时文件", COL_RED); return; }
   writeWavHeader(out, REC_RATE, 0);
