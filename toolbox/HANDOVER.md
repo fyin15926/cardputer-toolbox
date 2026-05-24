@@ -26,6 +26,7 @@
 | Arduino 编译副本 | `C:\cardputer\sketches\toolbox\toolbox.ino` |
 | 本文档 | `D:\github仓库同步\小机器\toolbox\HANDOVER.md` |
 | 云端转写方案 | `D:\github仓库同步\小机器\toolbox\CLOUD_TRANSCRIBE_FLOMO_PLAN.html` |
+| 电脑端 net.txt 生成器 | `D:\github仓库同步\小机器\toolbox\NET_CONFIG_HELPER.html` |
 
 **每次修改 `.ino` 后需要手动同步到编译副本：**
 ```powershell
@@ -63,7 +64,7 @@ network:
 ```
 已安装版本：3.1.3-cn
 位置：C:\Users\87194\AppData\Local\Arduino15\packages\esp32\hardware\esp32\3.1.3\
-FQBN：esp32:esp32:m5stack_cardputer
+FQBN：esp32:esp32:m5stack_cardputer:FlashSize=8M,PartitionScheme=default_8MB
 ```
 2026-05-23 踩坑记录：曾出现 `Platform 'esp32:esp32' not found`，原因是
 `packages\esp32\hardware\esp32\3.1.3` 目录缺失，但 `packages\esp32\tools` 仍残留。
@@ -92,7 +93,7 @@ https://jihulab.com/esp-mirror/arduino/arduino-esp32/-/raw/gh-pages/package_esp3
 $cli    = "C:\cardputer\tools\arduino-cli\arduino-cli.exe"
 $sketch = "C:\cardputer\sketches\toolbox"
 $build  = "C:\cardputer\build_fresh\out"
-$fqbn   = "esp32:esp32:m5stack_cardputer"
+$fqbn   = "esp32:esp32:m5stack_cardputer:FlashSize=8M,PartitionScheme=default_8MB"
 
 # 编译
 & $cli compile --fqbn $fqbn --build-path $build $sketch
@@ -101,7 +102,45 @@ $fqbn   = "esp32:esp32:m5stack_cardputer"
 & $cli upload --fqbn $fqbn --port COM3 --input-dir $build
 ```
 
-最近一次编译/烧录通过：程序 1,147,508 bytes（87% / 1,310,720），全局变量 76,476 bytes（23% / 327,680）；COM3 写入 1,147,888 bytes，Hash verified。
+2026-05-24 更新：为容纳 Wi-Fi 上传模块，后续编译/烧录统一使用 8MB Flash + 3MB APP 分区：
+`esp32:esp32:m5stack_cardputer:FlashSize=8M,PartitionScheme=default_8MB`。
+最近一次编译通过：程序 1,739,024 bytes（52% / 3,342,336），全局变量 128,624 bytes（39% / 327,680）。
+最近一次烧录通过：COM3，写入 1,739,408 bytes，Hash verified，Hard resetting with RTC WDT。
+
+### 2026-05-24 联网上传当前状态
+
+- 固件已烧录进小机器：盒子层 Wi-Fi、轻量 HTTP 上传、上传队列、NTP 校时都在固件内。
+- 录音应用只表达用户意图：按 `\` 上传“当前/选中这一条”，不会自动上传全部录音。
+- 盒子层负责联网和上传：读取 `SD:/UPLOAD/net.txt`，连接 Wi-Fi，HTTP POST 到服务器，成功后写 `SD:/UPLOAD/done.txt`。
+- 电脑负责复杂配置：用 `toolbox/NET_CONFIG_HELPER.html` 生成 `net.txt`，不在小机器小键盘上敲长 token。
+- 服务器负责复杂业务：鉴权、保存 WAV、阿里云转写、flomo Webhook；小机器不保存阿里云 Key 或 flomo Webhook。
+- 服务器窗口已经完成云端闭环：正式 URL 是 `http://cardputer.flye.cc/upload`；`UPLOAD_TOKEN` 只保存在服务器 `/etc/cardputer-voice.env`，不要写进 GitHub。
+- 下一步：用 `NET_CONFIG_HELPER.html` 生成 `SD:/UPLOAD/net.txt`，录一条测试音后按 `\` 联调真实设备音频。
+
+`SD:/UPLOAD/net.txt` 格式：
+```text
+ssid=你的WiFi名
+password=你的WiFi密码
+url=http://服务器地址:3000/upload
+token=服务器给的UPLOAD_TOKEN
+device=cardputer-001
+ntp=pool.ntp.org
+tz=8
+```
+
+### 2026-05-24 服务器/flomo 当前状态
+
+- 阿里云 ECS：公网 IP `47.110.91.244`，域名 `cardputer.flye.cc` 已解析并通过公网验证。
+- 部署目录：`/opt/cardputer-voice`；运行服务：`cardputer-voice.service`；nginx 配置：`/etc/nginx/conf.d/cardputer-voice-domain.conf`。
+- 已配置环境变量：`UPLOAD_TOKEN`、`ASR_FILE_TOKEN`、`DASHSCOPE_API_KEY`、`FLOMO_WEBHOOK_URL`、`PUBLIC_BASE_URL=http://cardputer.flye.cc`。这些真实密钥只在服务器上，不进仓库。
+- 接口：
+  - `GET http://cardputer.flye.cc/health`
+  - `POST http://cardputer.flye.cc/upload`
+  - `GET http://cardputer.flye.cc/jobs/REC_XXXX`
+  - `POST http://cardputer.flye.cc/jobs/REC_XXXX/process`
+- DashScope 录音文件识别要求公网可访问音频 URL，所以服务器提供带私密 token 的 `/audio/REC_XXXX.wav` 给 DashScope 拉取，不对普通用户公开。
+- 端到端测试已通过：上传 `REC_ASR_0001.wav` 后自动转写为 `12345。上山打老虎。`，写入 `/opt/cardputer-voice/transcripts/REC_ASR_0001.txt`，并成功发送到 flomo，job 状态 `done`。
+- GitHub 已同步服务器代码和部署模板：`2c8d05d Add DashScope transcription and flomo sync`。详见 `cloud-voice-server/DEPLOYMENT.md`。
 
 `C:\cardputer\tools\build_and_flash.ps1` 曾因文件编码损坏导致 PowerShell 解析错误
 （中文乱码、字符串缺少结束符）。如果脚本报错，优先按上面的手动三步走；

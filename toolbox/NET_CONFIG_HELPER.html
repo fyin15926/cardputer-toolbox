@@ -1,0 +1,132 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Cardputer net.txt 配置生成器</title>
+<style>
+  :root{--bg:#0d1117;--fg:#e6edf3;--green:#39d353;--blue:#58a6ff;--dim:#8b949e;--border:#30363d;--panel:#111820;--code:#161b22;--gold:#f8c73a;--warn:#f85149}
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--fg);font:14px/1.65 "Segoe UI","Microsoft YaHei",Arial,sans-serif;padding:24px}
+  main{max-width:920px;margin:0 auto}
+  h1{font-size:23px;color:var(--green);margin:0 0 8px;border-bottom:1px solid var(--border);padding-bottom:10px}
+  h2{font-size:15px;color:var(--blue);margin:22px 0 10px}
+  p{margin:8px 0;color:var(--dim)}
+  .grid{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+  label{display:block;color:#a5d6ff;font-weight:600;margin:10px 0 4px}
+  input{width:100%;background:var(--code);color:var(--fg);border:1px solid var(--border);border-radius:6px;padding:9px 10px;font:14px Consolas,"Microsoft YaHei",monospace}
+  input:focus{outline:1px solid var(--green);border-color:var(--green)}
+  .panel{border:1px solid var(--border);border-radius:8px;background:var(--panel);padding:14px;margin:14px 0}
+  textarea{width:100%;min-height:220px;resize:vertical;background:var(--code);color:#c9d1d9;border:1px solid var(--border);border-radius:8px;padding:12px;font:13px/1.5 Consolas,monospace}
+  button{border:1px solid #2ea043;background:#0f2a15;color:#b7f7c1;border-radius:6px;padding:8px 12px;font-weight:700;cursor:pointer;margin-right:8px}
+  button.secondary{border-color:#1f6feb;background:#10243f;color:#a5d6ff}
+  button:hover{filter:brightness(1.15)}
+  code{background:var(--code);color:var(--gold);padding:1px 5px;border-radius:4px;font-family:Consolas,monospace;font-size:12px}
+  .warn{border:1px solid var(--warn);background:#3b1717;color:#ffb3ad;border-radius:8px;padding:10px 12px;margin:10px 0}
+  .ok{color:var(--green);font-weight:700}
+  .row{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin-top:10px}
+  @media(max-width:760px){body{padding:16px}.grid{grid-template-columns:1fr}}
+</style>
+</head>
+<body>
+<main>
+  <h1>Cardputer net.txt 配置生成器</h1>
+  <p>这个页面只在电脑上用。填好后生成 <code>net.txt</code>，放到 SD 卡 <code>/UPLOAD/net.txt</code>。小机器只负责联网和上传，不需要在小键盘上输入长 token。</p>
+
+  <div class="panel">
+    <h2>一、填写配置</h2>
+    <div class="grid">
+      <div>
+        <label for="ssid">Wi-Fi 名称</label>
+        <input id="ssid" autocomplete="off" placeholder="例如 HomeWiFi">
+      </div>
+      <div>
+        <label for="password">Wi-Fi 密码</label>
+        <input id="password" autocomplete="off" placeholder="只保存在生成的 net.txt">
+      </div>
+      <div>
+        <label for="url">服务器上传地址</label>
+        <input id="url" autocomplete="off" placeholder="http://服务器IP:3000/upload">
+      </div>
+      <div>
+        <label for="token">上传 token</label>
+        <input id="token" autocomplete="off" placeholder="服务器窗口给你的 UPLOAD_TOKEN">
+      </div>
+      <div>
+        <label for="device">设备名</label>
+        <input id="device" autocomplete="off" value="cardputer-001">
+      </div>
+      <div>
+        <label for="ntp">NTP 服务器</label>
+        <input id="ntp" autocomplete="off" value="pool.ntp.org">
+      </div>
+      <div>
+        <label for="tz">时区</label>
+        <input id="tz" autocomplete="off" value="8">
+      </div>
+    </div>
+  </div>
+
+  <div class="panel">
+    <h2>二、生成结果</h2>
+    <textarea id="output" spellcheck="false"></textarea>
+    <div class="row">
+      <button id="copy">复制内容</button>
+      <button id="download" class="secondary">下载 net.txt</button>
+      <span id="status" class="ok"></span>
+    </div>
+  </div>
+
+  <div class="warn">
+    阿里云 <code>DASHSCOPE_API_KEY</code> 和 flomo webhook 不要填在这里。它们只放服务器环境变量里。
+  </div>
+</main>
+
+<script>
+const fields = ["ssid","password","url","token","device","ntp","tz"];
+const $ = (id) => document.getElementById(id);
+
+function clean(value) {
+  return String(value || "").replace(/\r?\n/g, "").trim();
+}
+
+function render() {
+  const lines = [
+    "# SD:/UPLOAD/net.txt",
+    "ssid=" + clean($("ssid").value),
+    "password=" + clean($("password").value),
+    "url=" + clean($("url").value),
+    "token=" + clean($("token").value),
+    "device=" + clean($("device").value || "cardputer-001"),
+    "ntp=" + clean($("ntp").value || "pool.ntp.org"),
+    "tz=" + clean($("tz").value || "8"),
+    ""
+  ];
+  $("output").value = lines.join("\n");
+}
+
+function flash(message) {
+  $("status").textContent = message;
+  window.setTimeout(() => $("status").textContent = "", 1800);
+}
+
+fields.forEach((id) => $(id).addEventListener("input", render));
+$("copy").addEventListener("click", async () => {
+  render();
+  await navigator.clipboard.writeText($("output").value);
+  flash("已复制");
+});
+$("download").addEventListener("click", () => {
+  render();
+  const blob = new Blob([$("output").value], {type:"text/plain;charset=utf-8"});
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob);
+  a.download = "net.txt";
+  a.click();
+  URL.revokeObjectURL(a.href);
+  flash("已生成下载");
+});
+render();
+</script>
+</body>
+</html>
