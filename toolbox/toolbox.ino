@@ -126,6 +126,7 @@ static int parseRecordingNumber(const char *name) {
       base[6] < '0' || base[6] > '9' || base[7] < '0' || base[7] > '9') return 0;
   if (!(base[8] == '.' && (base[9] == 'w' || base[9] == 'W') &&
         (base[10] == 'a' || base[10] == 'A') && (base[11] == 'v' || base[11] == 'V'))) return 0;
+  if (base[12] != '\0') return 0;
   return (base[4] - '0') * 1000 + (base[5] - '0') * 100 + (base[6] - '0') * 10 + (base[7] - '0');
 }
 
@@ -846,7 +847,7 @@ static void scanRecordingDir(const char *dirPath, uint8_t kind, int &maxIdx) {
     File e;
     while ((e = dir.openNextFile())) {
       int n = parseRecordingNumber(e.name());
-      if (n > 0) {
+      if (n > 0 && !e.isDirectory() && e.size() > 44) {
         if (n > maxIdx) maxIdx = n;
         insertRecListSorted(n, kind);
         setRecDuration(n, e.size());
@@ -867,24 +868,6 @@ static int lowestAvailableRecordingIndex() {
 }
 
 static int nextRecordingIndex() {
-  char p[40];
-  if (nextRecHint > 0 && nextRecHint <= 9999) {
-    recordingPathKind(nextRecHint, REC_NORMAL, p, sizeof(p));
-    if (!SD.exists(p) && !recordingExistsKind(nextRecHint, REC_SHORTCUT) && !recordingExistsKind(nextRecHint, REC_IMPORTANT)) return nextRecHint;
-  }
-
-  int cached = readNextIndexCache();
-  if (cached > 0) {
-    int idx = cached;
-    recordingPathKind(idx, REC_NORMAL, p, sizeof(p));
-    while (idx < 9999 && (SD.exists(p) || recordingExistsKind(idx, REC_SHORTCUT) || recordingExistsKind(idx, REC_IMPORTANT))) {
-      idx++;
-      recordingPathKind(idx, REC_NORMAL, p, sizeof(p));
-    }
-    nextRecHint = idx;
-    return idx;
-  }
-
   int maxIdx = 0;
   recCount = 0;
   clearImportantBits();
@@ -892,14 +875,7 @@ static int nextRecordingIndex() {
   scanRecordingDir(SHORTCUT_DIR, REC_SHORTCUT, maxIdx);
   scanRecordingDir(IMPORTANT_DIR, REC_IMPORTANT, maxIdx);
 
-  int idx = maxIdx + 1;
-  if (idx < 1) idx = 1;
-  if (idx > 9999) idx = 9999;
-  recordingPathKind(idx, REC_NORMAL, p, sizeof(p));
-  while (idx < 9999 && (SD.exists(p) || recordingExistsKind(idx, REC_SHORTCUT) || recordingExistsKind(idx, REC_IMPORTANT))) {
-    idx++;
-    recordingPathKind(idx, REC_NORMAL, p, sizeof(p));
-  }
+  int idx = lowestAvailableRecordingIndex();
   nextRecHint = idx;
   writeNextIndexCache(idx);
   return idx;
@@ -914,9 +890,19 @@ static void scanRecordings(bool compactNext = false) {
   scanRecordingDir(REC_DIR, REC_NORMAL, maxIdx);
   scanRecordingDir(SHORTCUT_DIR, REC_SHORTCUT, maxIdx);
   scanRecordingDir(IMPORTANT_DIR, REC_IMPORTANT, maxIdx);
-  nextRecHint = compactNext ? lowestAvailableRecordingIndex() : ((recCount > 0 && recList[recCount - 1] < 9999) ? recList[recCount - 1] + 1 : 1);
+  nextRecHint = lowestAvailableRecordingIndex();
   writeNextIndexCache(nextRecHint);
   SD.end();
+  bool hotkeyChanged = false;
+  for (int i = 0; i < hotkeyCount; i++) {
+    if (!isShortcutRec(hotkeys[i].idx)) {
+      for (int j = i; j < hotkeyCount - 1; j++) hotkeys[j] = hotkeys[j + 1];
+      hotkeyCount--;
+      i--;
+      hotkeyChanged = true;
+    }
+  }
+  if (hotkeyChanged) saveHotkeys();
 }
 
 // ---------- 提示音 "滴" (淡入淡出) ----------
@@ -953,24 +939,30 @@ static bool copyFileOnSD(const char *from, const char *to) {
 
 static bool moveRecordingToKind(int recNum, uint8_t targetKind) {
   if (targetKind == REC_NORMAL) return false;
-  if (recKindOf(recNum) == targetKind) return true;
+  if ((targetKind == REC_SHORTCUT && isShortcutRec(recNum)) ||
+      (targetKind == REC_IMPORTANT && isImportantRec(recNum))) return true;
   if (!sdMount()) return false;
   const char *targetDir = (targetKind == REC_SHORTCUT) ? SHORTCUT_DIR : IMPORTANT_DIR;
   if (!SD.exists(targetDir)) SD.mkdir(targetDir);
   char src[40], dst[40];
-  recordingPathKind(recNum, recKindOf(recNum), src, sizeof(src));
   recordingPathKind(recNum, targetKind, dst, sizeof(dst));
+  uint8_t srcKind = recKindOf(recNum);
+  if (srcKind == targetKind) srcKind = REC_NORMAL;
+  recordingPathKind(recNum, srcKind, src, sizeof(src));
   bool ok = false;
-  if (SD.exists(src)) ok = SD.rename(src, dst);
+  if (SD.exists(src)) {
+    if (srcKind == REC_NORMAL) ok = SD.rename(src, dst);
+    else ok = copyFileOnSD(src, dst);
+  }
   if (!ok && SD.exists(src)) {
     ok = copyFileOnSD(src, dst);
-    if (ok) SD.remove(src);
+    if (ok && srcKind == REC_NORMAL) SD.remove(src);
   }
   if (!ok && !SD.exists(src) && SD.exists(dst)) ok = true;
   SD.end();
   if (ok) {
-    setShortcutRec(recNum, targetKind == REC_SHORTCUT);
-    setImportantRec(recNum, targetKind == REC_IMPORTANT);
+    if (targetKind == REC_SHORTCUT) setShortcutRec(recNum, true);
+    if (targetKind == REC_IMPORTANT) setImportantRec(recNum, true);
   }
   return ok;
 }
@@ -2233,12 +2225,14 @@ int listScreen(int selectIdx) {
         char recName[12];
         snprintf(recName, sizeof(recName), "REC_%04d", recList[i]);
         drawDseg14Text(d, 14, y, recName, on ? COL_GREEN : COL_DIM);
-        if (isImportantRec(recList[i])) drawDseg14Text(d, keyX, y, "IMP", on ? COL_GREEN : COL_DIM);
         char hk = hotkeyOf(recList[i]);
-        if (hk) {
+        bool imp = isImportantRec(recList[i]);
+        if (hk && g_listMode != REC_SHORTCUT) {
           char keyLabel[8];
           snprintf(keyLabel, sizeof(keyLabel), "K:%c", dispKey(hk));
           drawDseg14Text(d, keyX, y, keyLabel, on ? COL_GREEN : COL_DIM);
+        } else if (imp && g_listMode != REC_IMPORTANT) {
+          drawDseg14Text(d, keyX, y, "IMP", on ? COL_GREEN : COL_DIM);
         }
         char dur[8];
         formatDuration(getRecDuration(recList[i]), dur, sizeof(dur));
