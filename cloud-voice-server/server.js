@@ -23,12 +23,24 @@ const DATA_ROOT = process.env.DATA_ROOT
 const UPLOAD_DIR = path.join(DATA_ROOT, 'uploads');
 const JOB_DIR = path.join(DATA_ROOT, 'jobs');
 const TRANSCRIPT_DIR = path.join(DATA_ROOT, 'transcripts');
+const PREVIEW_DIR = path.join(DATA_ROOT, 'previews');
 const TERMS_PATH = process.env.TERMS_PATH
   ? path.resolve(process.env.TERMS_PATH)
   : path.join(DATA_ROOT, 'terms.json');
 const processingJobs = new Set();
 const activeUploads = new Map();
 const deviceStatuses = new Map();
+
+const DEFAULT_PREVIEW_PARAMS = {
+  gain: 1,
+  lowpass: 96,
+  highMix: 0.25,
+  scratchRmsMax: 1900,
+  scratchDiffMin: 140,
+  scratchRatio: 90,
+  holdFrames: 2,
+  frameSamples: 256
+};
 
 function sendJson(res, statusCode, payload) {
   const body = JSON.stringify(payload, null, 2);
@@ -80,7 +92,8 @@ async function ensureRuntimeDirs() {
   await Promise.all([
     fsp.mkdir(UPLOAD_DIR, { recursive: true }),
     fsp.mkdir(JOB_DIR, { recursive: true }),
-    fsp.mkdir(TRANSCRIPT_DIR, { recursive: true })
+    fsp.mkdir(TRANSCRIPT_DIR, { recursive: true }),
+    fsp.mkdir(PREVIEW_DIR, { recursive: true })
   ]);
 }
 
@@ -110,6 +123,14 @@ function jobPathForId(id) {
 
 function transcriptMemoPathForId(id) {
   return path.join(TRANSCRIPT_DIR, `${id}.memo.txt`);
+}
+
+function previewPathForId(id) {
+  return path.join(PREVIEW_DIR, `${id}.play-preview.wav`);
+}
+
+function previewMetaPathForId(id) {
+  return path.join(PREVIEW_DIR, `${id}.play-preview.json`);
 }
 
 function audioPathForJob(job) {
@@ -271,6 +292,12 @@ function collectRequestBody(req, maxBytes, onProgress) {
     req.on('end', () => resolve(Buffer.concat(chunks, total)));
     req.on('error', reject);
   });
+}
+
+async function readJsonBody(req, maxBytes = 16 * 1024) {
+  const body = await collectRequestBody(req, maxBytes);
+  if (!body.length) return {};
+  return JSON.parse(body.toString('utf8'));
 }
 
 function dashboardAuth(req, res) {
@@ -706,10 +733,25 @@ function dashboardJobHtml() {
 
     <section class="panel">
       <div class="section-title"><h2>音频实验区</h2><span class="muted">下一步</span></div>
-      <div class="kv">
-        <div>目标</div><div>原始录音、人耳播放版、服务器识别版 A/B 对比</div>
-        <div>小机器侧</div><div>后续读取参数配置，不频繁重烧固件</div>
-        <div>服务器侧</div><div>后续生成 clean_for_asr.wav 给转写使用</div>
+      <div class="grid">
+        <div><div class="label">增益</div><input id="previewGain" type="number" step="0.1" min="0.2" max="3"></div>
+        <div><div class="label">低通系数</div><input id="previewLowpass" type="number" step="1" min="1" max="255"></div>
+        <div><div class="label">高频保留</div><input id="previewHighMix" type="number" step="0.05" min="0" max="1"></div>
+        <div><div class="label">命中保持帧</div><input id="previewHold" type="number" step="1" min="0" max="20"></div>
+        <div><div class="label">RMS 上限</div><input id="previewRms" type="number" step="50" min="0" max="10000"></div>
+        <div><div class="label">Diff 下限</div><input id="previewDiff" type="number" step="10" min="0" max="5000"></div>
+        <div><div class="label">Diff/RMS 比例</div><input id="previewRatio" type="number" step="5" min="1" max="512"></div>
+        <div><div class="label">帧采样数</div><input id="previewFrame" type="number" step="64" min="64" max="2048"></div>
+      </div>
+      <div class="statusline">
+        <button id="generatePreview">生成试听版</button>
+        <button id="loadPreview">加载试听版</button>
+        <span id="previewStatus" class="muted">先生成试听版，再和原始录音 A/B 对比。</span>
+      </div>
+      <audio id="previewAudio" controls class="hidden"></audio>
+      <div id="previewMeta" class="kv" style="margin-top:10px"></div>
+      <div class="kv" style="margin-top:10px">
+        <div>说明</div><div>这是服务器端模拟“小机器人耳播放版”的试听，不会覆盖原始 WAV，也不会改变 flomo/转写结果。</div>
       </div>
     </section>
 
@@ -740,6 +782,26 @@ function dashboardJobHtml() {
     $('loadAudio').onclick = () => loadAudio();
     $('reprocess').onclick = () => postJob('process');
     $('resend').onclick = () => postJob('resend');
+    $('generatePreview').onclick = () => generatePreview();
+    $('loadPreview').onclick = () => loadPreviewAudio();
+    const defaultPreviewParams = {
+      gain: 1,
+      lowpass: 96,
+      highMix: 0.25,
+      scratchRmsMax: 1900,
+      scratchDiffMin: 140,
+      scratchRatio: 90,
+      holdFrames: 2,
+      frameSamples: 256
+    };
+    $('previewGain').value = defaultPreviewParams.gain;
+    $('previewLowpass').value = defaultPreviewParams.lowpass;
+    $('previewHighMix').value = defaultPreviewParams.highMix;
+    $('previewHold').value = defaultPreviewParams.holdFrames;
+    $('previewRms').value = defaultPreviewParams.scratchRmsMax;
+    $('previewDiff').value = defaultPreviewParams.scratchDiffMin;
+    $('previewRatio').value = defaultPreviewParams.scratchRatio;
+    $('previewFrame').value = defaultPreviewParams.frameSamples;
 
     function statusClass(status) {
       if (status === 'done' || status === 'uploaded' || status === 'transcribed') return 'ok';
@@ -763,6 +825,32 @@ function dashboardJobHtml() {
       if (!file) return '-';
       if (file.error) return '<span class="bad">' + esc(file.error) + '</span>';
       return fmtBytes(file.bytes) + ' · ' + fmtTime(file.updatedAt) + (file.path ? '<br><span class="muted mono">' + esc(file.path) + '</span>' : '');
+    }
+
+    function previewParamsFromForm() {
+      return {
+        gain: Number($('previewGain').value),
+        lowpass: Number($('previewLowpass').value),
+        highMix: Number($('previewHighMix').value),
+        holdFrames: Number($('previewHold').value),
+        scratchRmsMax: Number($('previewRms').value),
+        scratchDiffMin: Number($('previewDiff').value),
+        scratchRatio: Number($('previewRatio').value),
+        frameSamples: Number($('previewFrame').value)
+      };
+    }
+
+    function renderPreviewMeta(preview) {
+      if (!preview) {
+        $('previewMeta').innerHTML = '';
+        return;
+      }
+      $('previewMeta').innerHTML = kv([
+        ['处理帧', esc((preview.metrics?.processedFrames ?? '-') + ' / ' + (preview.metrics?.totalFrames ?? '-'))],
+        ['摩擦命中帧', esc(preview.metrics?.detectedFrames ?? '-')],
+        ['时长', fmtDuration(preview.metrics?.durationSec)],
+        ['生成时间', fmtTime(preview.createdAt)]
+      ]);
     }
 
     function render(data) {
@@ -799,6 +887,8 @@ function dashboardJobHtml() {
       ]);
       $('fileMeta').innerHTML = kv([
         ['原始 WAV', fileLine(files.audio)],
+        ['试听 WAV', fileLine(files.preview)],
+        ['试听参数', fileLine(files.previewMeta)],
         ['转写文本', fileLine(files.transcript)],
         ['ASR JSON', fileLine(files.transcriptJson)],
         ['flomo memo', fileLine(files.memo)]
@@ -873,6 +963,55 @@ function dashboardJobHtml() {
         $('audioStatus').textContent = 'WAV 已加载。';
       } catch (error) {
         $('audioStatus').textContent = error.message;
+      }
+    }
+
+    async function generatePreview() {
+      const token = normalizeToken(tokenInput.value);
+      if (!token) return;
+      $('previewStatus').textContent = '正在生成试听版...';
+      try {
+        const res = await fetch('/api/jobs/' + encodeURIComponent(jobId) + '/preview', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'X-Upload-Token': token
+          },
+          body: JSON.stringify({ params: previewParamsFromForm() })
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || 'HTTP ' + res.status);
+        $('previewStatus').textContent = '试听版已生成。';
+        renderPreviewMeta(data.preview);
+        await loadPreviewAudio();
+        await load();
+      } catch (error) {
+        $('previewStatus').textContent = error.message;
+      }
+    }
+
+    async function loadPreviewAudio() {
+      const token = normalizeToken(tokenInput.value);
+      if (!token) return;
+      $('previewStatus').textContent = '正在读取试听版...';
+      try {
+        const res = await fetch('/api/jobs/' + encodeURIComponent(jobId) + '/preview/audio', {
+          headers: { 'X-Upload-Token': token }
+        });
+        if (!res.ok) {
+          const data = await res.json().catch(() => ({}));
+          throw new Error(data.error || 'HTTP ' + res.status);
+        }
+        const blob = await res.blob();
+        const audio = $('previewAudio');
+        if (audio.dataset.url) URL.revokeObjectURL(audio.dataset.url);
+        const url = URL.createObjectURL(blob);
+        audio.dataset.url = url;
+        audio.src = url;
+        audio.classList.remove('hidden');
+        $('previewStatus').textContent = '试听版已加载，可以和原始录音 A/B 对比。';
+      } catch (error) {
+        $('previewStatus').textContent = error.message;
       }
     }
 
@@ -1637,12 +1776,150 @@ async function inspectWavFile(filePath) {
   }
 }
 
+function parsePcm16Wav(buffer) {
+  if (
+    buffer.length < 44 ||
+    buffer.toString('ascii', 0, 4) !== 'RIFF' ||
+    buffer.toString('ascii', 8, 12) !== 'WAVE'
+  ) {
+    throw new Error('not a WAV file');
+  }
+
+  let offset = 12;
+  let fmt = null;
+  let data = null;
+  while (offset + 8 <= buffer.length) {
+    const id = buffer.toString('ascii', offset, offset + 4);
+    const size = buffer.readUInt32LE(offset + 4);
+    const start = offset + 8;
+    const end = start + size;
+    if (end > buffer.length) break;
+    if (id === 'fmt ' && size >= 16) {
+      fmt = {
+        audioFormat: buffer.readUInt16LE(start),
+        channels: buffer.readUInt16LE(start + 2),
+        sampleRate: buffer.readUInt32LE(start + 4),
+        bitsPerSample: buffer.readUInt16LE(start + 14)
+      };
+    } else if (id === 'data') {
+      data = { offset: start, bytes: size };
+      break;
+    }
+    offset = end + (size % 2);
+  }
+
+  if (!fmt || !data) throw new Error('WAV fmt/data chunk missing');
+  if (fmt.audioFormat !== 1 || fmt.channels !== 1 || fmt.bitsPerSample !== 16) {
+    throw new Error('only 16-bit mono PCM WAV is supported for preview');
+  }
+  if (data.bytes % 2 !== 0) {
+    throw new Error('invalid PCM byte length');
+  }
+  return { ...fmt, dataOffset: data.offset, dataBytes: data.bytes };
+}
+
+function normalizePreviewParams(input = {}) {
+  const p = { ...DEFAULT_PREVIEW_PARAMS, ...(input || {}) };
+  const number = (key, min, max) => {
+    const n = Number(p[key]);
+    p[key] = Number.isFinite(n) ? Math.max(min, Math.min(max, n)) : DEFAULT_PREVIEW_PARAMS[key];
+  };
+  number('gain', 0.2, 3);
+  number('lowpass', 1, 255);
+  number('highMix', 0, 1);
+  number('scratchRmsMax', 0, 10000);
+  number('scratchDiffMin', 0, 5000);
+  number('scratchRatio', 1, 512);
+  number('holdFrames', 0, 20);
+  number('frameSamples', 64, 2048);
+  p.lowpass = Math.round(p.lowpass);
+  p.scratchRmsMax = Math.round(p.scratchRmsMax);
+  p.scratchDiffMin = Math.round(p.scratchDiffMin);
+  p.scratchRatio = Math.round(p.scratchRatio);
+  p.holdFrames = Math.round(p.holdFrames);
+  p.frameSamples = Math.round(p.frameSamples);
+  return p;
+}
+
+function frameStats(buffer, start, samples) {
+  let sumSq = 0;
+  let sumDiff = 0;
+  let prev = buffer.readInt16LE(start);
+  for (let i = 0; i < samples; i++) {
+    const sample = buffer.readInt16LE(start + i * 2);
+    sumSq += sample * sample;
+    if (i > 0) sumDiff += Math.abs(sample - prev);
+    prev = sample;
+  }
+  return {
+    rms: Math.sqrt(sumSq / Math.max(1, samples)),
+    avgDiff: samples > 1 ? sumDiff / (samples - 1) : 0
+  };
+}
+
+function buildPlayPreviewWav(wavBuffer, params) {
+  const wav = parsePcm16Wav(wavBuffer);
+  const p = normalizePreviewParams(params);
+  const output = Buffer.alloc(44 + wav.dataBytes);
+  writeWavHeaderBuffer(output, wav.sampleRate, wav.dataBytes);
+
+  let lp = wavBuffer.readInt16LE(wav.dataOffset);
+  let hold = 0;
+  let detectedFrames = 0;
+  let processedFrames = 0;
+  const frameBytes = p.frameSamples * 2;
+  const end = wav.dataOffset + wav.dataBytes;
+  let outOffset = 44;
+
+  for (let frameStart = wav.dataOffset; frameStart < end; frameStart += frameBytes) {
+    const frameSamples = Math.floor(Math.min(frameBytes, end - frameStart) / 2);
+    const stats = frameStats(wavBuffer, frameStart, frameSamples);
+    const detected = stats.rms < p.scratchRmsMax &&
+      stats.avgDiff > p.scratchDiffMin &&
+      stats.avgDiff * 256 > stats.rms * p.scratchRatio;
+    if (detected) {
+      detectedFrames++;
+      hold = p.holdFrames;
+    }
+    const active = detected || hold > 0;
+    if (hold > 0) hold--;
+    if (active) processedFrames++;
+
+    for (let i = 0; i < frameSamples; i++) {
+      let sample = clampInt16(Math.round(wavBuffer.readInt16LE(frameStart + i * 2) * p.gain));
+      if (active) {
+        lp += Math.round((sample - lp) * p.lowpass / 256);
+        const hi = sample - lp;
+        sample = clampInt16(Math.round(lp + hi * p.highMix));
+      }
+      output.writeInt16LE(sample, outOffset);
+      outOffset += 2;
+    }
+  }
+
+  return {
+    buffer: output,
+    params: p,
+    metrics: {
+      detectedFrames,
+      processedFrames,
+      totalFrames: Math.ceil((wav.dataBytes / 2) / p.frameSamples),
+      durationSec: wav.dataBytes / 2 / wav.sampleRate,
+      sampleRate: wav.sampleRate
+    }
+  };
+}
+
 async function inspectJobFiles(job, memoPath) {
   const audioInfo = job.recordingName ? await inspectWavFile(audioPathForJob(job)).catch((error) => ({
     error: error.code === 'ENOENT' ? 'audio not found' : error.message
   })) : null;
+  const previewRelative = path.relative(DATA_ROOT, previewPathForId(job.id));
+  const previewMetaRelative = path.relative(DATA_ROOT, previewMetaPathForId(job.id));
   return {
     audio: audioInfo,
+    preview: await statOptionalDataFile(previewRelative),
+    previewMeta: await statOptionalDataFile(previewMetaRelative),
     transcript: await statOptionalDataFile(job.transcriptPath),
     transcriptJson: await statOptionalDataFile(job.transcriptJsonPath),
     memo: await statOptionalDataFile(memoPath)
@@ -1719,6 +1996,72 @@ async function handleJobAudioApi(req, res, pathname) {
   } catch (error) {
     if (error.code === 'ENOENT') {
       sendJson(res, 404, { ok: false, error: 'audio not found' });
+      return;
+    }
+    sendJson(res, 500, { ok: false, error: error.message });
+  }
+}
+
+async function handleJobPreviewApi(req, res, pathname) {
+  if (!dashboardAuth(req, res)) return;
+
+  const id = decodeURIComponent(pathname.slice('/api/jobs/'.length, -'/preview'.length));
+  if (!isValidJobId(id)) {
+    sendJson(res, 400, { ok: false, error: 'invalid job id' });
+    return;
+  }
+
+  try {
+    const payload = await readJsonBody(req);
+    const job = await readJob(id);
+    const sourcePath = audioPathForJob(job);
+    const source = await fsp.readFile(sourcePath);
+    const preview = buildPlayPreviewWav(source, payload.params);
+    const previewPath = previewPathForId(id);
+    const metaPath = previewMetaPathForId(id);
+    const meta = {
+      id,
+      recordingName: job.recordingName,
+      kind: 'play-preview',
+      params: preview.params,
+      metrics: preview.metrics,
+      sourceBytes: source.length,
+      outputBytes: preview.buffer.length,
+      createdAt: new Date().toISOString()
+    };
+    await fsp.writeFile(previewPath, preview.buffer);
+    await fsp.writeFile(metaPath, `${JSON.stringify(meta, null, 2)}\n`, 'utf8');
+    sendJson(res, 201, { ok: true, preview: meta });
+  } catch (error) {
+    if (error.code === 'ENOENT') {
+      sendJson(res, 404, { ok: false, error: 'audio or job not found' });
+      return;
+    }
+    sendJson(res, 500, { ok: false, error: error.message });
+  }
+}
+
+async function handleJobPreviewAudioApi(req, res, pathname) {
+  if (!dashboardAuth(req, res)) return;
+
+  const id = decodeURIComponent(pathname.slice('/api/jobs/'.length, -'/preview/audio'.length));
+  if (!isValidJobId(id)) {
+    sendJson(res, 400, { ok: false, error: 'invalid job id' });
+    return;
+  }
+
+  try {
+    const previewPath = previewPathForId(id);
+    const stat = await fsp.stat(previewPath);
+    res.writeHead(200, {
+      'Content-Type': 'audio/wav',
+      'Content-Length': stat.size,
+      'Cache-Control': 'no-store'
+    });
+    fs.createReadStream(previewPath).pipe(res);
+  } catch (error) {
+    if (error.code === 'ENOENT') {
+      sendJson(res, 404, { ok: false, error: 'preview not found' });
       return;
     }
     sendJson(res, 500, { ok: false, error: error.message });
@@ -1885,6 +2228,14 @@ async function route(req, res) {
   }
   if (req.method === 'GET' && pathname === '/api/dashboard') {
     await handleDashboardApi(req, res, url);
+    return;
+  }
+  if (req.method === 'POST' && pathname.startsWith('/api/jobs/') && pathname.endsWith('/preview')) {
+    await handleJobPreviewApi(req, res, pathname);
+    return;
+  }
+  if (req.method === 'GET' && pathname.startsWith('/api/jobs/') && pathname.endsWith('/preview/audio')) {
+    await handleJobPreviewAudioApi(req, res, pathname);
     return;
   }
   if (req.method === 'GET' && pathname.startsWith('/api/jobs/') && pathname.endsWith('/audio')) {

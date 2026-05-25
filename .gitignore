@@ -27,6 +27,7 @@ Thumbs.db
 cloud-voice-server/uploads/
 cloud-voice-server/transcripts/
 cloud-voice-server/jobs/
+cloud-voice-server/previews/
 cloud-voice-server/logs/
 cloud-voice-server/.env
 

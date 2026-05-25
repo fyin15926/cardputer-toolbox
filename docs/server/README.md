@@ -99,6 +99,9 @@ Wi-Fi RSSI/IP from upload headers.
 The job detail page also shows upload encoding, compression ratio, WAV sample
 metadata, transcript/memo file status, audio playback, and manual reprocess /
 resend actions.
+Its audio lab can generate a non-destructive play-preview WAV from the original
+recording with lightweight friction/high-frequency suppression parameters, then
+load it next to the original recording for A/B listening.
 
 When transcription is configured, raw text is written to
 `transcripts/REC_0123.txt`, the formatted flomo memo is written to
