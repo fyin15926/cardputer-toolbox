@@ -13,7 +13,7 @@ const ASR_FILE_TOKEN = process.env.ASR_FILE_TOKEN || '';
 const DASHSCOPE_API_KEY = process.env.DASHSCOPE_API_KEY || '';
 const FLOMO_WEBHOOK_URL = process.env.FLOMO_WEBHOOK_URL || '';
 const PUBLIC_BASE_URL = (process.env.PUBLIC_BASE_URL || '').replace(/\/+$/, '');
-const MAX_UPLOAD_BYTES = parseInt(process.env.MAX_UPLOAD_BYTES || `${25 * 1024 * 1024}`, 10);
+const MAX_UPLOAD_BYTES = parseInt(process.env.MAX_UPLOAD_BYTES || `${64 * 1024 * 1024}`, 10);
 const DASH_SCOPE_TRANSCRIPTION_URL = 'https://dashscope.aliyuncs.com/api/v1/services/audio/asr/transcription';
 const DASH_SCOPE_TASK_URL = 'https://dashscope.aliyuncs.com/api/v1/tasks/';
 

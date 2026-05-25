@@ -118,6 +118,7 @@ static const char *UPLOAD_QUEUE_PATH = "/UPLOAD/queue.txt";
 static const char *UPLOAD_DONE_PATH = "/UPLOAD/done.txt";
 static const char *UPLOAD_CONFIG_PATH = "/UPLOAD/net.txt";
 static const char *UPLOAD_RECORDED_AT_PATH = "/UPLOAD/recorded_at.txt";
+static const size_t UPLOAD_CHUNK_BYTES = 2048;
 static const int MAX_REC = 9999;
 static const uint16_t FRICTION_NOW_SEC = 60;
 static const uint16_t FRICTION_IDLE_MAX_SEC = 20 * 60;
@@ -2073,7 +2074,7 @@ static bool tryWifiProfile(const char *ssid, const char *password) {
   WiFi.disconnect(false);
   delay(120);
   WiFi.mode(WIFI_STA);
-  WiFi.setSleep(true);
+  WiFi.setSleep(false);
   WiFi.begin(ssid, password ? password : "");
   uint32_t start = millis();
   while (WiFi.status() != WL_CONNECTED && millis() - start < 4500) {
@@ -2131,6 +2132,7 @@ static bool ensureWifiConnected() {
     wifiPowerDown();
     return false;
   }
+  WiFi.setSleep(false);
   boxSyncClockIfNeeded();
   return true;
 }
@@ -2212,14 +2214,17 @@ static bool uploadOneJobMounted() {
   client.printf("X-Wifi-IP: %s\r\n", localIp.c_str());
   if (recordedAt[0]) client.printf("X-Recorded-At: %s\r\n", recordedAt);
   client.printf("X-Recording-Name: %s\r\n\r\n", name);
-  uint8_t buf[512];
+  uint8_t buf[UPLOAD_CHUNK_BYTES];
+  uint8_t uiTick = 0;
   while (f.available()) {
     size_t n = f.read(buf, sizeof(buf));
     if (n == 0) break;
     if (client.write(buf, n) != n) { client.stop(); f.close(); return failAfterWifi(UPSTAT_HTTP_ERR); }
-    M5Cardputer.update();
-    if (keyUploadAbort()) { client.stop(); f.close(); return failAfterWifi(UPSTAT_ABORTED); }
-    delay(1);
+    if ((++uiTick & 0x03) == 0) {
+      M5Cardputer.update();
+      if (keyUploadAbort()) { client.stop(); f.close(); return failAfterWifi(UPSTAT_ABORTED); }
+      delay(0);
+    }
   }
   uint32_t start = millis();
   while (!client.available() && client.connected() && millis() - start < 4000) {
