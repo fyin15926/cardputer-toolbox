@@ -50,6 +50,7 @@ testing when DNS is not ready.
 ```text
 Primary after DNS:
   http://cardputer.flye.cc/upload
+  http://cardputer.flye.cc/dashboard
 
 Fallback:
   http://47.110.91.244:31112/upload
@@ -67,6 +68,7 @@ nginx -t
 curl http://127.0.0.1:3000/health
 curl -H 'Host: cardputer.flye.cc' http://127.0.0.1/health
 curl -H "X-Upload-Token: $UPLOAD_TOKEN" 'http://cardputer.flye.cc/jobs?limit=20'
+curl -H "X-Upload-Token: $UPLOAD_TOKEN" 'http://cardputer.flye.cc/api/dashboard?limit=20'
 curl http://cardputer.flye.cc/jobs/REC_0001
 ```
 

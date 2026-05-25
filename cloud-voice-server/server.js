@@ -27,11 +27,21 @@ const TERMS_PATH = process.env.TERMS_PATH
   ? path.resolve(process.env.TERMS_PATH)
   : path.join(DATA_ROOT, 'terms.json');
 const processingJobs = new Set();
+const activeUploads = new Map();
+const deviceStatuses = new Map();
 
 function sendJson(res, statusCode, payload) {
   const body = JSON.stringify(payload, null, 2);
   res.writeHead(statusCode, {
     'Content-Type': 'application/json; charset=utf-8',
+    'Content-Length': Buffer.byteLength(body)
+  });
+  res.end(body);
+}
+
+function sendHtml(res, statusCode, body) {
+  res.writeHead(statusCode, {
+    'Content-Type': 'text/html; charset=utf-8',
     'Content-Length': Buffer.byteLength(body)
   });
   res.end(body);
@@ -134,6 +144,204 @@ function summarizeJob(job) {
         }
       : undefined
   };
+}
+
+function updateDeviceStatus(deviceId, patch) {
+  if (!deviceId) return;
+  const previous = deviceStatuses.get(deviceId) || { deviceId };
+  deviceStatuses.set(deviceId, {
+    ...previous,
+    ...patch,
+    deviceId,
+    updatedAt: new Date().toISOString()
+  });
+}
+
+function parseHeaderInt(value) {
+  const n = parseInt(String(value || '').trim(), 10);
+  return Number.isFinite(n) ? n : undefined;
+}
+
+function dashboardAuth(req, res) {
+  if (!UPLOAD_TOKEN) {
+    sendJson(res, 500, { ok: false, error: 'UPLOAD_TOKEN is not configured' });
+    return false;
+  }
+  if (!hasValidUploadToken(req)) {
+    sendJson(res, 401, { ok: false, error: 'invalid upload token' });
+    return false;
+  }
+  return true;
+}
+
+async function listJobs({ limit = 20, status = '' } = {}) {
+  const entries = await fsp.readdir(JOB_DIR, { withFileTypes: true });
+  const jobs = [];
+  let skipped = 0;
+
+  await Promise.all(entries.map(async (entry) => {
+    if (!entry.isFile() || !entry.name.endsWith('.json')) {
+      return;
+    }
+    try {
+      const raw = await fsp.readFile(path.join(JOB_DIR, entry.name), 'utf8');
+      const job = JSON.parse(raw);
+      if (!status || job.status === status) {
+        jobs.push(summarizeJob(job));
+      }
+    } catch {
+      skipped++;
+    }
+  }));
+
+  jobs.sort((a, b) => {
+    const left = Date.parse(a.updatedAt || a.createdAt || '') || 0;
+    const right = Date.parse(b.updatedAt || b.createdAt || '') || 0;
+    return right - left;
+  });
+
+  return {
+    count: Math.min(jobs.length, limit),
+    total: jobs.length,
+    skipped,
+    jobs: jobs.slice(0, limit)
+  };
+}
+
+function dashboardHtml() {
+  return `<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Cardputer Voice Dashboard</title>
+  <style>
+    :root { color-scheme: dark; --bg:#080b0a; --panel:#101613; --line:#21412f; --text:#e8fff0; --muted:#7fa18b; --ok:#40ff83; --bad:#ff5d5d; --warn:#ffd166; }
+    * { box-sizing: border-box; }
+    body { margin: 0; font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; background: var(--bg); color: var(--text); }
+    header { padding: 18px 18px 10px; border-bottom: 1px solid var(--line); background: #090f0c; position: sticky; top: 0; z-index: 2; }
+    h1 { margin: 0 0 12px; font-size: 20px; font-weight: 700; letter-spacing: 0; }
+    .bar { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+    input, button, select { height: 36px; border: 1px solid var(--line); background: #0c120f; color: var(--text); border-radius: 6px; padding: 0 10px; font: inherit; }
+    input { min-width: 280px; flex: 1; }
+    button { cursor: pointer; color: var(--ok); }
+    main { padding: 16px 18px 24px; max-width: 1180px; margin: 0 auto; }
+    .grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; margin-bottom: 14px; }
+    .panel { border: 1px solid var(--line); background: var(--panel); border-radius: 8px; padding: 12px; }
+    .label { color: var(--muted); font-size: 12px; margin-bottom: 6px; }
+    .value { font-size: 22px; font-weight: 700; overflow-wrap: anywhere; }
+    .ok { color: var(--ok); }
+    .bad { color: var(--bad); }
+    .warn { color: var(--warn); }
+    section { margin-top: 14px; }
+    h2 { font-size: 15px; margin: 0 0 10px; color: var(--ok); }
+    table { width: 100%; border-collapse: collapse; font-size: 13px; }
+    th, td { border-bottom: 1px solid #17251d; padding: 8px 6px; text-align: left; vertical-align: top; }
+    th { color: var(--muted); font-weight: 600; }
+    .pill { display: inline-block; border: 1px solid var(--line); border-radius: 999px; padding: 2px 7px; color: var(--ok); white-space: nowrap; }
+    .progress { height: 8px; background: #07100a; border: 1px solid var(--line); border-radius: 999px; overflow: hidden; min-width: 120px; }
+    .fill { height: 100%; width: 0; background: var(--ok); }
+    .muted { color: var(--muted); }
+    .error { color: var(--bad); margin-top: 8px; min-height: 20px; }
+    @media (max-width: 800px) { .grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } input { min-width: 180px; } table { font-size: 12px; } }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>Cardputer Voice Dashboard</h1>
+    <div class="bar">
+      <input id="token" type="password" autocomplete="off" placeholder="UPLOAD_TOKEN">
+      <button id="save">保存</button>
+      <button id="refresh">刷新</button>
+      <select id="limit"><option>20</option><option selected>50</option><option>100</option></select>
+      <span id="stamp" class="muted"></span>
+    </div>
+    <div id="error" class="error"></div>
+  </header>
+  <main>
+    <div class="grid">
+      <div class="panel"><div class="label">服务</div><div id="service" class="value">-</div></div>
+      <div class="panel"><div class="label">任务总数</div><div id="total" class="value">-</div></div>
+      <div class="panel"><div class="label">正在上传</div><div id="active" class="value">-</div></div>
+      <div class="panel"><div class="label">失败任务</div><div id="failed" class="value">-</div></div>
+    </div>
+
+    <section class="panel">
+      <h2>设备 / Wi-Fi</h2>
+      <table><thead><tr><th>设备</th><th>最后状态</th><th>Wi-Fi</th><th>最近录音</th><th>更新时间</th></tr></thead><tbody id="devices"></tbody></table>
+    </section>
+
+    <section class="panel">
+      <h2>正在上传</h2>
+      <table><thead><tr><th>录音</th><th>设备</th><th>进度</th><th>字节</th><th>开始时间</th></tr></thead><tbody id="uploads"></tbody></table>
+    </section>
+
+    <section class="panel">
+      <h2>最近任务</h2>
+      <table><thead><tr><th>录音</th><th>状态</th><th>设备</th><th>大小</th><th>记录时间</th><th>更新</th><th>备注</th></tr></thead><tbody id="jobs"></tbody></table>
+    </section>
+  </main>
+  <script>
+    const $ = (id) => document.getElementById(id);
+    const fmtTime = (v) => v ? new Date(v).toLocaleString() : '-';
+    const fmtBytes = (n) => Number.isFinite(n) ? (n > 1048576 ? (n / 1048576).toFixed(1) + ' MB' : Math.round(n / 1024) + ' KB') : '-';
+    const esc = (v) => String(v ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+    const tokenInput = $('token');
+    tokenInput.value = localStorage.getItem('cardputerUploadToken') || '';
+    $('save').onclick = () => { localStorage.setItem('cardputerUploadToken', tokenInput.value); load(); };
+    $('refresh').onclick = () => load();
+    $('limit').onchange = () => load();
+
+    function statusClass(status) {
+      if (status === 'done' || status === 'uploaded' || status === 'transcribed') return 'ok';
+      if (String(status || '').includes('failed')) return 'bad';
+      return 'warn';
+    }
+
+    async function load() {
+      const token = tokenInput.value.trim();
+      $('error').textContent = token ? '' : '请输入 UPLOAD_TOKEN 后查看后台数据。';
+      if (!token) return;
+      try {
+        const res = await fetch('/api/dashboard?limit=' + encodeURIComponent($('limit').value), {
+          headers: { 'X-Upload-Token': token }
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || 'HTTP ' + res.status);
+        render(data);
+      } catch (error) {
+        $('error').textContent = error.message;
+      }
+    }
+
+    function render(data) {
+      $('service').innerHTML = data.health.ok ? '<span class="ok">OK</span>' : '<span class="bad">ERR</span>';
+      $('total').textContent = data.jobs.total;
+      $('active').textContent = data.activeUploads.length;
+      $('failed').textContent = data.jobs.jobs.filter(j => String(j.status || '').includes('failed')).length;
+      $('stamp').textContent = '更新 ' + fmtTime(data.time);
+
+      $('devices').innerHTML = data.devices.length ? data.devices.map(d => {
+        const wifi = d.wifiRssi === undefined ? '<span class="muted">未上报</span>' : 'RSSI ' + esc(d.wifiRssi) + ' / IP ' + esc(d.wifiIp || '-');
+        return '<tr><td>' + esc(d.deviceId) + '</td><td><span class="pill">' + esc(d.lastStatus || '-') + '</span></td><td>' + wifi + '</td><td>' + esc(d.lastRecordingName || '-') + '</td><td>' + fmtTime(d.updatedAt) + '</td></tr>';
+      }).join('') : '<tr><td colspan="5" class="muted">还没有设备上报。下一次上传开始后会出现。</td></tr>';
+
+      $('uploads').innerHTML = data.activeUploads.length ? data.activeUploads.map(u => {
+        const pct = u.totalBytes ? Math.min(100, Math.round(u.bytesReceived * 100 / u.totalBytes)) : 0;
+        return '<tr><td>' + esc(u.recordingName) + '</td><td>' + esc(u.deviceId) + '</td><td><div class="progress"><div class="fill" style="width:' + pct + '%"></div></div> ' + pct + '%</td><td>' + fmtBytes(u.bytesReceived) + ' / ' + fmtBytes(u.totalBytes) + '</td><td>' + fmtTime(u.startedAt) + '</td></tr>';
+      }).join('') : '<tr><td colspan="5" class="muted">当前没有正在接收的上传。</td></tr>';
+
+      $('jobs').innerHTML = data.jobs.jobs.length ? data.jobs.jobs.map(j => {
+        const note = j.lastError || j.pendingReason || (j.memo && j.memo.title) || '';
+        return '<tr><td>' + esc(j.id) + '</td><td><span class="' + statusClass(j.status) + '">' + esc(j.status) + '</span></td><td>' + esc(j.deviceId || '-') + '</td><td>' + fmtBytes(j.bytes) + '</td><td>' + esc(j.recordedAt || '-') + '</td><td>' + fmtTime(j.updatedAt || j.createdAt) + '</td><td>' + esc(note) + '</td></tr>';
+      }).join('') : '<tr><td colspan="7" class="muted">没有任务。</td></tr>';
+    }
+
+    load();
+    setInterval(load, 3000);
+  </script>
+</body>
+</html>`;
 }
 
 function publicAudioUrl(recordingName) {
@@ -620,9 +828,32 @@ async function handleUpload(req, res) {
   const uploadPath = path.join(UPLOAD_DIR, recordingName);
   const jobPath = path.join(JOB_DIR, `${jobId}.json`);
   const startedAt = new Date().toISOString();
+  const uploadProgress = {
+    id: jobId,
+    deviceId,
+    recordingName,
+    bytesReceived: 0,
+    totalBytes: parseHeaderInt(req.headers['content-length']),
+    startedAt,
+    updatedAt: startedAt
+  };
+  const wifiRssi = parseHeaderInt(req.headers['x-wifi-rssi']);
+  const wifiIp = String(req.headers['x-wifi-ip'] || '').replace(/[^\d.:a-fA-F]/g, '').slice(0, 48);
+  updateDeviceStatus(deviceId, {
+    lastStatus: 'uploading',
+    lastRecordingName: recordingName,
+    wifiRssi,
+    wifiIp
+  });
 
   if (fs.existsSync(uploadPath) || fs.existsSync(jobPath)) {
     req.resume();
+    updateDeviceStatus(deviceId, {
+      lastStatus: 'duplicate',
+      lastRecordingName: recordingName,
+      wifiRssi,
+      wifiIp
+    });
     scheduleProcessJob(jobId);
     sendJson(res, 200, { ok: true, id: jobId, duplicate: true });
     return;
@@ -630,9 +861,12 @@ async function handleUpload(req, res) {
 
   let bytes = 0;
   const out = fs.createWriteStream(uploadPath, { flags: 'wx' });
+  activeUploads.set(jobId, uploadProgress);
 
   req.on('data', (chunk) => {
     bytes += chunk.length;
+    uploadProgress.bytesReceived = bytes;
+    uploadProgress.updatedAt = new Date().toISOString();
     if (bytes > MAX_UPLOAD_BYTES) {
       req.destroy(new Error('upload too large'));
     }
@@ -661,25 +895,34 @@ async function handleUpload(req, res) {
     };
 
     await fsp.writeFile(jobPath, `${JSON.stringify(job, null, 2)}\n`, 'utf8');
+    updateDeviceStatus(deviceId, {
+      lastStatus: 'server_received',
+      lastRecordingName: recordingName,
+      lastJobId: jobId,
+      wifiRssi,
+      wifiIp
+    });
     scheduleProcessJob(jobId);
     sendJson(res, 201, { ok: true, id: jobId });
   } catch (error) {
     out.destroy();
     await fsp.rm(uploadPath, { force: true }).catch(() => {});
+    updateDeviceStatus(deviceId, {
+      lastStatus: error.message === 'upload too large' ? 'upload_too_large' : 'upload_failed',
+      lastRecordingName: recordingName,
+      lastError: error.message,
+      wifiRssi,
+      wifiIp
+    });
     const statusCode = error.message === 'upload too large' ? 413 : 500;
     sendJson(res, statusCode, { ok: false, error: error.message });
+  } finally {
+    activeUploads.delete(jobId);
   }
 }
 
 async function handleJobsList(req, res, url) {
-  if (!UPLOAD_TOKEN) {
-    sendJson(res, 500, { ok: false, error: 'UPLOAD_TOKEN is not configured' });
-    return;
-  }
-  if (!hasValidUploadToken(req)) {
-    sendJson(res, 401, { ok: false, error: 'invalid upload token' });
-    return;
-  }
+  if (!dashboardAuth(req, res)) return;
 
   const rawLimit = parseInt(url.searchParams.get('limit') || '20', 10);
   const limit = Math.max(1, Math.min(Number.isFinite(rawLimit) ? rawLimit : 20, 100));
@@ -690,37 +933,38 @@ async function handleJobsList(req, res, url) {
   }
 
   try {
-    const entries = await fsp.readdir(JOB_DIR, { withFileTypes: true });
-    const jobs = [];
-    let skipped = 0;
+    sendJson(res, 200, { ok: true, ...(await listJobs({ limit, status })) });
+  } catch (error) {
+    sendJson(res, 500, { ok: false, error: error.message });
+  }
+}
 
-    await Promise.all(entries.map(async (entry) => {
-      if (!entry.isFile() || !entry.name.endsWith('.json')) {
-        return;
-      }
-      try {
-        const raw = await fsp.readFile(path.join(JOB_DIR, entry.name), 'utf8');
-        const job = JSON.parse(raw);
-        if (!status || job.status === status) {
-          jobs.push(summarizeJob(job));
-        }
-      } catch {
-        skipped++;
-      }
-    }));
-
-    jobs.sort((a, b) => {
-      const left = Date.parse(a.updatedAt || a.createdAt || '') || 0;
-      const right = Date.parse(b.updatedAt || b.createdAt || '') || 0;
-      return right - left;
-    });
-
+async function handleDashboardApi(req, res, url) {
+  if (!dashboardAuth(req, res)) return;
+  const rawLimit = parseInt(url.searchParams.get('limit') || '50', 10);
+  const limit = Math.max(1, Math.min(Number.isFinite(rawLimit) ? rawLimit : 50, 100));
+  try {
     sendJson(res, 200, {
       ok: true,
-      count: Math.min(jobs.length, limit),
-      total: jobs.length,
-      skipped,
-      jobs: jobs.slice(0, limit)
+      time: new Date().toISOString(),
+      health: {
+        ok: true,
+        service: 'cardputer-cloud-voice-server',
+        configured: {
+          uploadToken: Boolean(UPLOAD_TOKEN),
+          publicBaseUrl: Boolean(PUBLIC_BASE_URL),
+          asrFileToken: Boolean(ASR_FILE_TOKEN),
+          dashScope: Boolean(DASHSCOPE_API_KEY),
+          flomo: Boolean(FLOMO_WEBHOOK_URL)
+        }
+      },
+      activeUploads: [...activeUploads.values()],
+      devices: [...deviceStatuses.values()].sort((a, b) => {
+        const left = Date.parse(a.updatedAt || '') || 0;
+        const right = Date.parse(b.updatedAt || '') || 0;
+        return right - left;
+      }),
+      jobs: await listJobs({ limit })
     });
   } catch (error) {
     sendJson(res, 500, { ok: false, error: error.message });
@@ -875,6 +1119,14 @@ async function route(req, res) {
 
   if (req.method === 'GET' && pathname === '/health') {
     await handleHealth(req, res);
+    return;
+  }
+  if (req.method === 'GET' && pathname === '/dashboard') {
+    sendHtml(res, 200, dashboardHtml());
+    return;
+  }
+  if (req.method === 'GET' && pathname === '/api/dashboard') {
+    await handleDashboardApi(req, res, url);
     return;
   }
   if (req.method === 'POST' && pathname === '/upload') {

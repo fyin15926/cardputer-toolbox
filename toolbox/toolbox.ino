@@ -2207,6 +2207,9 @@ static bool uploadOneJobMounted() {
   client.printf("Content-Length: %u\r\n", (unsigned)f.size());
   client.printf("X-Upload-Token: %s\r\n", uploadCfg.token);
   client.printf("X-Device-Id: %s\r\n", uploadCfg.device);
+  client.printf("X-Wifi-Rssi: %d\r\n", WiFi.RSSI());
+  String localIp = WiFi.localIP().toString();
+  client.printf("X-Wifi-IP: %s\r\n", localIp.c_str());
   if (recordedAt[0]) client.printf("X-Recorded-At: %s\r\n", recordedAt);
   client.printf("X-Recording-Name: %s\r\n\r\n", name);
   uint8_t buf[512];

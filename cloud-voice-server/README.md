@@ -22,6 +22,8 @@ npm start
 ## Endpoints
 
 - `GET /health`: health check.
+- `GET /dashboard`: browser dashboard for uploads, jobs, and device status.
+- `GET /api/dashboard`: dashboard JSON. Requires `X-Upload-Token`.
 - `POST /upload`: accepts raw `audio/wav` bytes with `X-Upload-Token`.
 - `GET /jobs`: lists recent jobs. Requires `X-Upload-Token`; supports `limit=20` and `status=done`.
 - `GET /jobs/:id`: returns saved upload metadata.
@@ -77,6 +79,17 @@ Filter by status when debugging:
 curl "http://127.0.0.1:3000/jobs?status=flomo_failed&limit=10" \
   -H "X-Upload-Token: change-me-to-a-long-random-token"
 ```
+
+Open the dashboard in a browser:
+
+```text
+http://127.0.0.1:3000/dashboard
+```
+
+The dashboard stores the upload token only in the browser's local storage and
+uses it as `X-Upload-Token` when polling `/api/dashboard`. It shows server
+health, active upload progress, recent jobs, and the device's last reported
+Wi-Fi RSSI/IP from upload headers.
 
 When transcription is configured, raw text is written to
 `transcripts/REC_0123.txt`, the formatted flomo memo is written to
