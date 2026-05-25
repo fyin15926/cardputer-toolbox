@@ -130,6 +130,8 @@ clean_for_asr.wav    # 服务器识别版，送 DashScope 转文字
 
 后台页面除了显示 job 状态，还应该展示服务器处理过程，让用户知道每一步发生了什么。
 
+2026-05-25 进展：任务详情页已经能显示上传格式、压缩倍率、WAV 采样信息、转写/memo 文件状态、原始音频播放、重跑转写和重发 flomo。音频实验区第一版已上线，可生成不覆盖原始 WAV 的 `previews/REC_XXXX.play-preview.wav`，并保存对应参数/统计到 `previews/REC_XXXX.play-preview.json`，用于和原始录音 A/B 试听。
+
 建议每条录音显示：
 
 - 原始录音：文件名、时长、大小、录音时间、播放按钮、波形。
