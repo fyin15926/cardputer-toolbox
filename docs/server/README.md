@@ -101,7 +101,9 @@ metadata, transcript/memo file status, audio playback, and manual reprocess /
 resend actions.
 Its audio lab can generate a non-destructive play-preview WAV from the original
 recording with lightweight friction/high-frequency suppression parameters, then
-load it next to the original recording for A/B listening.
+load it next to the original recording for A/B listening. It keeps the latest
+preview parameters and metrics so the page can be refreshed without losing the
+current experiment.
 
 When transcription is configured, raw text is written to
 `transcripts/REC_0123.txt`, the formatted flomo memo is written to

@@ -744,6 +744,9 @@ function dashboardJobHtml() {
         <div><div class="label">帧采样数</div><input id="previewFrame" type="number" step="64" min="64" max="2048"></div>
       </div>
       <div class="statusline">
+        <button id="presetGentle">轻柔</button>
+        <button id="presetDefault">默认</button>
+        <button id="presetStrong">强力</button>
         <button id="generatePreview">生成试听版</button>
         <button id="loadPreview">加载试听版</button>
         <span id="previewStatus" class="muted">先生成试听版，再和原始录音 A/B 对比。</span>
@@ -784,6 +787,9 @@ function dashboardJobHtml() {
     $('resend').onclick = () => postJob('resend');
     $('generatePreview').onclick = () => generatePreview();
     $('loadPreview').onclick = () => loadPreviewAudio();
+    $('presetGentle').onclick = () => setPreviewParams({ gain: 1, lowpass: 72, highMix: 0.45, scratchRmsMax: 1600, scratchDiffMin: 180, scratchRatio: 105, holdFrames: 1, frameSamples: 256 });
+    $('presetDefault').onclick = () => setPreviewParams(defaultPreviewParams);
+    $('presetStrong').onclick = () => setPreviewParams({ gain: 1, lowpass: 112, highMix: 0.12, scratchRmsMax: 2400, scratchDiffMin: 110, scratchRatio: 70, holdFrames: 3, frameSamples: 256 });
     const defaultPreviewParams = {
       gain: 1,
       lowpass: 96,
@@ -794,14 +800,7 @@ function dashboardJobHtml() {
       holdFrames: 2,
       frameSamples: 256
     };
-    $('previewGain').value = defaultPreviewParams.gain;
-    $('previewLowpass').value = defaultPreviewParams.lowpass;
-    $('previewHighMix').value = defaultPreviewParams.highMix;
-    $('previewHold').value = defaultPreviewParams.holdFrames;
-    $('previewRms').value = defaultPreviewParams.scratchRmsMax;
-    $('previewDiff').value = defaultPreviewParams.scratchDiffMin;
-    $('previewRatio').value = defaultPreviewParams.scratchRatio;
-    $('previewFrame').value = defaultPreviewParams.frameSamples;
+    setPreviewParams(defaultPreviewParams);
 
     function statusClass(status) {
       if (status === 'done' || status === 'uploaded' || status === 'transcribed') return 'ok';
@@ -825,6 +824,18 @@ function dashboardJobHtml() {
       if (!file) return '-';
       if (file.error) return '<span class="bad">' + esc(file.error) + '</span>';
       return fmtBytes(file.bytes) + ' · ' + fmtTime(file.updatedAt) + (file.path ? '<br><span class="muted mono">' + esc(file.path) + '</span>' : '');
+    }
+
+    function setPreviewParams(params) {
+      const p = { ...defaultPreviewParams, ...(params || {}) };
+      $('previewGain').value = p.gain;
+      $('previewLowpass').value = p.lowpass;
+      $('previewHighMix').value = p.highMix;
+      $('previewHold').value = p.holdFrames;
+      $('previewRms').value = p.scratchRmsMax;
+      $('previewDiff').value = p.scratchDiffMin;
+      $('previewRatio').value = p.scratchRatio;
+      $('previewFrame').value = p.frameSamples;
     }
 
     function previewParamsFromForm() {
@@ -858,6 +869,13 @@ function dashboardJobHtml() {
       const files = data.files || {};
       const wav = files.audio?.wav || {};
       const encoding = job.uploadEncoding === 'ima-adpcm' ? 'ADPCM' : 'WAV';
+      if (data.preview?.params) {
+        setPreviewParams(data.preview.params);
+        renderPreviewMeta(data.preview);
+        $('previewStatus').textContent = '已读取上次试听参数，可直接加载试听版或继续微调。';
+      } else {
+        renderPreviewMeta(null);
+      }
       $('status').innerHTML = statusPill(job.status);
       $('phase').textContent = job.phase ?? '-';
       $('device').textContent = job.deviceId || '-';
@@ -1721,6 +1739,16 @@ async function readOptionalDataText(relativePath, maxBytes = 512 * 1024) {
   }
 }
 
+async function readOptionalDataJson(relativePath, maxBytes = 512 * 1024) {
+  const text = await readOptionalDataText(relativePath, maxBytes);
+  if (!text || text.startsWith('文件太大') || text.startsWith('读取失败')) return null;
+  try {
+    return JSON.parse(text);
+  } catch {
+    return null;
+  }
+}
+
 async function statOptionalDataFile(relativePath) {
   if (!relativePath) return null;
   try {
@@ -1952,13 +1980,15 @@ async function handleJobDetailApi(req, res, pathname) {
     const memoPath = job.transcriptMemoPath || path.relative(DATA_ROOT, transcriptMemoPathForId(id));
     const memoText = await readOptionalDataText(memoPath);
     const files = await inspectJobFiles(job, memoPath);
+    const preview = await readOptionalDataJson(path.relative(DATA_ROOT, previewMetaPathForId(id)));
     sendJson(res, 200, {
       ok: true,
       time: new Date().toISOString(),
       job: redactJobForDashboard(job),
       transcriptText,
       memoText,
-      files
+      files,
+      preview
     });
   } catch (error) {
     if (error.code === 'ENOENT') {
