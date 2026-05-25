@@ -96,6 +96,9 @@ The dashboard stores the upload token only in the browser's local storage and
 uses it as `X-Upload-Token` when polling `/api/dashboard`. It shows server
 health, active upload progress, recent jobs, and the device's last reported
 Wi-Fi RSSI/IP from upload headers.
+The job detail page also shows upload encoding, compression ratio, WAV sample
+metadata, transcript/memo file status, audio playback, and manual reprocess /
+resend actions.
 
 When transcription is configured, raw text is written to
 `transcripts/REC_0123.txt`, the formatted flomo memo is written to

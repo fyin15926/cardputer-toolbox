@@ -112,6 +112,10 @@ function transcriptMemoPathForId(id) {
   return path.join(TRANSCRIPT_DIR, `${id}.memo.txt`);
 }
 
+function audioPathForJob(job) {
+  return job.uploadPath ? resolveDataPath(job.uploadPath) : path.join(UPLOAD_DIR, job.recordingName || '');
+}
+
 async function readJob(id) {
   const raw = await fsp.readFile(jobPathForId(id), 'utf8');
   return JSON.parse(raw);
@@ -596,6 +600,7 @@ function dashboardJobHtml() {
     .bar { display: grid; grid-template-columns: minmax(220px, 1fr) auto auto auto; gap: 8px; align-items: center; }
     .panel { border: 1px solid var(--line); background: var(--panel); border-radius: 8px; padding: 12px; margin-top: 14px; }
     .grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; }
+    .grid.two { grid-template-columns: repeat(2, minmax(0, 1fr)); }
     .label { color: var(--muted); font-size: 12px; margin-bottom: 6px; }
     .value { font-size: 18px; font-weight: 700; overflow-wrap: anywhere; }
     .muted { color: var(--muted); }
@@ -613,11 +618,15 @@ function dashboardJobHtml() {
     .timeline { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; }
     .step { border: 1px solid var(--line); border-radius: 8px; padding: 10px; background: #0c120f; min-height: 78px; }
     .step strong { display: block; margin-bottom: 6px; }
+    .kv { display: grid; grid-template-columns: 140px minmax(0, 1fr); gap: 8px 12px; font-size: 14px; }
+    .kv div:nth-child(odd) { color: var(--muted); }
+    .kv div:nth-child(even) { overflow-wrap: anywhere; }
+    .mono { font-family: ui-monospace, SFMono-Regular, Consolas, monospace; }
     pre { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; font: 12px/1.5 ui-monospace, SFMono-Regular, Consolas, monospace; background: #080d0a; border: 1px solid #17251d; border-radius: 6px; padding: 10px; max-height: 420px; overflow: auto; }
     audio { width: 100%; margin-top: 10px; }
     .hidden { display: none !important; }
-    @media (max-width: 900px) { .grid, .timeline { grid-template-columns: repeat(2, minmax(0, 1fr)); } .bar { grid-template-columns: 1fr auto; } }
-    @media (max-width: 560px) { .grid, .timeline { grid-template-columns: 1fr; } .top { align-items: flex-start; flex-direction: column; } .bar { grid-template-columns: 1fr 1fr; } #token { grid-column: 1 / -1; } }
+    @media (max-width: 900px) { .grid, .grid.two, .timeline { grid-template-columns: repeat(2, minmax(0, 1fr)); } .bar { grid-template-columns: 1fr auto; } }
+    @media (max-width: 560px) { .grid, .grid.two, .timeline, .kv { grid-template-columns: 1fr; } .top { align-items: flex-start; flex-direction: column; } .bar { grid-template-columns: 1fr 1fr; } #token { grid-column: 1 / -1; } }
   </style>
 </head>
 <body>
@@ -643,6 +652,26 @@ function dashboardJobHtml() {
         <div><div class="label">阶段</div><div id="phase" class="value">-</div></div>
         <div><div class="label">设备</div><div id="device" class="value">-</div></div>
         <div><div class="label">大小</div><div id="bytes" class="value">-</div></div>
+        <div><div class="label">格式</div><div id="encoding" class="value">-</div></div>
+        <div><div class="label">录音时间</div><div id="recordedAt" class="value">-</div></div>
+        <div><div class="label">创建</div><div id="createdAt" class="value">-</div></div>
+        <div><div class="label">更新</div><div id="updatedAt" class="value">-</div></div>
+      </div>
+    </section>
+
+    <section class="panel">
+      <div class="section-title"><h2>上传 / 音频信息</h2><span id="audioSummary" class="muted"></span></div>
+      <div id="uploadMeta" class="kv"></div>
+    </section>
+
+    <section class="panel">
+      <div class="section-title">
+        <h2>任务操作</h2>
+        <span id="actionStatus" class="muted"></span>
+      </div>
+      <div class="actions">
+        <button id="reprocess">重跑转写</button>
+        <button id="resend" class="danger">重发 flomo</button>
       </div>
     </section>
 
@@ -676,6 +705,20 @@ function dashboardJobHtml() {
     </section>
 
     <section class="panel">
+      <div class="section-title"><h2>音频实验区</h2><span class="muted">下一步</span></div>
+      <div class="kv">
+        <div>目标</div><div>原始录音、人耳播放版、服务器识别版 A/B 对比</div>
+        <div>小机器侧</div><div>后续读取参数配置，不频繁重烧固件</div>
+        <div>服务器侧</div><div>后续生成 clean_for_asr.wav 给转写使用</div>
+      </div>
+    </section>
+
+    <section class="panel">
+      <h2>文件状态</h2>
+      <div id="fileMeta" class="kv"></div>
+    </section>
+
+    <section class="panel">
       <h2>任务 JSON</h2>
       <pre id="raw">-</pre>
     </section>
@@ -685,6 +728,7 @@ function dashboardJobHtml() {
     const jobId = decodeURIComponent(location.pathname.split('/').pop() || '');
     const fmtTime = (v) => v ? new Date(v).toLocaleString() : '-';
     const fmtBytes = (n) => Number.isFinite(n) ? (n > 1048576 ? (n / 1048576).toFixed(1) + ' MB' : Math.round(n / 1024) + ' KB') : '-';
+    const fmtDuration = (s) => Number.isFinite(s) ? (s >= 60 ? Math.floor(s / 60) + 'm ' + Math.round(s % 60) + 's' : s.toFixed(1) + 's') : '-';
     const esc = (v) => String(v ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
     const normalizeToken = (value) => String(value || '').trim().replace(/^UPLOAD_TOKEN\\s*=\\s*/i, '').replace(/^token\\s*=\\s*/i, '').replace(/^['"]|['"]$/g, '').trim();
     const tokenInput = $('token');
@@ -694,6 +738,8 @@ function dashboardJobHtml() {
     $('refresh').onclick = () => load();
     $('clear').onclick = () => { localStorage.removeItem('cardputerUploadToken'); tokenInput.value = ''; load(); tokenInput.focus(); };
     $('loadAudio').onclick = () => loadAudio();
+    $('reprocess').onclick = () => postJob('process');
+    $('resend').onclick = () => postJob('resend');
 
     function statusClass(status) {
       if (status === 'done' || status === 'uploaded' || status === 'transcribed') return 'ok';
@@ -709,13 +755,31 @@ function dashboardJobHtml() {
       return '<div class="step"><strong>' + esc(name) + '</strong><div>' + statusPill(state) + '</div><div class="muted">' + esc(time || '-') + '</div><div class="muted">' + esc(detail || '') + '</div></div>';
     }
 
+    function kv(rows) {
+      return rows.map(([k, v, cls]) => '<div>' + esc(k) + '</div><div class="' + esc(cls || '') + '">' + (v || '-') + '</div>').join('');
+    }
+
+    function fileLine(file) {
+      if (!file) return '-';
+      if (file.error) return '<span class="bad">' + esc(file.error) + '</span>';
+      return fmtBytes(file.bytes) + ' · ' + fmtTime(file.updatedAt) + (file.path ? '<br><span class="muted mono">' + esc(file.path) + '</span>' : '');
+    }
+
     function render(data) {
       const job = data.job;
+      const files = data.files || {};
+      const wav = files.audio?.wav || {};
+      const encoding = job.uploadEncoding === 'ima-adpcm' ? 'ADPCM' : 'WAV';
       $('status').innerHTML = statusPill(job.status);
       $('phase').textContent = job.phase ?? '-';
       $('device').textContent = job.deviceId || '-';
       $('bytes').textContent = fmtBytes(job.bytes);
+      $('encoding').textContent = encoding;
+      $('recordedAt').textContent = job.recordedAt || '-';
+      $('createdAt').textContent = fmtTime(job.createdAt);
+      $('updatedAt').textContent = fmtTime(job.updatedAt || job.createdAt);
       $('recording').textContent = job.recordingName || job.id || '';
+      $('audioSummary').textContent = wav.sampleRate ? wav.sampleRate + ' Hz · ' + wav.bitsPerSample + ' bit · ' + fmtDuration(wav.durationSec) : '';
       $('stamp').textContent = '更新 ' + fmtTime(data.time);
       const reason = job.lastError || job.pendingReason || '';
       $('errorPanel').classList.toggle('hidden', !reason);
@@ -723,6 +787,22 @@ function dashboardJobHtml() {
       $('transcript').textContent = data.transcriptText || '还没有转写文本。';
       $('memo').textContent = data.memoText || '还没有 flomo memo。';
       $('raw').textContent = JSON.stringify(job, null, 2);
+      $('uploadMeta').innerHTML = kv([
+        ['录音文件', esc(job.recordingName || '-')],
+        ['上传格式', encoding],
+        ['服务器 WAV', fmtBytes(job.bytes)],
+        ['实际上传', fmtBytes(job.uploadedBytes || job.bytes)],
+        ['原始大小', fmtBytes(job.originalBytes || job.bytes)],
+        ['压缩倍率', job.compressionRatio ? esc(job.compressionRatio + 'x') : '-'],
+        ['采样参数', wav.sampleRate ? esc(wav.sampleRate + ' Hz / ' + wav.channels + ' ch / ' + wav.bitsPerSample + ' bit') : '-'],
+        ['时长', fmtDuration(wav.durationSec)]
+      ]);
+      $('fileMeta').innerHTML = kv([
+        ['原始 WAV', fileLine(files.audio)],
+        ['转写文本', fileLine(files.transcript)],
+        ['ASR JSON', fileLine(files.transcriptJson)],
+        ['flomo memo', fileLine(files.memo)]
+      ]);
       $('timeline').innerHTML = [
         step('上传', job.createdAt ? 'done' : 'waiting', fmtTime(job.createdAt), job.recordedAt || ''),
         step('转写', job.transcriptPath || job.transcriptText ? 'done' : (String(job.status || '').includes('transcribe_failed') ? 'failed' : job.status), fmtTime(job.updatedAt), job.dashScopeTaskId || ''),
@@ -749,6 +829,25 @@ function dashboardJobHtml() {
           ? 'token 不正确：请只粘贴等号后面的 UPLOAD_TOKEN'
           : error.message;
         $('stamp').textContent = '读取失败';
+      }
+    }
+
+    async function postJob(action) {
+      const token = normalizeToken(tokenInput.value);
+      if (!token) return;
+      if (action === 'resend' && !confirm('确认重新发送 ' + jobId + ' 到 flomo？这会产生一条新的 memo。')) return;
+      $('actionStatus').textContent = '正在执行...';
+      try {
+        const res = await fetch('/jobs/' + encodeURIComponent(jobId) + '/' + action, {
+          method: 'POST',
+          headers: { 'X-Upload-Token': token }
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || 'HTTP ' + res.status);
+        $('actionStatus').textContent = action === 'process' ? '已加入转写队列。' : '已重发 flomo。';
+        await load();
+      } catch (error) {
+        $('actionStatus').textContent = error.message;
       }
     }
 
@@ -1483,6 +1582,73 @@ async function readOptionalDataText(relativePath, maxBytes = 512 * 1024) {
   }
 }
 
+async function statOptionalDataFile(relativePath) {
+  if (!relativePath) return null;
+  try {
+    const filePath = resolveDataPath(relativePath);
+    const stat = await fsp.stat(filePath);
+    if (!stat.isFile()) return null;
+    return {
+      path: relativePath,
+      bytes: stat.size,
+      updatedAt: stat.mtime.toISOString()
+    };
+  } catch (error) {
+    if (error.code === 'ENOENT') return null;
+    return {
+      path: relativePath,
+      error: error.message
+    };
+  }
+}
+
+async function inspectWavFile(filePath) {
+  const stat = await fsp.stat(filePath);
+  if (!stat.isFile()) return null;
+  const handle = await fsp.open(filePath, 'r');
+  try {
+    const header = Buffer.alloc(44);
+    const { bytesRead } = await handle.read(header, 0, header.length, 0);
+    const info = {
+      bytes: stat.size,
+      updatedAt: stat.mtime.toISOString()
+    };
+    if (
+      bytesRead >= 44 &&
+      header.toString('ascii', 0, 4) === 'RIFF' &&
+      header.toString('ascii', 8, 12) === 'WAVE'
+    ) {
+      const channels = header.readUInt16LE(22);
+      const sampleRate = header.readUInt32LE(24);
+      const bitsPerSample = header.readUInt16LE(34);
+      const dataBytes = header.readUInt32LE(40);
+      const bytesPerSampleFrame = Math.max(1, channels * (bitsPerSample / 8));
+      info.wav = {
+        channels,
+        sampleRate,
+        bitsPerSample,
+        dataBytes,
+        durationSec: sampleRate > 0 ? dataBytes / bytesPerSampleFrame / sampleRate : 0
+      };
+    }
+    return info;
+  } finally {
+    await handle.close();
+  }
+}
+
+async function inspectJobFiles(job, memoPath) {
+  const audioInfo = job.recordingName ? await inspectWavFile(audioPathForJob(job)).catch((error) => ({
+    error: error.code === 'ENOENT' ? 'audio not found' : error.message
+  })) : null;
+  return {
+    audio: audioInfo,
+    transcript: await statOptionalDataFile(job.transcriptPath),
+    transcriptJson: await statOptionalDataFile(job.transcriptJsonPath),
+    memo: await statOptionalDataFile(memoPath)
+  };
+}
+
 function redactJobForDashboard(job) {
   const copy = JSON.parse(JSON.stringify(job));
   if (copy.audioUrl) {
@@ -1508,17 +1674,14 @@ async function handleJobDetailApi(req, res, pathname) {
     const transcriptText = job.transcriptText || await readOptionalDataText(job.transcriptPath);
     const memoPath = job.transcriptMemoPath || path.relative(DATA_ROOT, transcriptMemoPathForId(id));
     const memoText = await readOptionalDataText(memoPath);
+    const files = await inspectJobFiles(job, memoPath);
     sendJson(res, 200, {
       ok: true,
       time: new Date().toISOString(),
       job: redactJobForDashboard(job),
       transcriptText,
       memoText,
-      files: {
-        audio: Boolean(job.recordingName),
-        transcript: Boolean(job.transcriptPath),
-        memo: Boolean(memoText)
-      }
+      files
     });
   } catch (error) {
     if (error.code === 'ENOENT') {
@@ -1545,7 +1708,7 @@ async function handleJobAudioApi(req, res, pathname) {
       sendJson(res, 400, { ok: false, error: 'invalid audio name' });
       return;
     }
-    const uploadPath = path.join(UPLOAD_DIR, normalized.recordingName);
+    const uploadPath = audioPathForJob(job);
     const stat = await fsp.stat(uploadPath);
     res.writeHead(200, {
       'Content-Type': 'audio/wav',
