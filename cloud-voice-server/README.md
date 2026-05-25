@@ -25,8 +25,8 @@ npm start
 - `POST /upload`: accepts raw `audio/wav` bytes with `X-Upload-Token`.
 - `GET /jobs`: lists recent jobs. Requires `X-Upload-Token`; supports `limit=20` and `status=done`.
 - `GET /jobs/:id`: returns saved upload metadata.
-- `POST /jobs/:id/process`: manually queues a saved job for transcription.
-- `POST /jobs/:id/resend`: resends an already transcribed job to flomo using the current memo format and `terms.json`.
+- `POST /jobs/:id/process`: manually queues a saved job for transcription. Requires `X-Upload-Token`.
+- `POST /jobs/:id/resend`: resends an already transcribed job to flomo using the current memo format and `terms.json`. Requires `X-Upload-Token`.
 - `GET /audio/:recordingName?token=...`: private audio URL for DashScope fetch.
 
 Production deployment notes and nginx/systemd templates are in

@@ -779,6 +779,15 @@ async function handleAudio(req, res, url) {
 }
 
 async function handleJobProcess(req, res, pathname) {
+  if (!UPLOAD_TOKEN) {
+    sendJson(res, 500, { ok: false, error: 'UPLOAD_TOKEN is not configured' });
+    return;
+  }
+  if (!hasValidUploadToken(req)) {
+    sendJson(res, 401, { ok: false, error: 'invalid upload token' });
+    return;
+  }
+
   const id = decodeURIComponent(pathname.slice('/jobs/'.length, -'/process'.length));
   if (!/^[\w.-]+$/.test(id)) {
     sendJson(res, 400, { ok: false, error: 'invalid job id' });
@@ -790,6 +799,15 @@ async function handleJobProcess(req, res, pathname) {
 }
 
 async function handleJobResend(req, res, pathname) {
+  if (!UPLOAD_TOKEN) {
+    sendJson(res, 500, { ok: false, error: 'UPLOAD_TOKEN is not configured' });
+    return;
+  }
+  if (!hasValidUploadToken(req)) {
+    sendJson(res, 401, { ok: false, error: 'invalid upload token' });
+    return;
+  }
+
   const id = decodeURIComponent(pathname.slice('/jobs/'.length, -'/resend'.length));
   if (!/^[\w.-]+$/.test(id)) {
     sendJson(res, 400, { ok: false, error: 'invalid job id' });

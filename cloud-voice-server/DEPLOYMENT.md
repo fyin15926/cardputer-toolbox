@@ -84,12 +84,14 @@ curl -X POST http://cardputer.flye.cc/upload \
 Manual processing:
 
 ```bash
-curl -X POST http://cardputer.flye.cc/jobs/REC_0001/process
+curl -X POST http://cardputer.flye.cc/jobs/REC_0001/process \
+  -H "X-Upload-Token: $UPLOAD_TOKEN"
 ```
 
 Resend an already transcribed memo to flomo after changing `terms.json` or the
 memo format:
 
 ```bash
-curl -X POST http://cardputer.flye.cc/jobs/REC_0001/resend
+curl -X POST http://cardputer.flye.cc/jobs/REC_0001/resend \
+  -H "X-Upload-Token: $UPLOAD_TOKEN"
 ```
