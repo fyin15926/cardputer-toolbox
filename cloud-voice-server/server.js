@@ -262,6 +262,8 @@ function dashboardHtml() {
     .filters { display: flex; gap: 6px; flex-wrap: wrap; justify-content: flex-end; align-items: center; }
     .filters button { height: 30px; padding: 0 9px; font-size: 12px; color: var(--muted); }
     .filters button.active { color: var(--ok); border-color: var(--ok); background: #0f1f16; }
+    a.button { display: inline-flex; align-items: center; height: 28px; padding: 0 8px; border: 1px solid var(--line); border-radius: 6px; color: var(--ok); text-decoration: none; font-size: 12px; white-space: nowrap; }
+    a.button:hover { border-color: var(--ok); }
     .nowrap { white-space: nowrap; }
     @media (max-width: 900px) { .grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } .bar { grid-template-columns: 1fr auto auto; } #limit, #clear { grid-column: auto; } table { font-size: 12px; } }
     @media (max-width: 560px) { .grid { grid-template-columns: 1fr; } .bar { grid-template-columns: 1fr 1fr; } #token { grid-column: 1 / -1; } }
@@ -430,6 +432,7 @@ function dashboardHtml() {
         const canProcess = String(j.status || '').includes('failed') || j.status === 'uploaded' || j.status === 'transcribed';
         const canResend = j.status === 'done' || j.status === 'transcribed';
         const actions = '<div class="actions">' +
+          '<a class="button" href="/dashboard/jobs/' + encodeURIComponent(j.id) + '">查看</a>' +
           (canProcess ? '<button class="small" onclick="reprocessJob(\\'' + esc(j.id) + '\\')">重跑</button>' : '') +
           (canResend ? '<button class="small danger" onclick="resendJob(\\'' + esc(j.id) + '\\')">重发</button>' : '') +
           '</div>';
@@ -439,6 +442,217 @@ function dashboardHtml() {
 
     load();
     setInterval(load, 3000);
+  </script>
+</body>
+</html>`;
+}
+
+function dashboardJobHtml() {
+  return `<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Cardputer Job Detail</title>
+  <style>
+    :root { color-scheme: dark; --bg:#070b09; --panel:#101613; --soft:#0c120f; --line:#21412f; --text:#e8fff0; --muted:#8fb09b; --ok:#40ff83; --bad:#ff5d5d; --warn:#ffd166; }
+    * { box-sizing: border-box; }
+    body { margin: 0; font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; background: var(--bg); color: var(--text); }
+    header { border-bottom: 1px solid var(--line); background: #090f0c; position: sticky; top: 0; z-index: 2; }
+    .head, main { max-width: 1180px; margin: 0 auto; padding: 16px 18px; }
+    h1 { margin: 0; font-size: 22px; letter-spacing: 0; }
+    h2 { margin: 0 0 10px; font-size: 15px; color: var(--ok); }
+    a { color: var(--ok); }
+    input, button { height: 38px; border: 1px solid var(--line); background: var(--soft); color: var(--text); border-radius: 6px; padding: 0 10px; font: inherit; min-width: 0; }
+    button { cursor: pointer; color: var(--ok); white-space: nowrap; }
+    button:hover { border-color: var(--ok); }
+    button.danger { color: var(--bad); }
+    .top { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 12px; }
+    .bar { display: grid; grid-template-columns: minmax(220px, 1fr) auto auto auto; gap: 8px; align-items: center; }
+    .panel { border: 1px solid var(--line); background: var(--panel); border-radius: 8px; padding: 12px; margin-top: 14px; }
+    .grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; }
+    .label { color: var(--muted); font-size: 12px; margin-bottom: 6px; }
+    .value { font-size: 18px; font-weight: 700; overflow-wrap: anywhere; }
+    .muted { color: var(--muted); }
+    .ok { color: var(--ok); }
+    .bad { color: var(--bad); }
+    .warn { color: var(--warn); }
+    .pill { display: inline-block; border: 1px solid var(--line); border-radius: 999px; padding: 2px 7px; white-space: nowrap; }
+    .pill.ok { color: var(--ok); }
+    .pill.bad { color: var(--bad); }
+    .pill.warn { color: var(--warn); }
+    .statusline { display: flex; gap: 10px; align-items: center; min-height: 24px; margin-top: 8px; color: var(--muted); font-size: 13px; flex-wrap: wrap; }
+    .error { color: var(--bad); }
+    .actions { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+    .section-title { display: flex; justify-content: space-between; gap: 10px; align-items: center; margin-bottom: 10px; }
+    .timeline { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; }
+    .step { border: 1px solid var(--line); border-radius: 8px; padding: 10px; background: #0c120f; min-height: 78px; }
+    .step strong { display: block; margin-bottom: 6px; }
+    pre { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; font: 12px/1.5 ui-monospace, SFMono-Regular, Consolas, monospace; background: #080d0a; border: 1px solid #17251d; border-radius: 6px; padding: 10px; max-height: 420px; overflow: auto; }
+    audio { width: 100%; margin-top: 10px; }
+    .hidden { display: none !important; }
+    @media (max-width: 900px) { .grid, .timeline { grid-template-columns: repeat(2, minmax(0, 1fr)); } .bar { grid-template-columns: 1fr auto; } }
+    @media (max-width: 560px) { .grid, .timeline { grid-template-columns: 1fr; } .top { align-items: flex-start; flex-direction: column; } .bar { grid-template-columns: 1fr 1fr; } #token { grid-column: 1 / -1; } }
+  </style>
+</head>
+<body>
+  <header>
+    <div class="head">
+      <div class="top">
+        <h1 id="title">录音详情</h1>
+        <a href="/dashboard">返回后台</a>
+      </div>
+      <div class="bar">
+        <input id="token" type="password" autocomplete="off" placeholder="UPLOAD_TOKEN">
+        <button id="save">保存</button>
+        <button id="refresh">刷新</button>
+        <button id="clear" class="danger">清除</button>
+      </div>
+      <div class="statusline"><span id="stamp">等待登录</span><span id="error" class="error"></span></div>
+    </div>
+  </header>
+  <main>
+    <section class="panel">
+      <div class="grid">
+        <div><div class="label">状态</div><div id="status" class="value">-</div></div>
+        <div><div class="label">阶段</div><div id="phase" class="value">-</div></div>
+        <div><div class="label">设备</div><div id="device" class="value">-</div></div>
+        <div><div class="label">大小</div><div id="bytes" class="value">-</div></div>
+      </div>
+    </section>
+
+    <section class="panel">
+      <div class="section-title"><h2>处理时间线</h2><span id="recording" class="muted"></span></div>
+      <div id="timeline" class="timeline"></div>
+    </section>
+
+    <section id="errorPanel" class="panel hidden">
+      <h2>错误 / 等待原因</h2>
+      <pre id="jobError"></pre>
+    </section>
+
+    <section class="panel">
+      <div class="section-title">
+        <h2>原始录音</h2>
+        <div class="actions"><button id="loadAudio">加载 WAV</button></div>
+      </div>
+      <div id="audioStatus" class="muted">需要 token 才会读取音频。</div>
+      <audio id="audio" controls class="hidden"></audio>
+    </section>
+
+    <section class="panel">
+      <h2>转写文本</h2>
+      <pre id="transcript">-</pre>
+    </section>
+
+    <section class="panel">
+      <h2>flomo memo</h2>
+      <pre id="memo">-</pre>
+    </section>
+
+    <section class="panel">
+      <h2>任务 JSON</h2>
+      <pre id="raw">-</pre>
+    </section>
+  </main>
+  <script>
+    const $ = (id) => document.getElementById(id);
+    const jobId = decodeURIComponent(location.pathname.split('/').pop() || '');
+    const fmtTime = (v) => v ? new Date(v).toLocaleString() : '-';
+    const fmtBytes = (n) => Number.isFinite(n) ? (n > 1048576 ? (n / 1048576).toFixed(1) + ' MB' : Math.round(n / 1024) + ' KB') : '-';
+    const esc = (v) => String(v ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+    const normalizeToken = (value) => String(value || '').trim().replace(/^UPLOAD_TOKEN\\s*=\\s*/i, '').replace(/^token\\s*=\\s*/i, '').replace(/^['"]|['"]$/g, '').trim();
+    const tokenInput = $('token');
+    tokenInput.value = localStorage.getItem('cardputerUploadToken') || '';
+    $('title').textContent = jobId ? '录音详情 ' + jobId : '录音详情';
+    $('save').onclick = () => { tokenInput.value = normalizeToken(tokenInput.value); localStorage.setItem('cardputerUploadToken', tokenInput.value); load(); };
+    $('refresh').onclick = () => load();
+    $('clear').onclick = () => { localStorage.removeItem('cardputerUploadToken'); tokenInput.value = ''; load(); tokenInput.focus(); };
+    $('loadAudio').onclick = () => loadAudio();
+
+    function statusClass(status) {
+      if (status === 'done' || status === 'uploaded' || status === 'transcribed') return 'ok';
+      if (String(status || '').includes('failed')) return 'bad';
+      return 'warn';
+    }
+
+    function statusPill(status) {
+      return '<span class="pill ' + statusClass(status) + '">' + esc(status || '-') + '</span>';
+    }
+
+    function step(name, state, time, detail) {
+      return '<div class="step"><strong>' + esc(name) + '</strong><div>' + statusPill(state) + '</div><div class="muted">' + esc(time || '-') + '</div><div class="muted">' + esc(detail || '') + '</div></div>';
+    }
+
+    function render(data) {
+      const job = data.job;
+      $('status').innerHTML = statusPill(job.status);
+      $('phase').textContent = job.phase ?? '-';
+      $('device').textContent = job.deviceId || '-';
+      $('bytes').textContent = fmtBytes(job.bytes);
+      $('recording').textContent = job.recordingName || job.id || '';
+      $('stamp').textContent = '更新 ' + fmtTime(data.time);
+      const reason = job.lastError || job.pendingReason || '';
+      $('errorPanel').classList.toggle('hidden', !reason);
+      $('jobError').textContent = reason || '';
+      $('transcript').textContent = data.transcriptText || '还没有转写文本。';
+      $('memo').textContent = data.memoText || '还没有 flomo memo。';
+      $('raw').textContent = JSON.stringify(job, null, 2);
+      $('timeline').innerHTML = [
+        step('上传', job.createdAt ? 'done' : 'waiting', fmtTime(job.createdAt), job.recordedAt || ''),
+        step('转写', job.transcriptPath || job.transcriptText ? 'done' : (String(job.status || '').includes('transcribe_failed') ? 'failed' : job.status), fmtTime(job.updatedAt), job.dashScopeTaskId || ''),
+        step('flomo', job.flomo?.sentAt ? 'done' : (String(job.status || '').includes('flomo_failed') ? 'failed' : 'waiting'), fmtTime(job.flomo?.sentAt), job.memo?.title || ''),
+        step('最近更新', job.status || '-', fmtTime(job.updatedAt || job.createdAt), reason)
+      ].join('');
+    }
+
+    async function load() {
+      const token = normalizeToken(tokenInput.value);
+      if (tokenInput.value && tokenInput.value !== token) tokenInput.value = token;
+      $('error').textContent = '';
+      $('stamp').textContent = token ? '正在读取...' : '等待登录';
+      if (!token) return;
+      try {
+        const res = await fetch('/api/jobs/' + encodeURIComponent(jobId), {
+          headers: { 'X-Upload-Token': token }
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || 'HTTP ' + res.status);
+        render(data);
+      } catch (error) {
+        $('error').textContent = error.message === 'invalid upload token'
+          ? 'token 不正确：请只粘贴等号后面的 UPLOAD_TOKEN'
+          : error.message;
+        $('stamp').textContent = '读取失败';
+      }
+    }
+
+    async function loadAudio() {
+      const token = normalizeToken(tokenInput.value);
+      if (!token) return;
+      $('audioStatus').textContent = '正在读取 WAV...';
+      try {
+        const res = await fetch('/api/jobs/' + encodeURIComponent(jobId) + '/audio', {
+          headers: { 'X-Upload-Token': token }
+        });
+        if (!res.ok) {
+          const data = await res.json().catch(() => ({}));
+          throw new Error(data.error || 'HTTP ' + res.status);
+        }
+        const blob = await res.blob();
+        const audio = $('audio');
+        if (audio.dataset.url) URL.revokeObjectURL(audio.dataset.url);
+        const url = URL.createObjectURL(blob);
+        audio.dataset.url = url;
+        audio.src = url;
+        audio.classList.remove('hidden');
+        $('audioStatus').textContent = 'WAV 已加载。';
+      } catch (error) {
+        $('audioStatus').textContent = error.message;
+      }
+    }
+
+    load();
   </script>
 </body>
 </html>`;
@@ -1076,9 +1290,118 @@ async function handleDashboardApi(req, res, url) {
   }
 }
 
+function isValidJobId(id) {
+  return /^[\w.-]+$/.test(id);
+}
+
+function resolveDataPath(relativePath) {
+  if (!relativePath) return '';
+  const root = path.resolve(DATA_ROOT);
+  const resolved = path.resolve(DATA_ROOT, relativePath);
+  if (resolved !== root && !resolved.startsWith(`${root}${path.sep}`)) {
+    throw new Error('invalid data path');
+  }
+  return resolved;
+}
+
+async function readOptionalDataText(relativePath, maxBytes = 512 * 1024) {
+  if (!relativePath) return '';
+  try {
+    const filePath = resolveDataPath(relativePath);
+    const stat = await fsp.stat(filePath);
+    if (!stat.isFile()) return '';
+    if (stat.size > maxBytes) {
+      return `文件太大，未在详情页内展示（${stat.size} bytes）。`;
+    }
+    return await fsp.readFile(filePath, 'utf8');
+  } catch (error) {
+    if (error.code === 'ENOENT') return '';
+    return `读取失败：${error.message}`;
+  }
+}
+
+function redactJobForDashboard(job) {
+  const copy = JSON.parse(JSON.stringify(job));
+  if (copy.audioUrl) {
+    copy.audioUrl = String(copy.audioUrl).replace(/token=[^&]+/i, 'token=***');
+  }
+  if (typeof copy.transcriptText === 'string' && copy.transcriptText.length > 4000) {
+    copy.transcriptText = `${copy.transcriptText.slice(0, 4000)}\n...`;
+  }
+  return copy;
+}
+
+async function handleJobDetailApi(req, res, pathname) {
+  if (!dashboardAuth(req, res)) return;
+
+  const id = decodeURIComponent(pathname.slice('/api/jobs/'.length));
+  if (!isValidJobId(id)) {
+    sendJson(res, 400, { ok: false, error: 'invalid job id' });
+    return;
+  }
+
+  try {
+    const job = await readJob(id);
+    const transcriptText = job.transcriptText || await readOptionalDataText(job.transcriptPath);
+    const memoPath = job.transcriptMemoPath || path.relative(DATA_ROOT, transcriptMemoPathForId(id));
+    const memoText = await readOptionalDataText(memoPath);
+    sendJson(res, 200, {
+      ok: true,
+      time: new Date().toISOString(),
+      job: redactJobForDashboard(job),
+      transcriptText,
+      memoText,
+      files: {
+        audio: Boolean(job.recordingName),
+        transcript: Boolean(job.transcriptPath),
+        memo: Boolean(memoText)
+      }
+    });
+  } catch (error) {
+    if (error.code === 'ENOENT') {
+      sendJson(res, 404, { ok: false, error: 'job not found' });
+      return;
+    }
+    sendJson(res, 500, { ok: false, error: error.message });
+  }
+}
+
+async function handleJobAudioApi(req, res, pathname) {
+  if (!dashboardAuth(req, res)) return;
+
+  const id = decodeURIComponent(pathname.slice('/api/jobs/'.length, -'/audio'.length));
+  if (!isValidJobId(id)) {
+    sendJson(res, 400, { ok: false, error: 'invalid job id' });
+    return;
+  }
+
+  try {
+    const job = await readJob(id);
+    const normalized = normalizeRecordingName(job.recordingName);
+    if (!normalized || normalized.recordingName !== job.recordingName) {
+      sendJson(res, 400, { ok: false, error: 'invalid audio name' });
+      return;
+    }
+    const uploadPath = path.join(UPLOAD_DIR, normalized.recordingName);
+    const stat = await fsp.stat(uploadPath);
+    res.writeHead(200, {
+      'Content-Type': 'audio/wav',
+      'Content-Length': stat.size,
+      'Cache-Control': 'no-store'
+    });
+    fs.createReadStream(uploadPath).pipe(res);
+  } catch (error) {
+    if (error.code === 'ENOENT') {
+      sendJson(res, 404, { ok: false, error: 'audio not found' });
+      return;
+    }
+    sendJson(res, 500, { ok: false, error: error.message });
+  }
+}
+
 async function handleJob(req, res, pathname) {
   const id = decodeURIComponent(pathname.slice('/jobs/'.length));
-  if (!/^[\w.-]+$/.test(id)) {
+  if (!isValidJobId(id)) {
     sendJson(res, 400, { ok: false, error: 'invalid job id' });
     return;
   }
@@ -1230,8 +1553,20 @@ async function route(req, res) {
     sendHtml(res, 200, dashboardHtml());
     return;
   }
+  if (req.method === 'GET' && pathname.startsWith('/dashboard/jobs/')) {
+    sendHtml(res, 200, dashboardJobHtml());
+    return;
+  }
   if (req.method === 'GET' && pathname === '/api/dashboard') {
     await handleDashboardApi(req, res, url);
+    return;
+  }
+  if (req.method === 'GET' && pathname.startsWith('/api/jobs/') && pathname.endsWith('/audio')) {
+    await handleJobAudioApi(req, res, pathname);
+    return;
+  }
+  if (req.method === 'GET' && pathname.startsWith('/api/jobs/')) {
+    await handleJobDetailApi(req, res, pathname);
     return;
   }
   if (req.method === 'POST' && pathname === '/upload') {

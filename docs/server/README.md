@@ -23,7 +23,10 @@ npm start
 
 - `GET /health`: health check.
 - `GET /dashboard`: browser dashboard for uploads, jobs, and device status.
+- `GET /dashboard/jobs/:id`: browser detail page for one recording.
 - `GET /api/dashboard`: dashboard JSON. Requires `X-Upload-Token`; supports `limit=50` and `status=done` / `status=failed`.
+- `GET /api/jobs/:id`: dashboard detail JSON with transcript and memo. Requires `X-Upload-Token`.
+- `GET /api/jobs/:id/audio`: streams the original WAV for the dashboard detail page. Requires `X-Upload-Token`.
 - `POST /upload`: accepts raw `audio/wav` bytes with `X-Upload-Token`.
 - `GET /jobs`: lists recent jobs. Requires `X-Upload-Token`; supports `limit=20` and `status=done`.
 - `GET /jobs/:id`: returns saved upload metadata.
