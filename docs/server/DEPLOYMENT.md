@@ -30,7 +30,7 @@ PUBLIC_BASE_URL=http://cardputer.flye.cc
 ASR_FILE_TOKEN=replace-with-a-different-long-random-token
 DASHSCOPE_API_KEY=sk-...
 FLOMO_WEBHOOK_URL=https://flomoapp.com/iwh/...
-MAX_UPLOAD_BYTES=26214400
+MAX_UPLOAD_BYTES=67108864
 DATA_ROOT=/opt/cardputer-voice
 TERMS_PATH=/opt/cardputer-voice/terms.json
 ```
@@ -40,6 +40,11 @@ TERMS_PATH=/opt/cardputer-voice/terms.json
 temporary public audio URL used by DashScope. Paraformer recorded-file
 recognition requires a public HTTP/HTTPS file URL and does not accept local
 file uploads or base64 audio.
+
+For longer recordings, keep nginx `client_max_body_size` and
+`MAX_UPLOAD_BYTES` aligned. The current template allows 64 MB uploads
+(`MAX_UPLOAD_BYTES=67108864`), enough for roughly 30+ minutes of 16 kHz mono
+WAV.
 
 ## Safer nginx Setup
 
