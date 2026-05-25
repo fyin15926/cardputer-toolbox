@@ -1325,8 +1325,8 @@ function redactJobForDashboard(job) {
   if (copy.audioUrl) {
     copy.audioUrl = String(copy.audioUrl).replace(/token=[^&]+/i, 'token=***');
   }
-  if (typeof copy.transcriptText === 'string' && copy.transcriptText.length > 4000) {
-    copy.transcriptText = `${copy.transcriptText.slice(0, 4000)}\n...`;
+  if (typeof copy.transcriptText === 'string') {
+    copy.transcriptText = `[shown above, ${copy.transcriptText.length} chars]`;
   }
   return copy;
 }
