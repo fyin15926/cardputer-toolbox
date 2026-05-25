@@ -40,8 +40,8 @@ const DEFAULT_PREVIEW_PARAMS = {
   scratchRatio: 110,
   holdFrames: 1,
   frameSamples: 256,
-  noiseRmsMax: 320,
-  noiseMix: 0.6
+  noiseRmsMax: 900,
+  noiseMix: 0.28
 };
 
 function sendJson(res, statusCode, payload) {
@@ -739,7 +739,7 @@ function dashboardLabHtml() {
     const tokenInput = $('token');
     let jobs = [];
     let currentId = '';
-    const defaultPreviewParams = { gain: 1, lowpass: 72, highMix: 0.45, scratchRmsMax: 1500, scratchDiffMin: 180, scratchRatio: 110, holdFrames: 1, frameSamples: 256, noiseRmsMax: 320, noiseMix: 0.6 };
+    const defaultPreviewParams = { gain: 1, lowpass: 72, highMix: 0.45, scratchRmsMax: 1500, scratchDiffMin: 180, scratchRatio: 110, holdFrames: 1, frameSamples: 256, noiseRmsMax: 900, noiseMix: 0.28 };
     tokenInput.value = localStorage.getItem('cardputerUploadToken') || '';
     $('save').onclick = () => { tokenInput.value = normalizeToken(tokenInput.value); localStorage.setItem('cardputerUploadToken', tokenInput.value); loadJobs(); };
     $('refresh').onclick = () => loadJobs();
@@ -747,9 +747,9 @@ function dashboardLabHtml() {
     $('statusFilter').onchange = () => loadJobs();
     $('limit').onchange = () => loadJobs();
     $('clear').onclick = () => { localStorage.removeItem('cardputerUploadToken'); tokenInput.value = ''; jobs = []; renderJobs(); };
-    $('presetGentle').onclick = () => setPreviewParams({ gain: 1, lowpass: 56, highMix: 0.65, scratchRmsMax: 1100, scratchDiffMin: 220, scratchRatio: 130, holdFrames: 0, frameSamples: 256, noiseRmsMax: 220, noiseMix: 0.75 });
+    $('presetGentle').onclick = () => setPreviewParams({ gain: 1, lowpass: 56, highMix: 0.65, scratchRmsMax: 1100, scratchDiffMin: 220, scratchRatio: 130, holdFrames: 0, frameSamples: 256, noiseRmsMax: 650, noiseMix: 0.45 });
     $('presetDefault').onclick = () => setPreviewParams(defaultPreviewParams);
-    $('presetStrong').onclick = () => setPreviewParams({ gain: 1, lowpass: 96, highMix: 0.28, scratchRmsMax: 1900, scratchDiffMin: 150, scratchRatio: 92, holdFrames: 2, frameSamples: 256, noiseRmsMax: 450, noiseMix: 0.42 });
+    $('presetStrong').onclick = () => setPreviewParams({ gain: 1, lowpass: 96, highMix: 0.28, scratchRmsMax: 1900, scratchDiffMin: 150, scratchRatio: 92, holdFrames: 2, frameSamples: 256, noiseRmsMax: 1200, noiseMix: 0.18 });
     $('generatePreview').onclick = () => generatePreview();
     $('loadPreview').onclick = () => loadPreviewAudio();
     $('saveFeedback').onclick = () => saveFeedback();
@@ -1000,9 +1000,9 @@ function dashboardJobHtml() {
     $('generatePreview').onclick = () => generatePreview();
     $('loadPreview').onclick = () => loadPreviewAudio();
     $('saveFeedback').onclick = () => savePreviewFeedback();
-    $('presetGentle').onclick = () => setPreviewParams({ gain: 1, lowpass: 56, highMix: 0.65, scratchRmsMax: 1100, scratchDiffMin: 220, scratchRatio: 130, holdFrames: 0, frameSamples: 256, noiseRmsMax: 220, noiseMix: 0.75 });
+    $('presetGentle').onclick = () => setPreviewParams({ gain: 1, lowpass: 56, highMix: 0.65, scratchRmsMax: 1100, scratchDiffMin: 220, scratchRatio: 130, holdFrames: 0, frameSamples: 256, noiseRmsMax: 650, noiseMix: 0.45 });
     $('presetDefault').onclick = () => setPreviewParams(defaultPreviewParams);
-    $('presetStrong').onclick = () => setPreviewParams({ gain: 1, lowpass: 96, highMix: 0.28, scratchRmsMax: 1900, scratchDiffMin: 150, scratchRatio: 92, holdFrames: 2, frameSamples: 256, noiseRmsMax: 450, noiseMix: 0.42 });
+    $('presetStrong').onclick = () => setPreviewParams({ gain: 1, lowpass: 96, highMix: 0.28, scratchRmsMax: 1900, scratchDiffMin: 150, scratchRatio: 92, holdFrames: 2, frameSamples: 256, noiseRmsMax: 1200, noiseMix: 0.18 });
     const defaultPreviewParams = {
       gain: 1,
       lowpass: 72,
@@ -1012,8 +1012,8 @@ function dashboardJobHtml() {
       scratchRatio: 110,
       holdFrames: 1,
       frameSamples: 256,
-      noiseRmsMax: 320,
-      noiseMix: 0.6
+      noiseRmsMax: 900,
+      noiseMix: 0.28
     };
     setPreviewParams(defaultPreviewParams);
 
@@ -2242,18 +2242,24 @@ function buildPlayPreviewWav(wavBuffer, params) {
     }
     const active = detected || hold > 0;
     if (hold > 0) hold--;
-    const quietNoise = !active && stats.rms > 0 && stats.rms < p.noiseRmsMax;
-    if (quietNoise) {
+    const likelyNoise = stats.rms > 0 && stats.rms < p.noiseRmsMax * 1.8;
+    if (likelyNoise) {
       noiseFrames++;
     }
     const scratchTarget = active ? 1 : 0;
-    const noiseTarget = quietNoise ? 1 : 0;
+    const frameNoiseTarget = likelyNoise ? 1 : 0.35;
     scratchWet += (scratchTarget - scratchWet) * (scratchTarget > scratchWet ? 0.35 : 0.12);
-    noiseWet += (noiseTarget - noiseWet) * (noiseTarget > noiseWet ? 0.25 : 0.08);
+    noiseWet += (frameNoiseTarget - noiseWet) * (frameNoiseTarget > noiseWet ? 0.2 : 0.06);
     if (scratchWet > 0.05 || noiseWet > 0.05) processedFrames++;
 
     for (let i = 0; i < frameSamples; i++) {
       let sample = clampInt16(Math.round(wavBuffer.readInt16LE(frameStart + i * 2) * p.gain));
+      const absSample = Math.abs(sample);
+      if (p.noiseRmsMax > 0 && absSample < p.noiseRmsMax * 2.5) {
+        const x = Math.min(1, absSample / Math.max(1, p.noiseRmsMax * 2.5));
+        const softGate = p.noiseMix + (1 - p.noiseMix) * x * x;
+        sample = clampInt16(Math.round(sample * softGate));
+      }
       if (scratchWet > 0.01) {
         lp += Math.round((sample - lp) * p.lowpass / 256);
         const hi = sample - lp;
@@ -2261,7 +2267,7 @@ function buildPlayPreviewWav(wavBuffer, params) {
         sample = clampInt16(Math.round(lp + hi * scratchMix));
       }
       if (noiseWet > 0.01) {
-        const noiseMix = 1 - noiseWet * (1 - p.noiseMix);
+        const noiseMix = 1 - noiseWet * (1 - Math.max(p.noiseMix, 0.55));
         sample = clampInt16(Math.round(sample * noiseMix));
       }
       output.writeInt16LE(sample, outOffset);
