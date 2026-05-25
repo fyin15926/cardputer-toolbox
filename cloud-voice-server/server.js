@@ -1171,7 +1171,9 @@ async function handleUpload(req, res) {
     wifiIp
   });
 
-  if (fs.existsSync(uploadPath) || fs.existsSync(jobPath)) {
+  const uploadExists = fs.existsSync(uploadPath);
+  const jobExists = fs.existsSync(jobPath);
+  if (jobExists) {
     req.resume();
     updateDeviceStatus(deviceId, {
       lastStatus: 'duplicate',
@@ -1182,6 +1184,15 @@ async function handleUpload(req, res) {
     scheduleProcessJob(jobId);
     sendJson(res, 200, { ok: true, id: jobId, duplicate: true });
     return;
+  }
+  if (uploadExists) {
+    await fsp.rm(uploadPath, { force: true }).catch(() => {});
+    updateDeviceStatus(deviceId, {
+      lastStatus: 'retrying_stale_upload',
+      lastRecordingName: recordingName,
+      wifiRssi,
+      wifiIp
+    });
   }
 
   let bytes = 0;
