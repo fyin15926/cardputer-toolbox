@@ -329,7 +329,7 @@ function dashboardHtml() {
     const fmtTime = (v) => v ? new Date(v).toLocaleString() : '-';
     const fmtBytes = (n) => Number.isFinite(n) ? (n > 1048576 ? (n / 1048576).toFixed(1) + ' MB' : Math.round(n / 1024) + ' KB') : '-';
     const esc = (v) => String(v ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
-    const normalizeToken = (value) => String(value || '').trim().replace(/^UPLOAD_TOKEN\s*=\s*/i, '').replace(/^token\s*=\s*/i, '').replace(/^['"]|['"]$/g, '').trim();
+    const normalizeToken = (value) => String(value || '').trim().replace(/^UPLOAD_TOKEN\\s*=\\s*/i, '').replace(/^token\\s*=\\s*/i, '').replace(/^['"]|['"]$/g, '').trim();
     const tokenInput = $('token');
     let statusFilter = '';
     tokenInput.value = localStorage.getItem('cardputerUploadToken') || '';
