@@ -247,8 +247,8 @@ function dashboardHtml() {
     .progress { height: 8px; background: #07100a; border: 1px solid var(--line); border-radius: 999px; overflow: hidden; min-width: 120px; }
     .fill { height: 100%; width: 0; background: var(--ok); }
     .muted { color: var(--muted); }
-    .statusline { display: flex; gap: 10px; align-items: center; min-height: 24px; margin-top: 8px; color: var(--muted); font-size: 13px; white-space: normal; word-break: normal; writing-mode: horizontal-tb; }
-    .error { color: var(--bad); white-space: normal; word-break: normal; writing-mode: horizontal-tb; }
+    .statusline { display: flex; gap: 10px; align-items: center; min-height: 24px; margin-top: 8px; color: var(--muted); font-size: 13px; white-space: normal; word-break: normal; writing-mode: horizontal-tb; flex-wrap: wrap; }
+    .error { color: var(--bad); white-space: nowrap; word-break: normal; writing-mode: horizontal-tb; display: inline-block; }
     .notice { display: flex; justify-content: space-between; gap: 12px; align-items: center; margin-bottom: 14px; }
     .hidden { display: none !important; }
     .section-title { display: flex; justify-content: space-between; gap: 10px; align-items: center; margin-bottom: 10px; }
@@ -311,9 +311,10 @@ function dashboardHtml() {
     const fmtTime = (v) => v ? new Date(v).toLocaleString() : '-';
     const fmtBytes = (n) => Number.isFinite(n) ? (n > 1048576 ? (n / 1048576).toFixed(1) + ' MB' : Math.round(n / 1024) + ' KB') : '-';
     const esc = (v) => String(v ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+    const normalizeToken = (value) => String(value || '').trim().replace(/^UPLOAD_TOKEN\s*=\s*/i, '').replace(/^token\s*=\s*/i, '').replace(/^['"]|['"]$/g, '').trim();
     const tokenInput = $('token');
     tokenInput.value = localStorage.getItem('cardputerUploadToken') || '';
-    $('save').onclick = () => { localStorage.setItem('cardputerUploadToken', tokenInput.value); load(); };
+    $('save').onclick = () => { tokenInput.value = normalizeToken(tokenInput.value); localStorage.setItem('cardputerUploadToken', tokenInput.value); load(); };
     $('refresh').onclick = () => load();
     $('clear').onclick = () => { localStorage.removeItem('cardputerUploadToken'); tokenInput.value = ''; load(); tokenInput.focus(); };
     $('focusToken').onclick = () => tokenInput.focus();
@@ -330,7 +331,8 @@ function dashboardHtml() {
     }
 
     async function load() {
-      const token = tokenInput.value.trim();
+      const token = normalizeToken(tokenInput.value);
+      if (tokenInput.value && tokenInput.value !== token) tokenInput.value = token;
       $('error').textContent = '';
       $('loginHint').classList.toggle('hidden', Boolean(token));
       $('dashboardBody').classList.toggle('hidden', !token);
@@ -344,13 +346,17 @@ function dashboardHtml() {
         if (!res.ok) throw new Error(data.error || 'HTTP ' + res.status);
         render(data);
       } catch (error) {
-        $('error').textContent = error.message;
+        $('loginHint').classList.remove('hidden');
+        $('dashboardBody').classList.add('hidden');
+        $('error').textContent = error.message === 'invalid upload token'
+          ? 'token 不正确：请只粘贴等号后面的 UPLOAD_TOKEN'
+          : error.message;
         $('stamp').textContent = '读取失败';
       }
     }
 
     async function postJob(id, action) {
-      const token = tokenInput.value.trim();
+      const token = normalizeToken(tokenInput.value);
       if (!token) return;
       const isResend = action === 'resend';
       if (isResend && !confirm('确认重新发送 ' + id + ' 到 flomo？这会产生一条新的 memo。')) return;
