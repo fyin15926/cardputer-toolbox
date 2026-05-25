@@ -104,6 +104,8 @@ recording with lightweight friction/high-frequency suppression parameters, then
 load it next to the original recording for A/B listening. It keeps the latest
 preview parameters and metrics so the page can be refreshed without losing the
 current experiment.
+Listening feedback can be saved from the detail page; each note is stored with
+the preview parameters and metrics that were active at the time.
 
 When transcription is configured, raw text is written to
 `transcripts/REC_0123.txt`, the formatted flomo memo is written to

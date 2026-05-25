@@ -133,6 +133,10 @@ function previewMetaPathForId(id) {
   return path.join(PREVIEW_DIR, `${id}.play-preview.json`);
 }
 
+function previewFeedbackPathForId(id) {
+  return path.join(PREVIEW_DIR, `${id}.feedback.json`);
+}
+
 function audioPathForJob(job) {
   return job.uploadPath ? resolveDataPath(job.uploadPath) : path.join(UPLOAD_DIR, job.recordingName || '');
 }
@@ -619,7 +623,9 @@ function dashboardJobHtml() {
     h1 { margin: 0; font-size: 22px; letter-spacing: 0; }
     h2 { margin: 0 0 10px; font-size: 15px; color: var(--ok); }
     a { color: var(--ok); }
-    input, button { height: 38px; border: 1px solid var(--line); background: var(--soft); color: var(--text); border-radius: 6px; padding: 0 10px; font: inherit; min-width: 0; }
+    input, button, textarea, select { border: 1px solid var(--line); background: var(--soft); color: var(--text); border-radius: 6px; padding: 0 10px; font: inherit; min-width: 0; }
+    input, button, select { height: 38px; }
+    textarea { width: 100%; min-height: 78px; padding: 10px; resize: vertical; }
     button { cursor: pointer; color: var(--ok); white-space: nowrap; }
     button:hover { border-color: var(--ok); }
     button.danger { color: var(--bad); }
@@ -649,6 +655,9 @@ function dashboardJobHtml() {
     .kv div:nth-child(odd) { color: var(--muted); }
     .kv div:nth-child(even) { overflow-wrap: anywhere; }
     .mono { font-family: ui-monospace, SFMono-Regular, Consolas, monospace; }
+    .feedback-list { display: grid; gap: 8px; margin-top: 10px; }
+    .feedback-item { border: 1px solid #17251d; border-radius: 6px; padding: 10px; background: #080d0a; }
+    .feedback-item strong { color: var(--ok); }
     pre { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; font: 12px/1.5 ui-monospace, SFMono-Regular, Consolas, monospace; background: #080d0a; border: 1px solid #17251d; border-radius: 6px; padding: 10px; max-height: 420px; overflow: auto; }
     audio { width: 100%; margin-top: 10px; }
     .hidden { display: none !important; }
@@ -753,6 +762,28 @@ function dashboardJobHtml() {
       </div>
       <audio id="previewAudio" controls class="hidden"></audio>
       <div id="previewMeta" class="kv" style="margin-top:10px"></div>
+      <div class="grid two" style="margin-top:10px">
+        <div>
+          <div class="label">听感结论</div>
+          <select id="feedbackRating">
+            <option value="">选择结论</option>
+            <option value="better">更好</option>
+            <option value="worse">更差</option>
+            <option value="mixed">有好有坏</option>
+            <option value="neutral">差不多</option>
+          </select>
+        </div>
+        <div>
+          <div class="label">保存</div>
+          <button id="saveFeedback">保存听感记录</button>
+        </div>
+      </div>
+      <div style="margin-top:10px">
+        <div class="label">听感备注</div>
+        <textarea id="feedbackNote" placeholder="例如：刮擦少了一点，但人声变闷；强力版音量小，轻柔版更自然。"></textarea>
+      </div>
+      <div id="feedbackStatus" class="statusline muted"></div>
+      <div id="feedbackList" class="feedback-list"></div>
       <div class="kv" style="margin-top:10px">
         <div>说明</div><div>这是服务器端模拟“小机器人耳播放版”的试听，不会覆盖原始 WAV，也不会改变 flomo/转写结果。</div>
       </div>
@@ -787,6 +818,7 @@ function dashboardJobHtml() {
     $('resend').onclick = () => postJob('resend');
     $('generatePreview').onclick = () => generatePreview();
     $('loadPreview').onclick = () => loadPreviewAudio();
+    $('saveFeedback').onclick = () => savePreviewFeedback();
     $('presetGentle').onclick = () => setPreviewParams({ gain: 1, lowpass: 72, highMix: 0.45, scratchRmsMax: 1600, scratchDiffMin: 180, scratchRatio: 105, holdFrames: 1, frameSamples: 256 });
     $('presetDefault').onclick = () => setPreviewParams(defaultPreviewParams);
     $('presetStrong').onclick = () => setPreviewParams({ gain: 1, lowpass: 112, highMix: 0.12, scratchRmsMax: 2400, scratchDiffMin: 110, scratchRatio: 70, holdFrames: 3, frameSamples: 256 });
@@ -864,6 +896,21 @@ function dashboardJobHtml() {
       ]);
     }
 
+    function ratingLabel(value) {
+      return ({ better: '更好', worse: '更差', mixed: '有好有坏', neutral: '差不多' })[value] || value || '-';
+    }
+
+    function renderFeedbackList(items) {
+      const list = Array.isArray(items) ? items : [];
+      $('feedbackList').innerHTML = list.length ? list.map((item) => {
+        const metrics = item.metrics ? '处理 ' + (item.metrics.processedFrames ?? '-') + '/' + (item.metrics.totalFrames ?? '-') + '，命中 ' + (item.metrics.detectedFrames ?? '-') : '';
+        return '<div class="feedback-item"><strong>' + esc(ratingLabel(item.rating)) + '</strong>' +
+          '<span class="muted"> · ' + esc(fmtTime(item.createdAt)) + '</span>' +
+          '<div>' + esc(item.note || '-') + '</div>' +
+          '<div class="muted">' + esc(metrics) + '</div></div>';
+      }).join('') : '<div class="muted">还没有听感记录。</div>';
+    }
+
     function render(data) {
       const job = data.job;
       const files = data.files || {};
@@ -876,6 +923,7 @@ function dashboardJobHtml() {
       } else {
         renderPreviewMeta(null);
       }
+      renderFeedbackList(data.previewFeedback);
       $('status').innerHTML = statusPill(job.status);
       $('phase').textContent = job.phase ?? '-';
       $('device').textContent = job.deviceId || '-';
@@ -1030,6 +1078,33 @@ function dashboardJobHtml() {
         $('previewStatus').textContent = '试听版已加载，可以和原始录音 A/B 对比。';
       } catch (error) {
         $('previewStatus').textContent = error.message;
+      }
+    }
+
+    async function savePreviewFeedback() {
+      const token = normalizeToken(tokenInput.value);
+      if (!token) return;
+      $('feedbackStatus').textContent = '正在保存听感记录...';
+      try {
+        const res = await fetch('/api/jobs/' + encodeURIComponent(jobId) + '/preview/feedback', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'X-Upload-Token': token
+          },
+          body: JSON.stringify({
+            rating: $('feedbackRating').value,
+            note: $('feedbackNote').value
+          })
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || 'HTTP ' + res.status);
+        $('feedbackStatus').textContent = '已保存。';
+        $('feedbackNote').value = '';
+        renderFeedbackList(data.feedback);
+        await load();
+      } catch (error) {
+        $('feedbackStatus').textContent = error.message;
       }
     }
 
@@ -1749,6 +1824,16 @@ async function readOptionalDataJson(relativePath, maxBytes = 512 * 1024) {
   }
 }
 
+async function readPreviewFeedback(id) {
+  const relativePath = path.relative(DATA_ROOT, previewFeedbackPathForId(id));
+  const feedback = await readOptionalDataJson(relativePath);
+  return Array.isArray(feedback) ? feedback : [];
+}
+
+async function writePreviewFeedback(id, feedback) {
+  await fsp.writeFile(previewFeedbackPathForId(id), `${JSON.stringify(feedback, null, 2)}\n`, 'utf8');
+}
+
 async function statOptionalDataFile(relativePath) {
   if (!relativePath) return null;
   try {
@@ -1944,10 +2029,12 @@ async function inspectJobFiles(job, memoPath) {
   })) : null;
   const previewRelative = path.relative(DATA_ROOT, previewPathForId(job.id));
   const previewMetaRelative = path.relative(DATA_ROOT, previewMetaPathForId(job.id));
+  const previewFeedbackRelative = path.relative(DATA_ROOT, previewFeedbackPathForId(job.id));
   return {
     audio: audioInfo,
     preview: await statOptionalDataFile(previewRelative),
     previewMeta: await statOptionalDataFile(previewMetaRelative),
+    previewFeedback: await statOptionalDataFile(previewFeedbackRelative),
     transcript: await statOptionalDataFile(job.transcriptPath),
     transcriptJson: await statOptionalDataFile(job.transcriptJsonPath),
     memo: await statOptionalDataFile(memoPath)
@@ -1981,6 +2068,7 @@ async function handleJobDetailApi(req, res, pathname) {
     const memoText = await readOptionalDataText(memoPath);
     const files = await inspectJobFiles(job, memoPath);
     const preview = await readOptionalDataJson(path.relative(DATA_ROOT, previewMetaPathForId(id)));
+    const previewFeedback = await readPreviewFeedback(id);
     sendJson(res, 200, {
       ok: true,
       time: new Date().toISOString(),
@@ -1988,7 +2076,8 @@ async function handleJobDetailApi(req, res, pathname) {
       transcriptText,
       memoText,
       files,
-      preview
+      preview,
+      previewFeedback
     });
   } catch (error) {
     if (error.code === 'ENOENT') {
@@ -2092,6 +2181,48 @@ async function handleJobPreviewAudioApi(req, res, pathname) {
   } catch (error) {
     if (error.code === 'ENOENT') {
       sendJson(res, 404, { ok: false, error: 'preview not found' });
+      return;
+    }
+    sendJson(res, 500, { ok: false, error: error.message });
+  }
+}
+
+async function handleJobPreviewFeedbackApi(req, res, pathname) {
+  if (!dashboardAuth(req, res)) return;
+
+  const id = decodeURIComponent(pathname.slice('/api/jobs/'.length, -'/preview/feedback'.length));
+  if (!isValidJobId(id)) {
+    sendJson(res, 400, { ok: false, error: 'invalid job id' });
+    return;
+  }
+
+  try {
+    await readJob(id);
+    const payload = await readJsonBody(req);
+    const rating = String(payload.rating || '').trim().slice(0, 40);
+    const note = String(payload.note || '').trim().slice(0, 2000);
+    if (!rating && !note) {
+      sendJson(res, 400, { ok: false, error: 'rating or note is required' });
+      return;
+    }
+    const preview = await readOptionalDataJson(path.relative(DATA_ROOT, previewMetaPathForId(id)));
+    const feedback = await readPreviewFeedback(id);
+    const entry = {
+      id: crypto.randomUUID(),
+      createdAt: new Date().toISOString(),
+      rating,
+      note,
+      previewCreatedAt: preview?.createdAt,
+      params: preview?.params || null,
+      metrics: preview?.metrics || null
+    };
+    feedback.unshift(entry);
+    const trimmed = feedback.slice(0, 50);
+    await writePreviewFeedback(id, trimmed);
+    sendJson(res, 201, { ok: true, feedback: trimmed });
+  } catch (error) {
+    if (error.code === 'ENOENT') {
+      sendJson(res, 404, { ok: false, error: 'job not found' });
       return;
     }
     sendJson(res, 500, { ok: false, error: error.message });
@@ -2262,6 +2393,10 @@ async function route(req, res) {
   }
   if (req.method === 'POST' && pathname.startsWith('/api/jobs/') && pathname.endsWith('/preview')) {
     await handleJobPreviewApi(req, res, pathname);
+    return;
+  }
+  if (req.method === 'POST' && pathname.startsWith('/api/jobs/') && pathname.endsWith('/preview/feedback')) {
+    await handleJobPreviewFeedbackApi(req, res, pathname);
     return;
   }
   if (req.method === 'GET' && pathname.startsWith('/api/jobs/') && pathname.endsWith('/preview/audio')) {
