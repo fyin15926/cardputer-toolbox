@@ -66,6 +66,7 @@ journalctl -u cardputer-voice -f
 nginx -t
 curl http://127.0.0.1:3000/health
 curl -H 'Host: cardputer.flye.cc' http://127.0.0.1/health
+curl -H "X-Upload-Token: $UPLOAD_TOKEN" 'http://cardputer.flye.cc/jobs?limit=20'
 curl http://cardputer.flye.cc/jobs/REC_0001
 ```
 

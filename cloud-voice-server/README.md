@@ -23,6 +23,7 @@ npm start
 
 - `GET /health`: health check.
 - `POST /upload`: accepts raw `audio/wav` bytes with `X-Upload-Token`.
+- `GET /jobs`: lists recent jobs. Requires `X-Upload-Token`; supports `limit=20` and `status=done`.
 - `GET /jobs/:id`: returns saved upload metadata.
 - `POST /jobs/:id/process`: manually queues a saved job for transcription.
 - `POST /jobs/:id/resend`: resends an already transcribed job to flomo using the current memo format and `terms.json`.
@@ -62,6 +63,20 @@ Successful response:
 
 Runtime output is written as `uploads/REC_0123.wav` and `jobs/REC_0123.json`.
 These directories are intentionally ignored by Git.
+
+Check recent jobs without exposing transcripts or private audio URLs:
+
+```bash
+curl http://127.0.0.1:3000/jobs?limit=20 \
+  -H "X-Upload-Token: change-me-to-a-long-random-token"
+```
+
+Filter by status when debugging:
+
+```bash
+curl "http://127.0.0.1:3000/jobs?status=flomo_failed&limit=10" \
+  -H "X-Upload-Token: change-me-to-a-long-random-token"
+```
 
 When transcription is configured, raw text is written to
 `transcripts/REC_0123.txt`, the formatted flomo memo is written to

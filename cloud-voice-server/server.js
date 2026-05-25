@@ -43,6 +43,10 @@ function timingSafeEqualText(a, b) {
   return left.length === right.length && crypto.timingSafeEqual(left, right);
 }
 
+function hasValidUploadToken(req) {
+  return Boolean(UPLOAD_TOKEN) && timingSafeEqualText(req.headers['x-upload-token'], UPLOAD_TOKEN);
+}
+
 function normalizeRecordingName(name) {
   const raw = String(name || '').trim();
   const base = path.basename(raw).replace(/[^\w.-]/g, '_');
@@ -106,6 +110,30 @@ async function readJob(id) {
 async function writeJob(job) {
   job.updatedAt = new Date().toISOString();
   await fsp.writeFile(jobPathForId(job.id), `${JSON.stringify(job, null, 2)}\n`, 'utf8');
+}
+
+function summarizeJob(job) {
+  return {
+    id: job.id,
+    status: job.status,
+    phase: job.phase,
+    deviceId: job.deviceId,
+    recordingName: job.recordingName,
+    recordedAt: job.recordedAt,
+    bytes: job.bytes,
+    createdAt: job.createdAt,
+    updatedAt: job.updatedAt,
+    pendingReason: job.pendingReason,
+    lastError: job.lastError,
+    memo: job.memo,
+    flomo: job.flomo
+      ? {
+          sentAt: job.flomo.sentAt,
+          resentAt: job.flomo.resentAt,
+          memoSlug: job.flomo.memoSlug
+        }
+      : undefined
+  };
 }
 
 function publicAudioUrl(recordingName) {
@@ -559,7 +587,7 @@ async function handleUpload(req, res) {
     return;
   }
 
-  if (!timingSafeEqualText(req.headers['x-upload-token'], UPLOAD_TOKEN)) {
+  if (!hasValidUploadToken(req)) {
     sendJson(res, 401, { ok: false, error: 'invalid upload token' });
     return;
   }
@@ -640,6 +668,62 @@ async function handleUpload(req, res) {
     await fsp.rm(uploadPath, { force: true }).catch(() => {});
     const statusCode = error.message === 'upload too large' ? 413 : 500;
     sendJson(res, statusCode, { ok: false, error: error.message });
+  }
+}
+
+async function handleJobsList(req, res, url) {
+  if (!UPLOAD_TOKEN) {
+    sendJson(res, 500, { ok: false, error: 'UPLOAD_TOKEN is not configured' });
+    return;
+  }
+  if (!hasValidUploadToken(req)) {
+    sendJson(res, 401, { ok: false, error: 'invalid upload token' });
+    return;
+  }
+
+  const rawLimit = parseInt(url.searchParams.get('limit') || '20', 10);
+  const limit = Math.max(1, Math.min(Number.isFinite(rawLimit) ? rawLimit : 20, 100));
+  const status = String(url.searchParams.get('status') || '').trim();
+  if (status && !/^[\w.-]+$/.test(status)) {
+    sendJson(res, 400, { ok: false, error: 'invalid status filter' });
+    return;
+  }
+
+  try {
+    const entries = await fsp.readdir(JOB_DIR, { withFileTypes: true });
+    const jobs = [];
+    let skipped = 0;
+
+    await Promise.all(entries.map(async (entry) => {
+      if (!entry.isFile() || !entry.name.endsWith('.json')) {
+        return;
+      }
+      try {
+        const raw = await fsp.readFile(path.join(JOB_DIR, entry.name), 'utf8');
+        const job = JSON.parse(raw);
+        if (!status || job.status === status) {
+          jobs.push(summarizeJob(job));
+        }
+      } catch {
+        skipped++;
+      }
+    }));
+
+    jobs.sort((a, b) => {
+      const left = Date.parse(a.updatedAt || a.createdAt || '') || 0;
+      const right = Date.parse(b.updatedAt || b.createdAt || '') || 0;
+      return right - left;
+    });
+
+    sendJson(res, 200, {
+      ok: true,
+      count: Math.min(jobs.length, limit),
+      total: jobs.length,
+      skipped,
+      jobs: jobs.slice(0, limit)
+    });
+  } catch (error) {
+    sendJson(res, 500, { ok: false, error: error.message });
   }
 }
 
@@ -777,6 +861,10 @@ async function route(req, res) {
   }
   if (req.method === 'POST' && pathname === '/upload') {
     await handleUpload(req, res);
+    return;
+  }
+  if (req.method === 'GET' && pathname === '/jobs') {
+    await handleJobsList(req, res, url);
     return;
   }
   if (req.method === 'GET' && pathname.startsWith('/audio/')) {
