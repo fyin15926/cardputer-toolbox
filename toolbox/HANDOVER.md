@@ -119,6 +119,7 @@ $fqbn   = "esp32:esp32:m5stack_cardputer:FlashSize=8M,PartitionScheme=default_8M
 - 服务器窗口已经完成云端闭环：正式 URL 是 `http://cardputer.flye.cc/upload`；`UPLOAD_TOKEN` 只保存在服务器 `/etc/cardputer-voice.env`，不要写进 GitHub。
 - `SD:/UPLOAD/net.txt` 已成功用于真实上传；Wi-Fi 可在小机器 `Wi-Fi` 应用里现场改，服务器 URL/token 继续由电脑配置页维护。
 - 录音列表状态含义：`UP` = 已入上传队列/等待或重试上传；`SV` = 设备已收到服务器 2xx，WAV 已上传到服务器(server received)。当前 `SV` 不表示设备确认 flomo 完成；flomo 完成由服务器 job 状态判断。
+- 上传防卡顿已收紧：后台每次只试 1 条，Wi-Fi/HTTP 等待更短，上传等待中按任意键会中断本次尝试并回到界面。
 - 下一步建议：服务器侧继续做可靠性和可观测性（failed 重试、服务重启后扫描未完成 jobs、避免 flomo 重复发送）。设备侧若要更精确，可新增查询 job 状态后显示 flomo 完成。
 
 `SD:/UPLOAD/net.txt` 格式：

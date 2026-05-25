@@ -273,7 +273,7 @@ static bool keyVolUp() { return M5Cardputer.Keyboard.isKeyPressed('=') || M5Card
 static bool keyVolDn() { return M5Cardputer.Keyboard.isKeyPressed('-') || M5Cardputer.Keyboard.isKeyPressed('_'); }
 static bool keyBrightUp() { return M5Cardputer.Keyboard.isKeyPressed(']') || M5Cardputer.Keyboard.isKeyPressed('}'); }
 static bool keyBrightDn() { return M5Cardputer.Keyboard.isKeyPressed('[') || M5Cardputer.Keyboard.isKeyPressed('{'); }
-static bool keyUploadAbort() { return keyEsc() || keyDel(); }
+static bool keyUploadAbort() { return M5Cardputer.Keyboard.isPressed() || keyEsc() || keyDel(); }
 
 static bool wakeAppFromPressedKeys(uint8_t &app) {
   if (keySpace()) {
@@ -2076,7 +2076,7 @@ static bool tryWifiProfile(const char *ssid, const char *password) {
   WiFi.setSleep(true);
   WiFi.begin(ssid, password ? password : "");
   uint32_t start = millis();
-  while (WiFi.status() != WL_CONNECTED && millis() - start < 8000) {
+  while (WiFi.status() != WL_CONNECTED && millis() - start < 4500) {
     M5Cardputer.update();
     if (M5Cardputer.Keyboard.isPressed()) return false;
     delay(100);
@@ -2198,8 +2198,8 @@ static bool uploadOneJobMounted() {
   if (port == 80) snprintf(hostHeader, sizeof(hostHeader), "%s", host);
   else snprintf(hostHeader, sizeof(hostHeader), "%s:%u", host, (unsigned)port);
   WiFiClient client;
-  client.setTimeout(8000);
-  if (!client.connect(host, port)) { f.close(); return failAfterWifi(UPSTAT_HTTP_ERR); }
+  client.setTimeout(4000);
+  if (!client.connect(host, port, 3000)) { f.close(); return failAfterWifi(UPSTAT_HTTP_ERR); }
   client.printf("POST %s HTTP/1.1\r\n", urlPath);
   client.printf("Host: %s\r\n", hostHeader);
   client.print("Connection: close\r\n");
@@ -2219,7 +2219,7 @@ static bool uploadOneJobMounted() {
     delay(1);
   }
   uint32_t start = millis();
-  while (!client.available() && client.connected() && millis() - start < 8000) {
+  while (!client.available() && client.connected() && millis() - start < 4000) {
     M5Cardputer.update();
     if (keyUploadAbort()) { client.stop(); f.close(); return failAfterWifi(UPSTAT_ABORTED); }
     delay(20);
@@ -2275,7 +2275,7 @@ static const char *uploadStatusLabel(uint8_t status) {
   }
 }
 
-static bool uploadQueuedJobsMounted(uint8_t maxJobs = 4, uint32_t budgetMs = 25000) {
+static bool uploadQueuedJobsMounted(uint8_t maxJobs = 1, uint32_t budgetMs = 9000) {
   bool changed = false;
   uint32_t start = millis();
   for (uint8_t i = 0; i < maxJobs; i++) {
