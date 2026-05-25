@@ -39,7 +39,9 @@ const DEFAULT_PREVIEW_PARAMS = {
   scratchDiffMin: 140,
   scratchRatio: 90,
   holdFrames: 2,
-  frameSamples: 256
+  frameSamples: 256,
+  noiseRmsMax: 450,
+  noiseMix: 0.35
 };
 
 function sendJson(res, statusCode, payload) {
@@ -670,7 +672,7 @@ function dashboardLabHtml() {
       <button id="save">保存</button><button id="refresh">刷新列表</button><button id="clear">清除</button>
       <select id="limit"><option>20</option><option selected>50</option><option>100</option></select>
     </div>
-    <div class="statusline"><span id="stamp">等待登录</span><span id="error" class="error"></span></div>
+    <div class="statusline"><span id="stamp">等待登录</span><span id="error" class="error"></span><span>听完直接写备注；保存后告诉 Codex“按备注调参”。</span></div>
   </div></header>
   <main>
     <div class="layout">
@@ -706,6 +708,8 @@ function dashboardLabHtml() {
               <div><div class="label">Diff 下限</div><input id="previewDiff" type="number" step="10" min="0" max="5000"></div>
               <div><div class="label">Diff/RMS 比例</div><input id="previewRatio" type="number" step="5" min="1" max="512"></div>
               <div><div class="label">帧采样数</div><input id="previewFrame" type="number" step="64" min="64" max="2048"></div>
+              <div><div class="label">底噪 RMS 上限</div><input id="previewNoiseRms" type="number" step="25" min="0" max="5000"></div>
+              <div><div class="label">底噪保留比例</div><input id="previewNoiseMix" type="number" step="0.05" min="0" max="1"></div>
             </div>
             <div class="actions"><button id="presetGentle">轻柔</button><button id="presetDefault">默认</button><button id="presetStrong">强力</button><button id="generatePreview">生成并加载试听版</button><button id="loadPreview">只加载试听版</button></div>
             <div id="previewMeta" class="kv" style="margin-top:10px"></div>
@@ -734,7 +738,7 @@ function dashboardLabHtml() {
     const tokenInput = $('token');
     let jobs = [];
     let currentId = '';
-    const defaultPreviewParams = { gain: 1, lowpass: 96, highMix: 0.25, scratchRmsMax: 1900, scratchDiffMin: 140, scratchRatio: 90, holdFrames: 2, frameSamples: 256 };
+    const defaultPreviewParams = { gain: 1, lowpass: 96, highMix: 0.25, scratchRmsMax: 1900, scratchDiffMin: 140, scratchRatio: 90, holdFrames: 2, frameSamples: 256, noiseRmsMax: 450, noiseMix: 0.35 };
     tokenInput.value = localStorage.getItem('cardputerUploadToken') || '';
     $('save').onclick = () => { tokenInput.value = normalizeToken(tokenInput.value); localStorage.setItem('cardputerUploadToken', tokenInput.value); loadJobs(); };
     $('refresh').onclick = () => loadJobs();
@@ -742,9 +746,9 @@ function dashboardLabHtml() {
     $('statusFilter').onchange = () => loadJobs();
     $('limit').onchange = () => loadJobs();
     $('clear').onclick = () => { localStorage.removeItem('cardputerUploadToken'); tokenInput.value = ''; jobs = []; renderJobs(); };
-    $('presetGentle').onclick = () => setPreviewParams({ gain: 1, lowpass: 72, highMix: 0.45, scratchRmsMax: 1600, scratchDiffMin: 180, scratchRatio: 105, holdFrames: 1, frameSamples: 256 });
+    $('presetGentle').onclick = () => setPreviewParams({ gain: 1, lowpass: 72, highMix: 0.45, scratchRmsMax: 1600, scratchDiffMin: 180, scratchRatio: 105, holdFrames: 1, frameSamples: 256, noiseRmsMax: 300, noiseMix: 0.55 });
     $('presetDefault').onclick = () => setPreviewParams(defaultPreviewParams);
-    $('presetStrong').onclick = () => setPreviewParams({ gain: 1, lowpass: 112, highMix: 0.12, scratchRmsMax: 2400, scratchDiffMin: 110, scratchRatio: 70, holdFrames: 3, frameSamples: 256 });
+    $('presetStrong').onclick = () => setPreviewParams({ gain: 1, lowpass: 128, highMix: 0.08, scratchRmsMax: 2600, scratchDiffMin: 90, scratchRatio: 62, holdFrames: 4, frameSamples: 192, noiseRmsMax: 650, noiseMix: 0.2 });
     $('generatePreview').onclick = () => generatePreview();
     $('loadPreview').onclick = () => loadPreviewAudio();
     $('saveFeedback').onclick = () => saveFeedback();
@@ -752,11 +756,11 @@ function dashboardLabHtml() {
     function token() { const value = normalizeToken(tokenInput.value); if (tokenInput.value && tokenInput.value !== value) tokenInput.value = value; return value; }
     function statusClass(status) { if (status === 'done' || status === 'uploaded' || status === 'transcribed') return 'ok'; if (String(status || '').includes('failed')) return 'bad'; return 'warn'; }
     function statusPill(status) { return '<span class="pill ' + statusClass(status) + '">' + esc(status || '-') + '</span>'; }
-    function setPreviewParams(params) { const p = { ...defaultPreviewParams, ...(params || {}) }; $('previewGain').value = p.gain; $('previewLowpass').value = p.lowpass; $('previewHighMix').value = p.highMix; $('previewHold').value = p.holdFrames; $('previewRms').value = p.scratchRmsMax; $('previewDiff').value = p.scratchDiffMin; $('previewRatio').value = p.scratchRatio; $('previewFrame').value = p.frameSamples; }
-    function previewParamsFromForm() { return { gain: Number($('previewGain').value), lowpass: Number($('previewLowpass').value), highMix: Number($('previewHighMix').value), holdFrames: Number($('previewHold').value), scratchRmsMax: Number($('previewRms').value), scratchDiffMin: Number($('previewDiff').value), scratchRatio: Number($('previewRatio').value), frameSamples: Number($('previewFrame').value) }; }
+    function setPreviewParams(params) { const p = { ...defaultPreviewParams, ...(params || {}) }; $('previewGain').value = p.gain; $('previewLowpass').value = p.lowpass; $('previewHighMix').value = p.highMix; $('previewHold').value = p.holdFrames; $('previewRms').value = p.scratchRmsMax; $('previewDiff').value = p.scratchDiffMin; $('previewRatio').value = p.scratchRatio; $('previewFrame').value = p.frameSamples; $('previewNoiseRms').value = p.noiseRmsMax; $('previewNoiseMix').value = p.noiseMix; }
+    function previewParamsFromForm() { return { gain: Number($('previewGain').value), lowpass: Number($('previewLowpass').value), highMix: Number($('previewHighMix').value), holdFrames: Number($('previewHold').value), scratchRmsMax: Number($('previewRms').value), scratchDiffMin: Number($('previewDiff').value), scratchRatio: Number($('previewRatio').value), frameSamples: Number($('previewFrame').value), noiseRmsMax: Number($('previewNoiseRms').value), noiseMix: Number($('previewNoiseMix').value) }; }
     function kv(rows) { return rows.map(([k, v]) => '<div>' + esc(k) + '</div><div>' + (v || '-') + '</div>').join(''); }
     function ratingLabel(value) { return ({ better: '更好', worse: '更差', mixed: '有好有坏', neutral: '差不多' })[value] || value || '-'; }
-    function renderPreviewMeta(preview) { if (!preview) { $('previewMeta').innerHTML = ''; return; } $('previewMeta').innerHTML = kv([['处理帧', esc((preview.metrics?.processedFrames ?? '-') + ' / ' + (preview.metrics?.totalFrames ?? '-'))], ['摩擦命中帧', esc(preview.metrics?.detectedFrames ?? '-')], ['时长', fmtDuration(preview.metrics?.durationSec)], ['生成时间', fmtTime(preview.createdAt)]]); }
+    function renderPreviewMeta(preview) { if (!preview) { $('previewMeta').innerHTML = ''; return; } $('previewMeta').innerHTML = kv([['处理帧', esc((preview.metrics?.processedFrames ?? '-') + ' / ' + (preview.metrics?.totalFrames ?? '-'))], ['摩擦命中帧', esc(preview.metrics?.detectedFrames ?? '-')], ['底噪处理帧', esc(preview.metrics?.noiseFrames ?? '-')], ['时长', fmtDuration(preview.metrics?.durationSec)], ['生成时间', fmtTime(preview.createdAt)]]); }
     function renderFeedback(items) { const list = Array.isArray(items) ? items : []; $('feedbackList').innerHTML = list.length ? list.map((item) => { const metrics = item.metrics ? '处理 ' + (item.metrics.processedFrames ?? '-') + '/' + (item.metrics.totalFrames ?? '-') + '，命中 ' + (item.metrics.detectedFrames ?? '-') : ''; return '<div class="feedback-item"><strong>' + esc(ratingLabel(item.rating)) + '</strong><span class="muted"> · ' + esc(fmtTime(item.createdAt)) + '</span><div>' + esc(item.note || '-') + '</div><div class="muted">' + esc(metrics) + '</div></div>'; }).join('') : '<div class="muted">还没有听感记录。</div>'; }
     function renderJobs() { $('listCount').textContent = jobs.length ? jobs.length + ' 条' : '-'; $('jobs').innerHTML = jobs.length ? jobs.map((job) => { const encoding = job.uploadEncoding === 'ima-adpcm' ? 'ADPCM' : 'WAV'; return '<div class="job ' + (job.id === currentId ? 'active' : '') + '" data-id="' + esc(job.id) + '"><div class="job-title"><span>' + esc(job.id) + '</span>' + statusPill(job.status) + '</div><div class="muted">' + esc(job.recordingName || '-') + ' · ' + encoding + ' · ' + fmtBytes(job.bytes) + '</div><div class="muted">' + esc(job.recordedAt || '-') + '</div></div>'; }).join('') : '<div class="muted">没有任务。</div>'; document.querySelectorAll('.job[data-id]').forEach((el) => { el.onclick = () => selectJob(el.dataset.id); }); }
     async function loadJobs() { const uploadToken = token(); if (!uploadToken) { $('stamp').textContent = '等待登录'; return; } $('stamp').textContent = '正在读取列表...'; $('error').textContent = ''; try { const params = new URLSearchParams({ limit: $('limit').value }); const status = $('statusFilter').value; if (status) params.set('status', status); const res = await fetch('/api/dashboard?' + params.toString(), { headers: { 'X-Upload-Token': uploadToken } }); const data = await res.json(); if (!res.ok) throw new Error(data.error || 'HTTP ' + res.status); jobs = data.jobs.jobs || []; $('stamp').textContent = '更新 ' + fmtTime(data.time); renderJobs(); if (!currentId && jobs[0]) await selectJob(jobs[0].id); } catch (error) { $('error').textContent = error.message === 'invalid upload token' ? 'token 不正确' : error.message; } }
@@ -918,6 +922,8 @@ function dashboardJobHtml() {
         <div><div class="label">Diff 下限</div><input id="previewDiff" type="number" step="10" min="0" max="5000"></div>
         <div><div class="label">Diff/RMS 比例</div><input id="previewRatio" type="number" step="5" min="1" max="512"></div>
         <div><div class="label">帧采样数</div><input id="previewFrame" type="number" step="64" min="64" max="2048"></div>
+        <div><div class="label">底噪 RMS 上限</div><input id="previewNoiseRms" type="number" step="25" min="0" max="5000"></div>
+        <div><div class="label">底噪保留比例</div><input id="previewNoiseMix" type="number" step="0.05" min="0" max="1"></div>
       </div>
       <div class="statusline">
         <button id="presetGentle">轻柔</button>
@@ -986,9 +992,9 @@ function dashboardJobHtml() {
     $('generatePreview').onclick = () => generatePreview();
     $('loadPreview').onclick = () => loadPreviewAudio();
     $('saveFeedback').onclick = () => savePreviewFeedback();
-    $('presetGentle').onclick = () => setPreviewParams({ gain: 1, lowpass: 72, highMix: 0.45, scratchRmsMax: 1600, scratchDiffMin: 180, scratchRatio: 105, holdFrames: 1, frameSamples: 256 });
+    $('presetGentle').onclick = () => setPreviewParams({ gain: 1, lowpass: 72, highMix: 0.45, scratchRmsMax: 1600, scratchDiffMin: 180, scratchRatio: 105, holdFrames: 1, frameSamples: 256, noiseRmsMax: 300, noiseMix: 0.55 });
     $('presetDefault').onclick = () => setPreviewParams(defaultPreviewParams);
-    $('presetStrong').onclick = () => setPreviewParams({ gain: 1, lowpass: 112, highMix: 0.12, scratchRmsMax: 2400, scratchDiffMin: 110, scratchRatio: 70, holdFrames: 3, frameSamples: 256 });
+    $('presetStrong').onclick = () => setPreviewParams({ gain: 1, lowpass: 128, highMix: 0.08, scratchRmsMax: 2600, scratchDiffMin: 90, scratchRatio: 62, holdFrames: 4, frameSamples: 192, noiseRmsMax: 650, noiseMix: 0.2 });
     const defaultPreviewParams = {
       gain: 1,
       lowpass: 96,
@@ -997,7 +1003,9 @@ function dashboardJobHtml() {
       scratchDiffMin: 140,
       scratchRatio: 90,
       holdFrames: 2,
-      frameSamples: 256
+      frameSamples: 256,
+      noiseRmsMax: 450,
+      noiseMix: 0.35
     };
     setPreviewParams(defaultPreviewParams);
 
@@ -1035,6 +1043,8 @@ function dashboardJobHtml() {
       $('previewDiff').value = p.scratchDiffMin;
       $('previewRatio').value = p.scratchRatio;
       $('previewFrame').value = p.frameSamples;
+      $('previewNoiseRms').value = p.noiseRmsMax;
+      $('previewNoiseMix').value = p.noiseMix;
     }
 
     function previewParamsFromForm() {
@@ -1046,7 +1056,9 @@ function dashboardJobHtml() {
         scratchRmsMax: Number($('previewRms').value),
         scratchDiffMin: Number($('previewDiff').value),
         scratchRatio: Number($('previewRatio').value),
-        frameSamples: Number($('previewFrame').value)
+        frameSamples: Number($('previewFrame').value),
+        noiseRmsMax: Number($('previewNoiseRms').value),
+        noiseMix: Number($('previewNoiseMix').value)
       };
     }
 
@@ -1058,6 +1070,7 @@ function dashboardJobHtml() {
       $('previewMeta').innerHTML = kv([
         ['处理帧', esc((preview.metrics?.processedFrames ?? '-') + ' / ' + (preview.metrics?.totalFrames ?? '-'))],
         ['摩擦命中帧', esc(preview.metrics?.detectedFrames ?? '-')],
+        ['底噪处理帧', esc(preview.metrics?.noiseFrames ?? '-')],
         ['时长', fmtDuration(preview.metrics?.durationSec)],
         ['生成时间', fmtTime(preview.createdAt)]
       ]);
@@ -1951,6 +1964,22 @@ async function handleDashboardApi(req, res, url) {
   }
 }
 
+async function handlePreviewFeedbackApi(req, res, url) {
+  if (!dashboardAuth(req, res)) return;
+  const rawLimit = parseInt(url.searchParams.get('limit') || '50', 10);
+  const limit = Math.max(1, Math.min(Number.isFinite(rawLimit) ? rawLimit : 50, 200));
+
+  try {
+    sendJson(res, 200, {
+      ok: true,
+      time: new Date().toISOString(),
+      feedback: await collectPreviewFeedback({ limit })
+    });
+  } catch (error) {
+    sendJson(res, 500, { ok: false, error: error.message });
+  }
+}
+
 function isValidJobId(id) {
   return /^[\w.-]+$/.test(id);
 }
@@ -1999,6 +2028,42 @@ async function readPreviewFeedback(id) {
 
 async function writePreviewFeedback(id, feedback) {
   await fsp.writeFile(previewFeedbackPathForId(id), `${JSON.stringify(feedback, null, 2)}\n`, 'utf8');
+}
+
+async function collectPreviewFeedback({ limit = 50 } = {}) {
+  const entries = await fsp.readdir(JOB_DIR, { withFileTypes: true });
+  const rows = [];
+
+  await Promise.all(entries.map(async (entry) => {
+    if (!entry.isFile() || !entry.name.endsWith('.json')) return;
+    const id = entry.name.slice(0, -'.json'.length);
+    if (!isValidJobId(id)) return;
+    try {
+      const job = await readJob(id);
+      const previewFeedback = await readPreviewFeedback(id);
+      if (!previewFeedback.length) return;
+      const preview = await readOptionalDataJson(path.relative(DATA_ROOT, previewMetaPathForId(id)));
+      const wav = await inspectWavFile(audioPathForJob(job)).catch(() => null);
+      for (const item of previewFeedback) {
+        rows.push({
+          job: summarizeJob(job),
+          wav,
+          preview,
+          feedback: item
+        });
+      }
+    } catch {
+      // Keep this endpoint useful even if one old job has a broken sidecar file.
+    }
+  }));
+
+  rows.sort((a, b) => {
+    const left = Date.parse(a.feedback?.createdAt || '') || 0;
+    const right = Date.parse(b.feedback?.createdAt || '') || 0;
+    return right - left;
+  });
+
+  return rows.slice(0, limit);
 }
 
 async function statOptionalDataFile(relativePath) {
@@ -2112,12 +2177,15 @@ function normalizePreviewParams(input = {}) {
   number('scratchRatio', 1, 512);
   number('holdFrames', 0, 20);
   number('frameSamples', 64, 2048);
+  number('noiseRmsMax', 0, 5000);
+  number('noiseMix', 0, 1);
   p.lowpass = Math.round(p.lowpass);
   p.scratchRmsMax = Math.round(p.scratchRmsMax);
   p.scratchDiffMin = Math.round(p.scratchDiffMin);
   p.scratchRatio = Math.round(p.scratchRatio);
   p.holdFrames = Math.round(p.holdFrames);
   p.frameSamples = Math.round(p.frameSamples);
+  p.noiseRmsMax = Math.round(p.noiseRmsMax);
   return p;
 }
 
@@ -2146,6 +2214,7 @@ function buildPlayPreviewWav(wavBuffer, params) {
   let lp = wavBuffer.readInt16LE(wav.dataOffset);
   let hold = 0;
   let detectedFrames = 0;
+  let noiseFrames = 0;
   let processedFrames = 0;
   const frameBytes = p.frameSamples * 2;
   const end = wav.dataOffset + wav.dataBytes;
@@ -2164,6 +2233,11 @@ function buildPlayPreviewWav(wavBuffer, params) {
     const active = detected || hold > 0;
     if (hold > 0) hold--;
     if (active) processedFrames++;
+    const quietNoise = !active && stats.rms > 0 && stats.rms < p.noiseRmsMax;
+    if (quietNoise) {
+      noiseFrames++;
+      processedFrames++;
+    }
 
     for (let i = 0; i < frameSamples; i++) {
       let sample = clampInt16(Math.round(wavBuffer.readInt16LE(frameStart + i * 2) * p.gain));
@@ -2171,6 +2245,8 @@ function buildPlayPreviewWav(wavBuffer, params) {
         lp += Math.round((sample - lp) * p.lowpass / 256);
         const hi = sample - lp;
         sample = clampInt16(Math.round(lp + hi * p.highMix));
+      } else if (quietNoise) {
+        sample = clampInt16(Math.round(sample * p.noiseMix));
       }
       output.writeInt16LE(sample, outOffset);
       outOffset += 2;
@@ -2182,6 +2258,7 @@ function buildPlayPreviewWav(wavBuffer, params) {
     params: p,
     metrics: {
       detectedFrames,
+      noiseFrames,
       processedFrames,
       totalFrames: Math.ceil((wav.dataBytes / 2) / p.frameSamples),
       durationSec: wav.dataBytes / 2 / wav.sampleRate,
@@ -2560,6 +2637,10 @@ async function route(req, res) {
   }
   if (req.method === 'GET' && pathname === '/api/dashboard') {
     await handleDashboardApi(req, res, url);
+    return;
+  }
+  if (req.method === 'GET' && pathname === '/api/preview-feedback') {
+    await handlePreviewFeedbackApi(req, res, url);
     return;
   }
   if (req.method === 'POST' && pathname.startsWith('/api/jobs/') && pathname.endsWith('/preview')) {
