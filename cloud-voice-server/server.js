@@ -216,15 +216,18 @@ function dashboardHtml() {
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Cardputer Voice Dashboard</title>
   <style>
-    :root { color-scheme: dark; --bg:#080b0a; --panel:#101613; --line:#21412f; --text:#e8fff0; --muted:#7fa18b; --ok:#40ff83; --bad:#ff5d5d; --warn:#ffd166; }
+    :root { color-scheme: dark; --bg:#070b09; --panel:#101613; --soft:#0c120f; --line:#21412f; --text:#e8fff0; --muted:#8fb09b; --ok:#40ff83; --bad:#ff5d5d; --warn:#ffd166; }
     * { box-sizing: border-box; }
     body { margin: 0; font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; background: var(--bg); color: var(--text); }
-    header { padding: 18px 18px 10px; border-bottom: 1px solid var(--line); background: #090f0c; position: sticky; top: 0; z-index: 2; }
-    h1 { margin: 0 0 12px; font-size: 20px; font-weight: 700; letter-spacing: 0; }
-    .bar { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
-    input, button, select { height: 36px; border: 1px solid var(--line); background: #0c120f; color: var(--text); border-radius: 6px; padding: 0 10px; font: inherit; }
-    input { min-width: 280px; flex: 1; }
-    button { cursor: pointer; color: var(--ok); }
+    header { border-bottom: 1px solid var(--line); background: #090f0c; position: sticky; top: 0; z-index: 2; }
+    .head { max-width: 1200px; margin: 0 auto; padding: 18px; }
+    h1 { margin: 0 0 12px; font-size: 22px; font-weight: 750; letter-spacing: 0; }
+    .bar { display: grid; grid-template-columns: minmax(220px, 1fr) auto auto auto auto; gap: 8px; align-items: center; }
+    input, button, select { height: 38px; border: 1px solid var(--line); background: var(--soft); color: var(--text); border-radius: 6px; padding: 0 10px; font: inherit; min-width: 0; }
+    button { cursor: pointer; color: var(--ok); white-space: nowrap; }
+    button:hover { border-color: var(--ok); }
+    button.danger { color: var(--bad); }
+    button.small { height: 28px; padding: 0 8px; font-size: 12px; }
     main { padding: 16px 18px 24px; max-width: 1180px; margin: 0 auto; }
     .grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; margin-bottom: 14px; }
     .panel { border: 1px solid var(--line); background: var(--panel); border-radius: 8px; padding: 12px; }
@@ -239,47 +242,69 @@ function dashboardHtml() {
     th, td { border-bottom: 1px solid #17251d; padding: 8px 6px; text-align: left; vertical-align: top; }
     th { color: var(--muted); font-weight: 600; }
     .pill { display: inline-block; border: 1px solid var(--line); border-radius: 999px; padding: 2px 7px; color: var(--ok); white-space: nowrap; }
+    .pill.bad { color: var(--bad); }
+    .pill.warn { color: var(--warn); }
     .progress { height: 8px; background: #07100a; border: 1px solid var(--line); border-radius: 999px; overflow: hidden; min-width: 120px; }
     .fill { height: 100%; width: 0; background: var(--ok); }
     .muted { color: var(--muted); }
-    .error { color: var(--bad); margin-top: 8px; min-height: 20px; }
-    @media (max-width: 800px) { .grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } input { min-width: 180px; } table { font-size: 12px; } }
+    .statusline { display: flex; gap: 10px; align-items: center; min-height: 24px; margin-top: 8px; color: var(--muted); font-size: 13px; white-space: normal; word-break: normal; writing-mode: horizontal-tb; }
+    .error { color: var(--bad); white-space: normal; word-break: normal; writing-mode: horizontal-tb; }
+    .notice { display: flex; justify-content: space-between; gap: 12px; align-items: center; margin-bottom: 14px; }
+    .hidden { display: none !important; }
+    .section-title { display: flex; justify-content: space-between; gap: 10px; align-items: center; margin-bottom: 10px; }
+    .section-title h2 { margin: 0; }
+    .actions { display: flex; gap: 6px; flex-wrap: wrap; }
+    .nowrap { white-space: nowrap; }
+    @media (max-width: 900px) { .grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } .bar { grid-template-columns: 1fr auto auto; } #limit, #clear { grid-column: auto; } table { font-size: 12px; } }
+    @media (max-width: 560px) { .grid { grid-template-columns: 1fr; } .bar { grid-template-columns: 1fr 1fr; } #token { grid-column: 1 / -1; } }
   </style>
 </head>
 <body>
   <header>
-    <h1>Cardputer Voice Dashboard</h1>
-    <div class="bar">
-      <input id="token" type="password" autocomplete="off" placeholder="UPLOAD_TOKEN">
-      <button id="save">保存</button>
-      <button id="refresh">刷新</button>
-      <select id="limit"><option>20</option><option selected>50</option><option>100</option></select>
-      <span id="stamp" class="muted"></span>
+    <div class="head">
+      <h1>Cardputer Voice Dashboard</h1>
+      <div class="bar">
+        <input id="token" type="password" autocomplete="off" placeholder="UPLOAD_TOKEN">
+        <button id="save">保存</button>
+        <button id="refresh">刷新</button>
+        <button id="clear" class="danger">清除</button>
+        <select id="limit"><option>20</option><option selected>50</option><option>100</option></select>
+      </div>
+      <div class="statusline"><span id="stamp">等待登录</span><span id="error" class="error"></span></div>
     </div>
-    <div id="error" class="error"></div>
   </header>
   <main>
-    <div class="grid">
-      <div class="panel"><div class="label">服务</div><div id="service" class="value">-</div></div>
-      <div class="panel"><div class="label">任务总数</div><div id="total" class="value">-</div></div>
-      <div class="panel"><div class="label">正在上传</div><div id="active" class="value">-</div></div>
-      <div class="panel"><div class="label">失败任务</div><div id="failed" class="value">-</div></div>
+    <div id="loginHint" class="panel notice">
+      <div>
+        <div class="label">需要令牌</div>
+        <div>输入服务器 UPLOAD_TOKEN 后保存，后台会自动刷新。令牌只保存在当前浏览器。</div>
+      </div>
+      <button id="focusToken">输入 token</button>
     </div>
 
-    <section class="panel">
-      <h2>设备 / Wi-Fi</h2>
-      <table><thead><tr><th>设备</th><th>最后状态</th><th>Wi-Fi</th><th>最近录音</th><th>更新时间</th></tr></thead><tbody id="devices"></tbody></table>
-    </section>
+    <div id="dashboardBody" class="hidden">
+      <div class="grid">
+        <div class="panel"><div class="label">服务</div><div id="service" class="value">-</div></div>
+        <div class="panel"><div class="label">任务总数</div><div id="total" class="value">-</div></div>
+        <div class="panel"><div class="label">正在上传</div><div id="active" class="value">-</div></div>
+        <div class="panel"><div class="label">失败任务</div><div id="failed" class="value">-</div></div>
+      </div>
 
-    <section class="panel">
-      <h2>正在上传</h2>
-      <table><thead><tr><th>录音</th><th>设备</th><th>进度</th><th>字节</th><th>开始时间</th></tr></thead><tbody id="uploads"></tbody></table>
-    </section>
+      <section class="panel">
+        <div class="section-title"><h2>设备 / Wi-Fi</h2><span class="muted">来自小机器最近一次上传</span></div>
+        <table><thead><tr><th>设备</th><th>最后状态</th><th>Wi-Fi</th><th>最近录音</th><th>更新时间</th></tr></thead><tbody id="devices"></tbody></table>
+      </section>
 
-    <section class="panel">
-      <h2>最近任务</h2>
-      <table><thead><tr><th>录音</th><th>状态</th><th>设备</th><th>大小</th><th>记录时间</th><th>更新</th><th>备注</th></tr></thead><tbody id="jobs"></tbody></table>
-    </section>
+      <section class="panel">
+        <div class="section-title"><h2>正在上传</h2><span class="muted">3 秒自动刷新</span></div>
+        <table><thead><tr><th>录音</th><th>设备</th><th>进度</th><th>字节</th><th>开始时间</th></tr></thead><tbody id="uploads"></tbody></table>
+      </section>
+
+      <section class="panel">
+        <div class="section-title"><h2>最近任务</h2><span class="muted">失败任务可重跑，重发 flomo 会产生新 memo</span></div>
+        <table><thead><tr><th>录音</th><th>状态</th><th>设备</th><th>大小</th><th>记录时间</th><th>更新</th><th>备注</th><th>操作</th></tr></thead><tbody id="jobs"></tbody></table>
+      </section>
+    </div>
   </main>
   <script>
     const $ = (id) => document.getElementById(id);
@@ -290,6 +315,8 @@ function dashboardHtml() {
     tokenInput.value = localStorage.getItem('cardputerUploadToken') || '';
     $('save').onclick = () => { localStorage.setItem('cardputerUploadToken', tokenInput.value); load(); };
     $('refresh').onclick = () => load();
+    $('clear').onclick = () => { localStorage.removeItem('cardputerUploadToken'); tokenInput.value = ''; load(); tokenInput.focus(); };
+    $('focusToken').onclick = () => tokenInput.focus();
     $('limit').onchange = () => load();
 
     function statusClass(status) {
@@ -298,9 +325,16 @@ function dashboardHtml() {
       return 'warn';
     }
 
+    function statusPill(status) {
+      return '<span class="pill ' + statusClass(status) + '">' + esc(status || '-') + '</span>';
+    }
+
     async function load() {
       const token = tokenInput.value.trim();
-      $('error').textContent = token ? '' : '请输入 UPLOAD_TOKEN 后查看后台数据。';
+      $('error').textContent = '';
+      $('loginHint').classList.toggle('hidden', Boolean(token));
+      $('dashboardBody').classList.toggle('hidden', !token);
+      $('stamp').textContent = token ? '正在读取...' : '等待登录';
       if (!token) return;
       try {
         const res = await fetch('/api/dashboard?limit=' + encodeURIComponent($('limit').value), {
@@ -311,8 +345,32 @@ function dashboardHtml() {
         render(data);
       } catch (error) {
         $('error').textContent = error.message;
+        $('stamp').textContent = '读取失败';
       }
     }
+
+    async function postJob(id, action) {
+      const token = tokenInput.value.trim();
+      if (!token) return;
+      const isResend = action === 'resend';
+      if (isResend && !confirm('确认重新发送 ' + id + ' 到 flomo？这会产生一条新的 memo。')) return;
+      try {
+        const res = await fetch('/jobs/' + encodeURIComponent(id) + '/' + action, {
+          method: 'POST',
+          headers: { 'X-Upload-Token': token }
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || 'HTTP ' + res.status);
+        $('error').textContent = '';
+        $('stamp').textContent = id + ' 已提交 ' + action;
+        setTimeout(load, 500);
+      } catch (error) {
+        $('error').textContent = error.message;
+      }
+    }
+
+    window.reprocessJob = (id) => postJob(id, 'process');
+    window.resendJob = (id) => postJob(id, 'resend');
 
     function render(data) {
       $('service').innerHTML = data.health.ok ? '<span class="ok">OK</span>' : '<span class="bad">ERR</span>';
@@ -323,7 +381,7 @@ function dashboardHtml() {
 
       $('devices').innerHTML = data.devices.length ? data.devices.map(d => {
         const wifi = d.wifiRssi === undefined ? '<span class="muted">未上报</span>' : 'RSSI ' + esc(d.wifiRssi) + ' / IP ' + esc(d.wifiIp || '-');
-        return '<tr><td>' + esc(d.deviceId) + '</td><td><span class="pill">' + esc(d.lastStatus || '-') + '</span></td><td>' + wifi + '</td><td>' + esc(d.lastRecordingName || '-') + '</td><td>' + fmtTime(d.updatedAt) + '</td></tr>';
+        return '<tr><td>' + esc(d.deviceId) + '</td><td>' + statusPill(d.lastStatus) + '</td><td>' + wifi + '</td><td>' + esc(d.lastRecordingName || '-') + '</td><td class="nowrap">' + fmtTime(d.updatedAt) + '</td></tr>';
       }).join('') : '<tr><td colspan="5" class="muted">还没有设备上报。下一次上传开始后会出现。</td></tr>';
 
       $('uploads').innerHTML = data.activeUploads.length ? data.activeUploads.map(u => {
@@ -333,8 +391,14 @@ function dashboardHtml() {
 
       $('jobs').innerHTML = data.jobs.jobs.length ? data.jobs.jobs.map(j => {
         const note = j.lastError || j.pendingReason || (j.memo && j.memo.title) || '';
-        return '<tr><td>' + esc(j.id) + '</td><td><span class="' + statusClass(j.status) + '">' + esc(j.status) + '</span></td><td>' + esc(j.deviceId || '-') + '</td><td>' + fmtBytes(j.bytes) + '</td><td>' + esc(j.recordedAt || '-') + '</td><td>' + fmtTime(j.updatedAt || j.createdAt) + '</td><td>' + esc(note) + '</td></tr>';
-      }).join('') : '<tr><td colspan="7" class="muted">没有任务。</td></tr>';
+        const canProcess = String(j.status || '').includes('failed') || j.status === 'uploaded' || j.status === 'transcribed';
+        const canResend = j.status === 'done' || j.status === 'transcribed';
+        const actions = '<div class="actions">' +
+          (canProcess ? '<button class="small" onclick="reprocessJob(\\'' + esc(j.id) + '\\')">重跑</button>' : '') +
+          (canResend ? '<button class="small danger" onclick="resendJob(\\'' + esc(j.id) + '\\')">重发</button>' : '') +
+          '</div>';
+        return '<tr><td class="nowrap">' + esc(j.id) + '</td><td>' + statusPill(j.status) + '</td><td>' + esc(j.deviceId || '-') + '</td><td class="nowrap">' + fmtBytes(j.bytes) + '</td><td>' + esc(j.recordedAt || '-') + '</td><td class="nowrap">' + fmtTime(j.updatedAt || j.createdAt) + '</td><td>' + esc(note) + '</td><td>' + actions + '</td></tr>';
+      }).join('') : '<tr><td colspan="8" class="muted">没有任务。</td></tr>';
     }
 
     load();
