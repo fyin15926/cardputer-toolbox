@@ -28,6 +28,9 @@ npm start
 - `GET /api/jobs/:id`: dashboard detail JSON with transcript and memo. Requires `X-Upload-Token`.
 - `GET /api/jobs/:id/audio`: streams the original WAV for the dashboard detail page. Requires `X-Upload-Token`.
 - `POST /upload`: accepts raw `audio/wav` bytes with `X-Upload-Token`.
+  It also accepts Cardputer long-recording uploads as
+  `application/x-cardputer-adpcm` / `X-Audio-Encoding: ima-adpcm`; the server
+  decodes them back into normal 16 kHz mono WAV files before transcription.
 - `GET /jobs`: lists recent jobs. Requires `X-Upload-Token`; supports `limit=20` and `status=done`.
 - `GET /jobs/:id`: returns saved upload metadata.
 - `POST /jobs/:id/process`: manually queues a saved job for transcription. Requires `X-Upload-Token`.

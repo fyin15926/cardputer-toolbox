@@ -119,12 +119,29 @@ static const char *UPLOAD_DONE_PATH = "/UPLOAD/done.txt";
 static const char *UPLOAD_CONFIG_PATH = "/UPLOAD/net.txt";
 static const char *UPLOAD_RECORDED_AT_PATH = "/UPLOAD/recorded_at.txt";
 static const size_t UPLOAD_CHUNK_BYTES = 4096;
+static const uint32_t UPLOAD_ADPCM_THRESHOLD_BYTES = 3UL * 1024UL * 1024UL;
 static const int MAX_REC = 9999;
 static const uint16_t FRICTION_NOW_SEC = 60;
 static const uint16_t FRICTION_IDLE_MAX_SEC = 20 * 60;
 static const uint32_t AUTO_SLEEP_MS = 90000;
 
 enum RecKind : uint8_t { REC_NORMAL = 0, REC_SHORTCUT = 1, REC_IMPORTANT = 2 };
+
+static const int8_t IMA_INDEX_TABLE[16] = {
+  -1, -1, -1, -1, 2, 4, 6, 8,
+  -1, -1, -1, -1, 2, 4, 6, 8
+};
+static const int16_t IMA_STEP_TABLE[89] = {
+  7, 8, 9, 10, 11, 12, 13, 14, 16, 17,
+  19, 21, 23, 25, 28, 31, 34, 37, 41, 45,
+  50, 55, 60, 66, 73, 80, 88, 97, 107, 118,
+  130, 143, 157, 173, 190, 209, 230, 253, 279, 307,
+  337, 371, 408, 449, 494, 544, 598, 658, 724, 796,
+  876, 963, 1060, 1166, 1282, 1411, 1552, 1707, 1878, 2066,
+  2272, 2499, 2749, 3024, 3327, 3660, 4026, 4428, 4871, 5358,
+  5894, 6484, 7132, 7845, 8630, 9493, 10442, 11487, 12635, 13899,
+  15289, 16818, 18500, 20350, 22385, 24623, 27086, 29794, 32767
+};
 
 static void recordingPathKind(int recNum, uint8_t kind, char *p, size_t n) {
   const char *dir = (kind == REC_SHORTCUT) ? SHORTCUT_DIR : ((kind == REC_IMPORTANT) ? IMPORTANT_DIR : REC_DIR);
@@ -2157,6 +2174,48 @@ static bool parseHttpUrl(const char *url, char *host, size_t hostLen, uint16_t &
   return true;
 }
 
+static uint8_t imaAdpcmEncodeNibble(int16_t sample, int16_t &predictor, uint8_t &index) {
+  int step = IMA_STEP_TABLE[index];
+  int diff = (int)sample - (int)predictor;
+  uint8_t nibble = 0;
+  if (diff < 0) {
+    nibble = 8;
+    diff = -diff;
+  }
+
+  int vpdiff = step >> 3;
+  if (diff >= step) {
+    nibble |= 4;
+    diff -= step;
+    vpdiff += step;
+  }
+  step >>= 1;
+  if (diff >= step) {
+    nibble |= 2;
+    diff -= step;
+    vpdiff += step;
+  }
+  step >>= 1;
+  if (diff >= step) {
+    nibble |= 1;
+    vpdiff += step;
+  }
+
+  int next = (nibble & 8) ? ((int)predictor - vpdiff) : ((int)predictor + vpdiff);
+  if (next > 32767) next = 32767;
+  if (next < -32768) next = -32768;
+  predictor = (int16_t)next;
+  int nextIndex = (int)index + IMA_INDEX_TABLE[nibble & 0x0f];
+  if (nextIndex < 0) nextIndex = 0;
+  if (nextIndex > 88) nextIndex = 88;
+  index = (uint8_t)nextIndex;
+  return nibble & 0x0f;
+}
+
+static int16_t readLe16(const uint8_t *p) {
+  return (int16_t)((uint16_t)p[0] | ((uint16_t)p[1] << 8));
+}
+
 static uint8_t validateUploadConfigMounted() {
   if (!loadUploadConfig()) return UPSTAT_NO_CFG;
   if (!uploadCfg.syncEnabled) return UPSTAT_SYNC_OFF;
@@ -2191,6 +2250,20 @@ static bool uploadOneJobMounted() {
   if (!boxReadRecordedAtMounted(recNum, recordedAt, sizeof(recordedAt))) boxFormatNow(recordedAt, sizeof(recordedAt));
   File f = SD.open(path, FILE_READ);
   if (!f || f.size() <= 44) { if (f) f.close(); uploadDropFirstJob(); g_uploadStatus = UPSTAT_NO_FILE; wifiPowerDown(); return true; }
+  uint32_t originalSize = f.size();
+  uint32_t pcmBytes = originalSize - 44;
+  uint32_t sampleCount = pcmBytes / 2;
+  bool useAdpcm = originalSize > UPLOAD_ADPCM_THRESHOLD_BYTES && sampleCount > 1;
+  int16_t adpcmPredictor = 0;
+  uint8_t adpcmIndex = 0;
+  uint32_t bodyBytes = originalSize;
+  if (useAdpcm) {
+    uint8_t first[2] = {0, 0};
+    f.seek(44);
+    if (f.read(first, 2) != 2) { f.close(); return failAfterWifi(UPSTAT_NO_FILE); }
+    adpcmPredictor = readLe16(first);
+    bodyBytes = sampleCount / 2;  // ceil((sampleCount - 1) / 2)
+  }
   char host[65], urlPath[96];
   uint16_t port = 80;
   if (!parseHttpUrl(uploadCfg.url, host, sizeof(host), port, urlPath, sizeof(urlPath))) { f.close(); return failAfterWifi(UPSTAT_BAD_URL); }
@@ -2206,8 +2279,16 @@ static bool uploadOneJobMounted() {
   client.printf("POST %s HTTP/1.1\r\n", urlPath);
   client.printf("Host: %s\r\n", hostHeader);
   client.print("Connection: close\r\n");
-  client.print("Content-Type: audio/wav\r\n");
-  client.printf("Content-Length: %u\r\n", (unsigned)f.size());
+  client.print(useAdpcm ? "Content-Type: application/x-cardputer-adpcm\r\n" : "Content-Type: audio/wav\r\n");
+  client.printf("Content-Length: %u\r\n", (unsigned)bodyBytes);
+  if (useAdpcm) {
+    client.print("X-Audio-Encoding: ima-adpcm\r\n");
+    client.printf("X-Original-Content-Length: %u\r\n", (unsigned)originalSize);
+    client.printf("X-Adpcm-Pcm-Bytes: %u\r\n", (unsigned)pcmBytes);
+    client.printf("X-Adpcm-Sample-Rate: %u\r\n", (unsigned)REC_RATE);
+    client.printf("X-Adpcm-Initial-Predictor: %d\r\n", (int)adpcmPredictor);
+    client.printf("X-Adpcm-Initial-Index: %u\r\n", (unsigned)adpcmIndex);
+  }
   client.printf("X-Upload-Token: %s\r\n", uploadCfg.token);
   client.printf("X-Device-Id: %s\r\n", uploadCfg.device);
   client.printf("X-Wifi-Rssi: %d\r\n", WiFi.RSSI());
@@ -2216,15 +2297,45 @@ static bool uploadOneJobMounted() {
   if (recordedAt[0]) client.printf("X-Recorded-At: %s\r\n", recordedAt);
   client.printf("X-Recording-Name: %s\r\n\r\n", name);
   static uint8_t buf[UPLOAD_CHUNK_BYTES];
+  static uint8_t adpcmBuf[UPLOAD_CHUNK_BYTES / 2 + 1];
   uint8_t uiTick = 0;
-  while (f.available()) {
-    size_t n = f.read(buf, sizeof(buf));
-    if (n == 0) break;
-    if (client.write(buf, n) != n) { client.stop(); f.close(); return failAfterWifi(UPSTAT_HTTP_ERR); }
-    if ((++uiTick & 0x07) == 0) {
-      M5Cardputer.update();
-      if (keyUploadAbort()) { client.stop(); f.close(); return failAfterWifi(UPSTAT_ABORTED); }
-      delay(0);
+  if (useAdpcm) {
+    f.seek(46);
+    bool haveNibble = false;
+    uint8_t packed = 0;
+    while (f.available()) {
+      size_t n = f.read(buf, sizeof(buf));
+      if (n == 0) break;
+      n &= ~((size_t)1);
+      size_t outN = 0;
+      for (size_t i = 0; i + 1 < n; i += 2) {
+        uint8_t nibble = imaAdpcmEncodeNibble(readLe16(buf + i), adpcmPredictor, adpcmIndex);
+        if (!haveNibble) {
+          packed = nibble;
+          haveNibble = true;
+        } else {
+          adpcmBuf[outN++] = packed | (nibble << 4);
+          haveNibble = false;
+        }
+      }
+      if (outN && client.write(adpcmBuf, outN) != outN) { client.stop(); f.close(); return failAfterWifi(UPSTAT_HTTP_ERR); }
+      if ((++uiTick & 0x03) == 0) {
+        M5Cardputer.update();
+        if (keyUploadAbort()) { client.stop(); f.close(); return failAfterWifi(UPSTAT_ABORTED); }
+        delay(0);
+      }
+    }
+    if (haveNibble && client.write(&packed, 1) != 1) { client.stop(); f.close(); return failAfterWifi(UPSTAT_HTTP_ERR); }
+  } else {
+    while (f.available()) {
+      size_t n = f.read(buf, sizeof(buf));
+      if (n == 0) break;
+      if (client.write(buf, n) != n) { client.stop(); f.close(); return failAfterWifi(UPSTAT_HTTP_ERR); }
+      if ((++uiTick & 0x07) == 0) {
+        M5Cardputer.update();
+        if (keyUploadAbort()) { client.stop(); f.close(); return failAfterWifi(UPSTAT_ABORTED); }
+        delay(0);
+      }
     }
   }
   uint32_t start = millis();

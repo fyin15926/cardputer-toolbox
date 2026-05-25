@@ -131,6 +131,10 @@ function summarizeJob(job) {
     recordingName: job.recordingName,
     recordedAt: job.recordedAt,
     bytes: job.bytes,
+    uploadEncoding: job.uploadEncoding,
+    uploadedBytes: job.uploadedBytes,
+    originalBytes: job.originalBytes,
+    compressionRatio: job.compressionRatio,
     createdAt: job.createdAt,
     updatedAt: job.updatedAt,
     pendingReason: job.pendingReason,
@@ -160,6 +164,109 @@ function updateDeviceStatus(deviceId, patch) {
 function parseHeaderInt(value) {
   const n = parseInt(String(value || '').trim(), 10);
   return Number.isFinite(n) ? n : undefined;
+}
+
+const IMA_INDEX_TABLE = [
+  -1, -1, -1, -1, 2, 4, 6, 8,
+  -1, -1, -1, -1, 2, 4, 6, 8
+];
+const IMA_STEP_TABLE = [
+  7, 8, 9, 10, 11, 12, 13, 14, 16, 17,
+  19, 21, 23, 25, 28, 31, 34, 37, 41, 45,
+  50, 55, 60, 66, 73, 80, 88, 97, 107, 118,
+  130, 143, 157, 173, 190, 209, 230, 253, 279, 307,
+  337, 371, 408, 449, 494, 544, 598, 658, 724, 796,
+  876, 963, 1060, 1166, 1282, 1411, 1552, 1707, 1878, 2066,
+  2272, 2499, 2749, 3024, 3327, 3660, 4026, 4428, 4871, 5358,
+  5894, 6484, 7132, 7845, 8630, 9493, 10442, 11487, 12635, 13899,
+  15289, 16818, 18500, 20350, 22385, 24623, 27086, 29794, 32767
+];
+
+function clampInt16(n) {
+  return Math.max(-32768, Math.min(32767, n));
+}
+
+function writeWavHeaderBuffer(target, sampleRate, dataBytes) {
+  const byteRate = sampleRate * 2;
+  target.write('RIFF', 0, 'ascii');
+  target.writeUInt32LE(36 + dataBytes, 4);
+  target.write('WAVE', 8, 'ascii');
+  target.write('fmt ', 12, 'ascii');
+  target.writeUInt32LE(16, 16);
+  target.writeUInt16LE(1, 20);
+  target.writeUInt16LE(1, 22);
+  target.writeUInt32LE(sampleRate, 24);
+  target.writeUInt32LE(byteRate, 28);
+  target.writeUInt16LE(2, 32);
+  target.writeUInt16LE(16, 34);
+  target.write('data', 36, 'ascii');
+  target.writeUInt32LE(dataBytes, 40);
+}
+
+function decodeImaNibble(nibble, state) {
+  let step = IMA_STEP_TABLE[state.index];
+  let diff = step >> 3;
+  if (nibble & 1) diff += step >> 2;
+  if (nibble & 2) diff += step >> 1;
+  if (nibble & 4) diff += step;
+  state.predictor = clampInt16((nibble & 8) ? state.predictor - diff : state.predictor + diff);
+  state.index = Math.max(0, Math.min(88, state.index + IMA_INDEX_TABLE[nibble & 0x0f]));
+  return state.predictor;
+}
+
+function decodeImaAdpcmToWav(encoded, { sampleRate, pcmBytes, predictor, index }) {
+  if (!Number.isFinite(sampleRate) || sampleRate < 8000 || sampleRate > 48000) {
+    throw new Error('invalid ADPCM sample rate');
+  }
+  if (!Number.isFinite(pcmBytes) || pcmBytes < 2 || pcmBytes > MAX_UPLOAD_BYTES) {
+    throw new Error('invalid ADPCM PCM size');
+  }
+  if (pcmBytes % 2 !== 0) {
+    throw new Error('ADPCM PCM size must be even');
+  }
+  if (!Number.isFinite(predictor) || !Number.isFinite(index) || index < 0 || index > 88) {
+    throw new Error('invalid ADPCM state');
+  }
+
+  const output = Buffer.alloc(44 + pcmBytes);
+  writeWavHeaderBuffer(output, sampleRate, pcmBytes);
+  const state = { predictor: clampInt16(predictor), index };
+  let offset = 44;
+  output.writeInt16LE(state.predictor, offset);
+  offset += 2;
+  const sampleCount = pcmBytes / 2;
+  let writtenSamples = 1;
+  for (const byte of encoded) {
+    for (const nibble of [byte & 0x0f, (byte >> 4) & 0x0f]) {
+      if (writtenSamples >= sampleCount) break;
+      output.writeInt16LE(decodeImaNibble(nibble, state), offset);
+      offset += 2;
+      writtenSamples++;
+    }
+    if (writtenSamples >= sampleCount) break;
+  }
+  if (writtenSamples !== sampleCount) {
+    throw new Error('incomplete ADPCM body');
+  }
+  return output;
+}
+
+function collectRequestBody(req, maxBytes, onProgress) {
+  return new Promise((resolve, reject) => {
+    const chunks = [];
+    let total = 0;
+    req.on('data', (chunk) => {
+      total += chunk.length;
+      if (onProgress) onProgress(total);
+      if (total > maxBytes) {
+        req.destroy(new Error('upload too large'));
+        return;
+      }
+      chunks.push(chunk);
+    });
+    req.on('end', () => resolve(Buffer.concat(chunks, total)));
+    req.on('error', reject);
+  });
 }
 
 function dashboardAuth(req, res) {
@@ -307,7 +414,7 @@ function dashboardHtml() {
 
       <section class="panel">
         <div class="section-title"><h2>正在上传</h2><span class="muted">3 秒自动刷新</span></div>
-        <table><thead><tr><th>录音</th><th>设备</th><th>进度</th><th>字节</th><th>速度</th><th>剩余</th><th>开始时间</th></tr></thead><tbody id="uploads"></tbody></table>
+        <table><thead><tr><th>录音</th><th>设备</th><th>格式</th><th>进度</th><th>字节</th><th>速度</th><th>剩余</th><th>开始时间</th></tr></thead><tbody id="uploads"></tbody></table>
       </section>
 
       <section class="panel">
@@ -435,8 +542,12 @@ function dashboardHtml() {
         const elapsed = Math.max(0.001, (Date.now() - Date.parse(u.startedAt || Date.now())) / 1000);
         const rate = u.bytesReceived / elapsed;
         const eta = u.totalBytes && rate > 0 ? (u.totalBytes - u.bytesReceived) / rate : NaN;
-        return '<tr><td>' + esc(u.recordingName) + '</td><td>' + esc(u.deviceId) + '</td><td><div class="progress"><div class="fill" style="width:' + pct + '%"></div></div> ' + pct + '%</td><td>' + fmtBytes(u.bytesReceived) + ' / ' + fmtBytes(u.totalBytes) + '</td><td class="nowrap">' + fmtRate(rate) + '</td><td class="nowrap">' + fmtDuration(eta) + '</td><td>' + fmtTime(u.startedAt) + '</td></tr>';
-      }).join('') : '<tr><td colspan="7" class="muted">当前没有正在接收的上传。</td></tr>';
+        const encoding = u.encoding === 'ima-adpcm' ? 'ADPCM' : 'WAV';
+        const bytesLabel = (u.originalBytes && u.originalBytes > u.totalBytes)
+          ? fmtBytes(u.bytesReceived) + ' / ' + fmtBytes(u.totalBytes) + '<br><span class="muted">原始 ' + fmtBytes(u.originalBytes) + '</span>'
+          : fmtBytes(u.bytesReceived) + ' / ' + fmtBytes(u.totalBytes);
+        return '<tr><td>' + esc(u.recordingName) + '</td><td>' + esc(u.deviceId) + '</td><td>' + encoding + '</td><td><div class="progress"><div class="fill" style="width:' + pct + '%"></div></div> ' + pct + '%</td><td>' + bytesLabel + '</td><td class="nowrap">' + fmtRate(rate) + '</td><td class="nowrap">' + fmtDuration(eta) + '</td><td>' + fmtTime(u.startedAt) + '</td></tr>';
+      }).join('') : '<tr><td colspan="8" class="muted">当前没有正在接收的上传。</td></tr>';
 
       $('jobs').innerHTML = data.jobs.jobs.length ? data.jobs.jobs.map(j => {
         const note = j.lastError || j.pendingReason || (j.memo && j.memo.title) || '';
@@ -447,7 +558,10 @@ function dashboardHtml() {
           (canProcess ? '<button class="small" onclick="reprocessJob(\\'' + esc(j.id) + '\\')">重跑</button>' : '') +
           (canResend ? '<button class="small danger" onclick="resendJob(\\'' + esc(j.id) + '\\')">重发</button>' : '') +
           '</div>';
-        return '<tr><td class="nowrap">' + esc(j.id) + '</td><td>' + statusPill(j.status) + '</td><td>' + esc(j.deviceId || '-') + '</td><td class="nowrap">' + fmtBytes(j.bytes) + '</td><td>' + esc(j.recordedAt || '-') + '</td><td class="nowrap">' + fmtTime(j.updatedAt || j.createdAt) + '</td><td>' + esc(note) + '</td><td>' + actions + '</td></tr>';
+        const sizeLabel = j.uploadEncoding === 'ima-adpcm' && j.uploadedBytes
+          ? fmtBytes(j.bytes) + '<br><span class="muted">上传 ' + fmtBytes(j.uploadedBytes) + ' / ' + esc(j.compressionRatio || '-') + 'x</span>'
+          : fmtBytes(j.bytes);
+        return '<tr><td class="nowrap">' + esc(j.id) + '</td><td>' + statusPill(j.status) + '</td><td>' + esc(j.deviceId || '-') + '</td><td class="nowrap">' + sizeLabel + '</td><td>' + esc(j.recordedAt || '-') + '</td><td class="nowrap">' + fmtTime(j.updatedAt || j.createdAt) + '</td><td>' + esc(note) + '</td><td>' + actions + '</td></tr>';
       }).join('') : '<tr><td colspan="8" class="muted">没有匹配任务。</td></tr>';
     }
 
@@ -1126,8 +1240,10 @@ async function handleUpload(req, res) {
   }
 
   const contentType = String(req.headers['content-type'] || '').toLowerCase();
-  if (!contentType.includes('audio/wav') && !contentType.includes('audio/x-wav')) {
-    sendJson(res, 415, { ok: false, error: 'Content-Type must be audio/wav' });
+  const requestedEncoding = String(req.headers['x-audio-encoding'] || '').toLowerCase();
+  const isAdpcmUpload = requestedEncoding === 'ima-adpcm' || contentType.includes('application/x-cardputer-adpcm');
+  if (!isAdpcmUpload && !contentType.includes('audio/wav') && !contentType.includes('audio/x-wav')) {
+    sendJson(res, 415, { ok: false, error: 'Content-Type must be audio/wav or application/x-cardputer-adpcm' });
     return;
   }
 
@@ -1157,6 +1273,8 @@ async function handleUpload(req, res) {
     id: jobId,
     deviceId,
     recordingName,
+    encoding: isAdpcmUpload ? 'ima-adpcm' : 'wav',
+    originalBytes: parseHeaderInt(req.headers['x-original-content-length']),
     bytesReceived: 0,
     totalBytes: parseHeaderInt(req.headers['content-length']),
     startedAt,
@@ -1196,26 +1314,45 @@ async function handleUpload(req, res) {
   }
 
   let bytes = 0;
-  const out = fs.createWriteStream(uploadPath, { flags: 'wx' });
+  let uploadedBytes = 0;
+  let out = null;
   activeUploads.set(jobId, uploadProgress);
 
-  req.on('data', (chunk) => {
-    bytes += chunk.length;
-    uploadProgress.bytesReceived = bytes;
-    uploadProgress.updatedAt = new Date().toISOString();
-    if (bytes > MAX_UPLOAD_BYTES) {
-      req.destroy(new Error('upload too large'));
-    }
-  });
-
-  req.pipe(out);
-
   try {
-    await new Promise((resolve, reject) => {
-      req.on('error', reject);
-      out.on('error', reject);
-      out.on('finish', resolve);
-    });
+    if (isAdpcmUpload) {
+      const encoded = await collectRequestBody(req, MAX_UPLOAD_BYTES, (received) => {
+        uploadedBytes = received;
+        uploadProgress.bytesReceived = received;
+        uploadProgress.updatedAt = new Date().toISOString();
+      });
+      const pcmBytes = parseHeaderInt(req.headers['x-adpcm-pcm-bytes']);
+      const wavBuffer = decodeImaAdpcmToWav(encoded, {
+        sampleRate: parseHeaderInt(req.headers['x-adpcm-sample-rate']) || 16000,
+        pcmBytes,
+        predictor: parseHeaderInt(req.headers['x-adpcm-initial-predictor']),
+        index: parseHeaderInt(req.headers['x-adpcm-initial-index']) || 0
+      });
+      bytes = wavBuffer.length;
+      await fsp.writeFile(uploadPath, wavBuffer, { flag: 'wx' });
+    } else {
+      out = fs.createWriteStream(uploadPath, { flags: 'wx' });
+      req.on('data', (chunk) => {
+        bytes += chunk.length;
+        uploadedBytes = bytes;
+        uploadProgress.bytesReceived = bytes;
+        uploadProgress.updatedAt = new Date().toISOString();
+        if (bytes > MAX_UPLOAD_BYTES) {
+          req.destroy(new Error('upload too large'));
+        }
+      });
+
+      req.pipe(out);
+      await new Promise((resolve, reject) => {
+        req.on('error', reject);
+        out.on('error', reject);
+        out.on('finish', resolve);
+      });
+    }
 
     const job = {
       id: jobId,
@@ -1225,6 +1362,10 @@ async function handleUpload(req, res) {
       recordingName,
       recordedAt: rawRecordedAt.slice(0, 40),
       bytes,
+      uploadEncoding: isAdpcmUpload ? 'ima-adpcm' : 'wav',
+      uploadedBytes: uploadedBytes || bytes,
+      originalBytes: bytes,
+      compressionRatio: isAdpcmUpload && uploadedBytes ? Number((bytes / uploadedBytes).toFixed(2)) : 1,
       uploadPath: path.relative(DATA_ROOT, uploadPath),
       createdAt: startedAt,
       updatedAt: new Date().toISOString()
@@ -1241,7 +1382,7 @@ async function handleUpload(req, res) {
     scheduleProcessJob(jobId);
     sendJson(res, 201, { ok: true, id: jobId });
   } catch (error) {
-    out.destroy();
+    if (out) out.destroy();
     await fsp.rm(uploadPath, { force: true }).catch(() => {});
     updateDeviceStatus(deviceId, {
       lastStatus: error.message === 'upload too large' ? 'upload_too_large' : 'upload_failed',
