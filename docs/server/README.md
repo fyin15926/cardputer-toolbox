@@ -31,8 +31,8 @@ npm start
 - `POST /jobs/:id/resend`: resends an already transcribed job to flomo using the current memo format and `terms.json`. Requires `X-Upload-Token`.
 - `GET /audio/:recordingName?token=...`: private audio URL for DashScope fetch.
 
-Production deployment notes and nginx/systemd templates are in
-`DEPLOYMENT.md` and `deploy/`.
+Production deployment notes are in `docs/server/DEPLOYMENT.md`.
+nginx/systemd templates remain in `cloud-voice-server/deploy/`.
 
 Upload headers:
 

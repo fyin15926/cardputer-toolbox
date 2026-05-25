@@ -24,8 +24,8 @@
 |------|------|
 | GitHub 仓库（主编辑） | `D:\github仓库同步\小机器\toolbox\toolbox.ino` |
 | Arduino 编译副本 | `C:\cardputer\sketches\toolbox\toolbox.ino` |
-| 本文档 | `D:\github仓库同步\小机器\toolbox\HANDOVER.md` |
-| 云端转写方案 | `D:\github仓库同步\小机器\toolbox\CLOUD_TRANSCRIBE_FLOMO_PLAN.html` |
+| 本文档 | `D:\github仓库同步\小机器\docs\firmware\HANDOVER.md` |
+| 云端转写方案 | `D:\github仓库同步\小机器\docs\archive\CLOUD_TRANSCRIBE_FLOMO_PLAN.html` |
 | 电脑端 net.txt 生成器 | `D:\github仓库同步\小机器\toolbox\NET_CONFIG_HELPER.html` |
 
 **每次修改 `.ino` 后需要手动同步到编译副本：**
@@ -146,11 +146,11 @@ tz=8
   - `POST http://cardputer.flye.cc/jobs/REC_XXXX/process`
 - DashScope 录音文件识别要求公网可访问音频 URL，所以服务器提供带私密 token 的 `/audio/REC_XXXX.wav` 给 DashScope 拉取，不对普通用户公开。
 - 端到端测试已通过：上传 `REC_ASR_0001.wav` 后自动转写为 `12345。上山打老虎。`，写入 `/opt/cardputer-voice/transcripts/REC_ASR_0001.txt`，并成功发送到 flomo，job 状态 `done`。
-- GitHub 已同步服务器代码和部署模板：`2c8d05d Add DashScope transcription and flomo sync`。详见 `cloud-voice-server/DEPLOYMENT.md`。
+- GitHub 已同步服务器代码和部署模板：`2c8d05d Add DashScope transcription and flomo sync`。详见 `docs/server/DEPLOYMENT.md`。
 
 `C:\cardputer\tools\build_and_flash.ps1` 曾因文件编码损坏导致 PowerShell 解析错误
 （中文乱码、字符串缺少结束符）。如果脚本报错，优先按上面的手动三步走；
-需要一键脚本时，用 `COMPILE_FLASH.md` 第 9 节的 UTF-8 版本覆盖重写。
+需要一键脚本时，用 `docs/firmware/COMPILE_FLASH.md` 第 9 节的 UTF-8 版本覆盖重写。
 
 ---
 
@@ -324,7 +324,7 @@ C:\Users\87194\AppData\Local\Arduino15\packages\esp32\tools\
 
 1. **停录轻微爆音**：硬件上 NS4150B 无 SD 引脚，软件已尽力压缩断电窗口。若需彻底消除，需要硬件修改（串联 RC 到 NS4150B 输入，或更换带 MUTE 引脚的功放）。
 2. **开机轻微爆音**：同上，`Mic.begin()` 首次上电模拟段不可避免产生瞬态。
-3. **一键脚本需重写**：当前本地 `build_and_flash.ps1` 有编码损坏风险，推荐用 `COMPILE_FLASH.md` 里的版本重建。
+3. **一键脚本需重写**：当前本地 `build_and_flash.ps1` 有编码损坏风险，推荐用 `docs/firmware/COMPILE_FLASH.md` 里的版本重建。
 
 ---
 
