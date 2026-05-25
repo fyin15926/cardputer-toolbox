@@ -118,7 +118,7 @@ static const char *UPLOAD_QUEUE_PATH = "/UPLOAD/queue.txt";
 static const char *UPLOAD_DONE_PATH = "/UPLOAD/done.txt";
 static const char *UPLOAD_CONFIG_PATH = "/UPLOAD/net.txt";
 static const char *UPLOAD_RECORDED_AT_PATH = "/UPLOAD/recorded_at.txt";
-static const size_t UPLOAD_CHUNK_BYTES = 2048;
+static const size_t UPLOAD_CHUNK_BYTES = 4096;
 static const int MAX_REC = 9999;
 static const uint16_t FRICTION_NOW_SEC = 60;
 static const uint16_t FRICTION_IDLE_MAX_SEC = 20 * 60;
@@ -2202,6 +2202,7 @@ static bool uploadOneJobMounted() {
   WiFiClient client;
   client.setTimeout(4000);
   if (!client.connect(host, port, 3000)) { f.close(); return failAfterWifi(UPSTAT_HTTP_ERR); }
+  client.setNoDelay(true);
   client.printf("POST %s HTTP/1.1\r\n", urlPath);
   client.printf("Host: %s\r\n", hostHeader);
   client.print("Connection: close\r\n");
@@ -2214,13 +2215,13 @@ static bool uploadOneJobMounted() {
   client.printf("X-Wifi-IP: %s\r\n", localIp.c_str());
   if (recordedAt[0]) client.printf("X-Recorded-At: %s\r\n", recordedAt);
   client.printf("X-Recording-Name: %s\r\n\r\n", name);
-  uint8_t buf[UPLOAD_CHUNK_BYTES];
+  static uint8_t buf[UPLOAD_CHUNK_BYTES];
   uint8_t uiTick = 0;
   while (f.available()) {
     size_t n = f.read(buf, sizeof(buf));
     if (n == 0) break;
     if (client.write(buf, n) != n) { client.stop(); f.close(); return failAfterWifi(UPSTAT_HTTP_ERR); }
-    if ((++uiTick & 0x03) == 0) {
+    if ((++uiTick & 0x07) == 0) {
       M5Cardputer.update();
       if (keyUploadAbort()) { client.stop(); f.close(); return failAfterWifi(UPSTAT_ABORTED); }
       delay(0);

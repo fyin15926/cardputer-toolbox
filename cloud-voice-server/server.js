@@ -307,7 +307,7 @@ function dashboardHtml() {
 
       <section class="panel">
         <div class="section-title"><h2>正在上传</h2><span class="muted">3 秒自动刷新</span></div>
-        <table><thead><tr><th>录音</th><th>设备</th><th>进度</th><th>字节</th><th>开始时间</th></tr></thead><tbody id="uploads"></tbody></table>
+        <table><thead><tr><th>录音</th><th>设备</th><th>进度</th><th>字节</th><th>速度</th><th>剩余</th><th>开始时间</th></tr></thead><tbody id="uploads"></tbody></table>
       </section>
 
       <section class="panel">
@@ -330,6 +330,14 @@ function dashboardHtml() {
     const $ = (id) => document.getElementById(id);
     const fmtTime = (v) => v ? new Date(v).toLocaleString() : '-';
     const fmtBytes = (n) => Number.isFinite(n) ? (n > 1048576 ? (n / 1048576).toFixed(1) + ' MB' : Math.round(n / 1024) + ' KB') : '-';
+    const fmtRate = (n) => Number.isFinite(n) && n > 0 ? (n > 1048576 ? (n / 1048576).toFixed(2) + ' MB/s' : Math.round(n / 1024) + ' KB/s') : '-';
+    const fmtDuration = (seconds) => {
+      if (!Number.isFinite(seconds) || seconds <= 0) return '-';
+      const s = Math.round(seconds);
+      const m = Math.floor(s / 60);
+      const r = s % 60;
+      return m ? m + 'm ' + r + 's' : r + 's';
+    };
     const esc = (v) => String(v ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
     const normalizeToken = (value) => String(value || '').trim().replace(/^UPLOAD_TOKEN\\s*=\\s*/i, '').replace(/^token\\s*=\\s*/i, '').replace(/^['"]|['"]$/g, '').trim();
     const tokenInput = $('token');
@@ -424,8 +432,11 @@ function dashboardHtml() {
 
       $('uploads').innerHTML = data.activeUploads.length ? data.activeUploads.map(u => {
         const pct = u.totalBytes ? Math.min(100, Math.round(u.bytesReceived * 100 / u.totalBytes)) : 0;
-        return '<tr><td>' + esc(u.recordingName) + '</td><td>' + esc(u.deviceId) + '</td><td><div class="progress"><div class="fill" style="width:' + pct + '%"></div></div> ' + pct + '%</td><td>' + fmtBytes(u.bytesReceived) + ' / ' + fmtBytes(u.totalBytes) + '</td><td>' + fmtTime(u.startedAt) + '</td></tr>';
-      }).join('') : '<tr><td colspan="5" class="muted">当前没有正在接收的上传。</td></tr>';
+        const elapsed = Math.max(0.001, (Date.now() - Date.parse(u.startedAt || Date.now())) / 1000);
+        const rate = u.bytesReceived / elapsed;
+        const eta = u.totalBytes && rate > 0 ? (u.totalBytes - u.bytesReceived) / rate : NaN;
+        return '<tr><td>' + esc(u.recordingName) + '</td><td>' + esc(u.deviceId) + '</td><td><div class="progress"><div class="fill" style="width:' + pct + '%"></div></div> ' + pct + '%</td><td>' + fmtBytes(u.bytesReceived) + ' / ' + fmtBytes(u.totalBytes) + '</td><td class="nowrap">' + fmtRate(rate) + '</td><td class="nowrap">' + fmtDuration(eta) + '</td><td>' + fmtTime(u.startedAt) + '</td></tr>';
+      }).join('') : '<tr><td colspan="7" class="muted">当前没有正在接收的上传。</td></tr>';
 
       $('jobs').innerHTML = data.jobs.jobs.length ? data.jobs.jobs.map(j => {
         const note = j.lastError || j.pendingReason || (j.memo && j.memo.title) || '';
