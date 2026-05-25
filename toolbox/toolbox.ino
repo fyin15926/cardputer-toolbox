@@ -43,16 +43,22 @@
 #define WAVE_BOT   109     // 波形区底 y  (余 26px 给计时器)
 #define WAVE_H      89     // 波形区高度
 #define WAVE_CY     50     // A/B 分界: 约 2:1, B线作为主视觉
+#define CHROME_TOP  (WAVE_BOT + 1)
+#define CHROME_H    (135 - CHROME_TOP)
 static const int A_CY   = (WAVE_TOP + WAVE_CY) / 2;        // A线/轨道线中轴
 static const int A_HALF = (WAVE_CY - WAVE_TOP) / 2 - 2;    // A线最大半幅
 static const int B_CY   = (WAVE_CY + WAVE_BOT) / 2;        // B线/监听线中轴
 static const int B_HALF = (WAVE_BOT - WAVE_CY) / 2 - 2;    // B线最大半幅
 static const uint8_t REC_B_SMOOTH = 3;   // 录音 B线平滑: 越大越稳, 越小越灵敏
-static const uint8_t PB_B_SMOOTH  = 4;   // 播放 B线平滑
+static const uint8_t PB_B_SMOOTH  = REC_B_SMOOTH;   // 播放 B线跟录音页一致
 static const uint8_t B_DECAY      = 5;   // 无新音频时回中线速度: 越小回落越快
 static const int32_t A_RMS_FULL   = 24000; // A线满格阈值: 越大越不敏感
 
 // ---------- 录音参数 ----------
+static const uint8_t REC_B_GAIN   = 3;
+static const uint8_t PB_B_GAIN    = 7;
+static const uint8_t PB_B_SMOOTH_FAST = 2;
+
 #define FONT_CN_16(g) do { (g).setTextSize(1); (g).setFont(&fonts::efontCN_16); } while (0)
 #define FONT_CN_12(g) do { (g).setTextSize(1); (g).setFont(&fonts::efontCN_12); } while (0)
 #define FONT_ASCII(g) do { (g).setTextSize(1); (g).setFont(&fonts::AsciiFont8x16); } while (0)
@@ -75,8 +81,16 @@ static const uint32_t SHORTCUT_RETRIM_TAIL_PAD = REC_RATE / 40;  // 25ms
 static const uint32_t SHORTCUT_FADE_SAMPLES = REC_RATE / 125; // 8ms 淡入淡出
 static const size_t   REC_N    = 256;    // 每缓冲样本数 (~16ms, 小=波形更流畅)
 static const size_t   PB_N     = 512;    // 播放缓冲样本数 (~32ms, B线更顺)
+static const uint32_t REC_UI_FRAME_MS = 16;  // ~60fps wave-region refresh after mic buffer is re-queued.
+static const uint32_t PB_UI_FRAME_MS  = 16;  // ~60fps visual refresh; playback reuses latest PCM block between reads.
+static const uint8_t  REC_WRITE_BATCH = 4;
+static const uint8_t  REC_REARM_SETTLE_BUFFERS = 6;
+static const uint32_t UPLOAD_IDLE_DELAY_MS = 3000;
 static int16_t recBuf[2][REC_N];
 static int16_t pbBuf[2][PB_N];           // 播放双缓冲(放一块/读另一块, 避免覆盖破音)
+static int16_t recWriteBuf[REC_WRITE_BATCH * REC_N];
+static int16_t recVisualBuf[REC_N];
+static int16_t playbackVisualBuf[PB_N];
 static int16_t seekToneBuf[384];
 int recGain = 50;                        // 录音软件增益默认值(W/S 现场可调, 带削波保护)
 int playVol = 200;                       // 回放音量(+/- 可调, 0..255)
@@ -101,7 +115,11 @@ static uint32_t g_batteryLastSampleMs = 0;
 #define UPSTAT_NO_FILE  8
 #define UPSTAT_ABORTED  9
 #define UPSTAT_SYNC_OFF 10
+#define UPSTAT_UPLOADING 11
 static uint8_t g_uploadStatus = UPSTAT_IDLE;
+static bool g_uploadPausedForInput = false;
+static int g_uploadActiveRec = 0;
+static bool g_uploadActiveAnnounced = false;
 
 // SD 引脚(运行时由 M5Unified 按机型给出, 失败则回退到 Adv 已知值)
 int sdSCLK = 40, sdMISO = 39, sdMOSI = 14, sdCS = 12;
@@ -113,6 +131,7 @@ static const char *HOTKEY_PATH = "/SHORTCUT/keys.txt";
 static const char *OLD_IMPORTANT_HOTKEY_PATH = "/IMPORTANT/keys.txt";
 static const char *OLD_HOTKEY_PATH = "/REC/keys.txt";
 static const char *NEXT_INDEX_PATH = "/REC/.next";
+static const char *REC_ORDER_PATH = "/REC/.order";
 static const char *UPLOAD_DIR = "/UPLOAD";
 static const char *UPLOAD_QUEUE_PATH = "/UPLOAD/queue.txt";
 static const char *UPLOAD_DONE_PATH = "/UPLOAD/done.txt";
@@ -171,7 +190,7 @@ static bool speakerOutputReady = false;
 #define APP_POMODORO   4
 #define APP_WIFI       5
 
-static uint8_t wakeApp = APP_REC_RECORD;
+static uint8_t wakeApp = APP_REC_LIST;
 
 // ---------- SD 辅助 ----------
 static bool sdMount() {
@@ -291,7 +310,11 @@ static bool keyVolUp() { return M5Cardputer.Keyboard.isKeyPressed('=') || M5Card
 static bool keyVolDn() { return M5Cardputer.Keyboard.isKeyPressed('-') || M5Cardputer.Keyboard.isKeyPressed('_'); }
 static bool keyBrightUp() { return M5Cardputer.Keyboard.isKeyPressed(']') || M5Cardputer.Keyboard.isKeyPressed('}'); }
 static bool keyBrightDn() { return M5Cardputer.Keyboard.isKeyPressed('[') || M5Cardputer.Keyboard.isKeyPressed('{'); }
-static bool keyUploadAbort() { return M5Cardputer.Keyboard.isPressed() || keyEsc() || keyDel(); }
+static bool keyUploadAbort() {
+  if (!M5Cardputer.Keyboard.isPressed()) return false;
+  g_uploadPausedForInput = true;
+  return true;
+}
 
 static bool wakeAppFromPressedKeys(uint8_t &app) {
   if (keySpace()) {
@@ -388,7 +411,9 @@ static int8_t calcTrackAmp(const int16_t *buf, size_t n) {
   for (size_t k = 0; k < n; k++) sumSq += (int64_t)buf[k] * buf[k];
   float rms = sqrtf((float)((double)sumSq / n));
   int sign = (buf[n / 2] >= 0) ? 1 : -1;
-  int amp = (int)(rms * A_HALF / A_RMS_FULL) * sign;
+  float norm = rms / (float)A_RMS_FULL;
+  if (norm > 1.0f) norm = 1.0f;
+  int amp = (int)(sqrtf(norm) * A_HALF + 0.5f) * sign;
   if (amp > A_HALF) amp = A_HALF;
   if (amp < -A_HALF) amp = -A_HALF;
   return (int8_t)amp;
@@ -1034,6 +1059,81 @@ static void insertRecListSorted(int recNum, uint8_t kind = REC_NORMAL) {
   recCount++;
 }
 
+static void insertRecListAtEnd(int recNum, uint8_t kind = REC_NORMAL) {
+  if (recNum <= 0) return;
+  int existing = recListIndexOf(recNum);
+  if (existing >= 0) {
+    if (kind == REC_SHORTCUT) setShortcutRec(recNum, true);
+    if (kind == REC_IMPORTANT) setImportantRec(recNum, true);
+    return;
+  }
+  if (recCount >= MAX_REC) return;
+  recList[recCount++] = recNum;
+  setShortcutRec(recNum, kind == REC_SHORTCUT);
+  setImportantRec(recNum, kind == REC_IMPORTANT);
+}
+
+static void applyRecordingOrderMounted() {
+  File f = SD.open(REC_ORDER_PATH, FILE_READ);
+  if (!f) return;
+  static uint16_t orderedTail[MAX_REC];
+  static uint8_t orderedBits[(MAX_REC + 8) / 8];
+  memset(orderedBits, 0, sizeof(orderedBits));
+  int tailCount = 0;
+  char line[24];
+  while (f.available() && tailCount < recCount) {
+    int n = f.readBytesUntil('\n', line, sizeof(line) - 1);
+    line[n] = 0;
+    int recNum = atoi(line);
+    if (recNum <= 0) continue;
+    if (bitIsSet(orderedBits, recNum)) continue;
+    if (recListIndexOf(recNum) < 0) continue;
+    setBit(orderedBits, recNum, true);
+    orderedTail[tailCount++] = (uint16_t)recNum;
+  }
+  f.close();
+  if (tailCount == 0) return;
+  int write = 0;
+  for (int i = 0; i < recCount; i++) {
+    if (!bitIsSet(orderedBits, recList[i])) recList[write++] = recList[i];
+  }
+  for (int i = 0; i < tailCount && write < recCount; i++) recList[write++] = orderedTail[i];
+}
+
+static void removeRecordingOrderMounted(int recNum) {
+  if (recNum <= 0) return;
+  File in = SD.open(REC_ORDER_PATH, FILE_READ);
+  if (!in) return;
+  const char *tmp = "/REC/.order.tmp";
+  SD.remove(tmp);
+  File out = SD.open(tmp, FILE_WRITE);
+  char line[24];
+  while (in.available()) {
+    int n = in.readBytesUntil('\n', line, sizeof(line) - 1);
+    line[n] = 0;
+    if (atoi(line) == recNum) continue;
+    if (out && line[0]) out.printf("%s\n", line);
+  }
+  in.close();
+  if (out) {
+    out.close();
+    SD.remove(REC_ORDER_PATH);
+    if (!SD.rename(tmp, REC_ORDER_PATH)) SD.remove(tmp);
+  } else {
+    SD.remove(tmp);
+  }
+}
+
+static void appendRecordingOrderMounted(int recNum) {
+  if (recNum <= 0) return;
+  if (!SD.exists(REC_DIR)) SD.mkdir(REC_DIR);
+  removeRecordingOrderMounted(recNum);
+  File f = SD.open(REC_ORDER_PATH, FILE_APPEND);
+  if (!f) return;
+  f.printf("%d\n", recNum);
+  f.close();
+}
+
 static void removeRecListAt(int idx) {
   if (idx < 0 || idx >= recCount) return;
   for (int i = idx; i < recCount - 1; i++) recList[i] = recList[i + 1];
@@ -1093,14 +1193,20 @@ static int lowestAvailableRecordingIndex() {
 }
 
 static int nextRecordingIndex() {
-  int maxIdx = 0;
-  recCount = 0;
-  clearImportantBits();
-  scanRecordingDir(REC_DIR, REC_NORMAL, maxIdx);
-  scanRecordingDir(SHORTCUT_DIR, REC_SHORTCUT, maxIdx);
-  scanRecordingDir(IMPORTANT_DIR, REC_IMPORTANT, maxIdx);
-
-  int idx = lowestAvailableRecordingIndex();
+  int idx = nextRecHint;
+  if (idx < 1 || idx > 9999) idx = readNextIndexCache();
+  if (idx < 1 || idx > 9999) idx = 1;
+  int start = idx;
+  do {
+    if (!recordingExistsKind(idx, REC_NORMAL) &&
+        !recordingExistsKind(idx, REC_SHORTCUT) &&
+        !recordingExistsKind(idx, REC_IMPORTANT)) {
+      nextRecHint = idx;
+      return idx;
+    }
+    idx = (idx < 9999) ? idx + 1 : 1;
+  } while (idx != start);
+  idx = lowestAvailableRecordingIndex();
   nextRecHint = idx;
   writeNextIndexCache(idx);
   return idx;
@@ -1115,6 +1221,7 @@ static void scanRecordings(bool compactNext = false) {
   scanRecordingDir(REC_DIR, REC_NORMAL, maxIdx);
   scanRecordingDir(SHORTCUT_DIR, REC_SHORTCUT, maxIdx);
   scanRecordingDir(IMPORTANT_DIR, REC_IMPORTANT, maxIdx);
+  applyRecordingOrderMounted();
   loadUploadStateMounted();
   nextRecHint = lowestAvailableRecordingIndex();
   writeNextIndexCache(nextRecHint);
@@ -1443,6 +1550,43 @@ static void drawDeleteProgressOnDisplay(uint32_t heldMs) {
   d.fillRect(168, 125, deleteProgressW(heldMs), 7, COL_RED);
 }
 
+static void drawDeleteProgressLocal(M5Canvas &cv, uint32_t heldMs) {
+  if (heldMs == 0) return;
+  int y = 119 - CHROME_TOP;
+  int barY = 125 - CHROME_TOP;
+  FONT_ASCII(cv);
+  cv.setTextColor(COL_RED, COL_BG);
+  cv.setCursor(112, y + 1);
+  cv.print("DEL");
+  cv.drawRect(168, barY, 70, 7, COL_RED);
+  cv.fillRect(168, barY, deleteProgressW(heldMs), 7, COL_RED);
+}
+
+static void drawRecBottomCanvas(M5Canvas &cv, uint32_t elapsedMs, uint32_t deleteHeldMs = 0) {
+  cv.fillScreen(COL_BG);
+  uint32_t s = elapsedMs / 1000;
+  char recTime[8];
+  snprintf(recTime, sizeof(recTime), "%02lu:%02lu", (unsigned long)(s / 60), (unsigned long)(s % 60));
+  drawDseg14Text(cv, 4, 1, recTime, COL_GREEN);
+  drawDeleteProgressLocal(cv, deleteHeldMs);
+}
+
+static void drawPlaybackBottomCanvas(M5Canvas &cv, uint32_t played, uint32_t dataSize, uint32_t deleteHeldMs = 0) {
+  cv.fillScreen(COL_BG);
+  uint32_t cur = (played / 2) / REC_RATE;
+  uint32_t tot = (dataSize / 2) / REC_RATE;
+  char curBuf[8];
+  snprintf(curBuf, sizeof(curBuf), "%02lu:%02lu", (unsigned long)(cur / 60), (unsigned long)(cur % 60));
+  drawDseg14Text(cv, 4, 1, curBuf, COL_GREEN);
+  if (deleteHeldMs > 0) {
+    drawDeleteProgressLocal(cv, deleteHeldMs);
+  } else {
+    char totBuf[9];
+    snprintf(totBuf, sizeof(totBuf), "%02lu:%02lu", (unsigned long)(tot / 60), (unsigned long)(tot % 60));
+    drawDseg14Text(cv, CONTENT_W - dseg14TextWidth(totBuf) - 4, 1, totBuf, COL_DIM);
+  }
+}
+
 static void drawTrackBar(m5gfx::M5GFX &g, int i, int v) {
   int x0 = i * CONTENT_W / WAVE_BARS;
   int x1 = (i + 1) * CONTENT_W / WAVE_BARS;
@@ -1484,7 +1628,24 @@ static void drawTrackBars(M5Canvas &cv) {
   }
 }
 
-static void updateLiveWaveVisual(int8_t *dst, const int16_t *src, size_t n, int half, uint8_t smooth, uint8_t decay) {
+static void drawTrackBarLocal(M5Canvas &cv, int i, int v) {
+  int x0 = i * CONTENT_W / WAVE_BARS;
+  int x1 = (i + 1) * CONTENT_W / WAVE_BARS;
+  int x = (x0 + x1) / 2;
+  v = abs(v);
+  if (v < 1) v = 1;
+  if (v > A_HALF) v = A_HALF;
+  cv.drawFastVLine(x, A_CY - WAVE_TOP - v, v * 2 + 1, COL_GREEN);
+}
+
+static void drawTrackBarsLocal(M5Canvas &cv) {
+  for (int i = 0; i < WAVE_BARS; i++) {
+    if (waveBarCounts[i] == 0) continue;
+    drawTrackBarLocal(cv, i, waveBars[i]);
+  }
+}
+
+static void updateLiveWaveVisual(int8_t *dst, const int16_t *src, size_t n, int half, uint8_t smooth, uint8_t decay, uint8_t gain = REC_B_GAIN) {
   if (!dst) return;
   if (!src || n == 0) {
     for (int x = 0; x < CONTENT_W; x++) {
@@ -1504,7 +1665,7 @@ static void updateLiveWaveVisual(int8_t *dst, const int16_t *src, size_t n, int 
   for (int x = 0; x < CONTENT_W; x++) {
     int idx = (int)((uint32_t)x * n / CONTENT_W);
     if (idx >= (int)n) idx = n - 1;
-    int target = (int)((int32_t)src[idx] * 3 * half / 32767);
+    int target = (int)((int32_t)src[idx] * gain * half / 32767);
     if (target > half) target = half;
     if (target < -half) target = -half;
     int old = dst[x];
@@ -1537,7 +1698,7 @@ static void drawLiveWaveVisual(m5gfx::M5GFX &g, const int8_t *src, int cy) {
 // 播放画面: A线=轨道线/Timeline A, B线=监听线/Monitor B(播放缓冲)
 static void drawPlaybackCanvas(M5Canvas &g, uint32_t played, uint32_t dataSize, int16_t *liveWave, size_t liveN, bool paused = false, uint32_t deleteHeldMs = 0) {
   (void)paused;
-  updateLiveWaveVisual(playbackLiveWave, liveWave, liveN, B_HALF, PB_B_SMOOTH, B_DECAY);
+  updateLiveWaveVisual(playbackLiveWave, liveWave, liveN, B_HALF, PB_B_SMOOTH_FAST, B_DECAY, PB_B_GAIN);
   g.fillRect(0, WAVE_TOP, CONTENT_W, WAVE_H, COL_BG);
   g.drawFastHLine(0, A_CY, CONTENT_W, 0x0440);
   drawTrackBars(g);
@@ -1567,7 +1728,7 @@ static void drawPlaybackCanvas(M5Canvas &g, uint32_t played, uint32_t dataSize, 
 
 static void drawPlaybackCanvas(m5gfx::M5GFX &g, uint32_t played, uint32_t dataSize, int16_t *liveWave, size_t liveN, bool paused = false, uint32_t deleteHeldMs = 0) {
   (void)paused;
-  updateLiveWaveVisual(playbackLiveWave, liveWave, liveN, B_HALF, PB_B_SMOOTH, B_DECAY);
+  updateLiveWaveVisual(playbackLiveWave, liveWave, liveN, B_HALF, PB_B_SMOOTH_FAST, B_DECAY, PB_B_GAIN);
   g.fillRect(0, WAVE_TOP, CONTENT_W, WAVE_H, COL_BG);
   g.drawFastHLine(0, A_CY, CONTENT_W, 0x0440);
   drawTrackBars(g);
@@ -1595,11 +1756,48 @@ static void drawPlaybackCanvas(m5gfx::M5GFX &g, uint32_t played, uint32_t dataSi
   }
 }
 
+static void drawPlaybackWaveCanvas(M5Canvas &cv, uint32_t played, uint32_t dataSize, int16_t *liveWave, size_t liveN) {
+  if (liveWave && liveN > 0) updateLiveWaveVisual(playbackLiveWave, liveWave, liveN, B_HALF, PB_B_SMOOTH_FAST, B_DECAY, PB_B_GAIN);
+  cv.fillScreen(COL_BG);
+  cv.drawFastHLine(0, A_CY - WAVE_TOP, CONTENT_W, 0x0440);
+  drawTrackBarsLocal(cv);
+  cv.drawFastHLine(0, B_CY - WAVE_TOP, CONTENT_W, 0x0440);
+  drawLiveWaveVisual(cv, playbackLiveWave, B_CY - WAVE_TOP);
+
+  int headX = dataSize ? (int)((uint64_t)played * CONTENT_W / dataSize) : 0;
+  if (headX >= CONTENT_W) headX = CONTENT_W - 1;
+  cv.drawFastVLine(headX, 0, WAVE_CY - WAVE_TOP, COL_WHITE);
+}
+
+static void drawPlaybackChrome(m5gfx::M5GFX &g, uint32_t played, uint32_t dataSize, uint32_t deleteHeldMs = 0) {
+  uint32_t cur  = (played / 2) / REC_RATE;
+  uint32_t tot  = (dataSize / 2) / REC_RATE;
+  g.fillRect(0, WAVE_BOT + 1, CONTENT_W, 135 - WAVE_BOT - 1, COL_BG);
+  char curBuf[8];
+  snprintf(curBuf, sizeof(curBuf), "%02lu:%02lu", (unsigned long)(cur / 60), (unsigned long)(cur % 60));
+  drawDseg14Text(g, 4, WAVE_BOT + 2, curBuf, COL_GREEN);
+  if (deleteHeldMs > 0) {
+    drawDeleteProgress(g, deleteHeldMs);
+  } else {
+    char totBuf[9];
+    snprintf(totBuf, sizeof(totBuf), "%02lu:%02lu", (unsigned long)(tot / 60), (unsigned long)(tot % 60));
+    drawDseg14Text(g, CONTENT_W - dseg14TextWidth(totBuf) - 4, WAVE_BOT + 2, totBuf, COL_DIM);
+  }
+}
+
+static void clearPlaybackDeleteChrome(m5gfx::M5GFX &g) {
+  g.fillRect(112, 119, 126, 15, COL_BG);
+}
+
 static void drawPlaybackAction(M5Canvas &cv, const char *msg, uint16_t col = COL_GREEN) {
   (void)cv;
   (void)msg;
   (void)col;
 }
+
+static bool enqueueUploadMounted(int recNum, uint8_t kind);
+static uint8_t validateUploadConfigMounted();
+static const char *uploadStatusLabel(uint8_t status);
 
 // ---------- 回放界面: 播放完自动回列表, 回车暂停/继续, 退格回列表, ;/.切换, +/- 音量, 长按Del删除, 空格去录音 ----------
 // 返回 R_BACK(返回上一层), R_LIST(回列表), R_RECORD(去录音) 或 R_DELETE(删除当前录音)
@@ -1618,8 +1816,12 @@ int playbackScreen(const char *path, int recNum, int prevRec, int nextRec) {
   memset(playbackLiveWave, 0, sizeof(playbackLiveWave));
 
   d.fillScreen(COL_BG);
+  M5Canvas waveCv(&d);
+  bool useWaveSprite = waveCv.createSprite(CONTENT_W, WAVE_H) != nullptr;
+  M5Canvas bottomCv(&d);
+  bool useBottomSprite = useWaveSprite && bottomCv.createSprite(CONTENT_W, CHROME_H) != nullptr;
   M5Canvas cv(&d);
-  bool useSprite = cv.createSprite(CONTENT_W, d.height()) != nullptr;
+  bool useSprite = !useWaveSprite && cv.createSprite(CONTENT_W, d.height()) != nullptr;
 
   // 静态部分(画一次): 顶栏
   auto drawStatic = [&]() {
@@ -1646,10 +1848,14 @@ int playbackScreen(const char *path, int recNum, int prevRec, int nextRec) {
       }
       d.drawFastHLine(0, WAVE_BOT + 1, CONTENT_W, 0x0820);
     }
+    if (useSprite) cv.pushSprite(0, 0);
   };
   uint32_t delHoldStart = 0;
   uint32_t lastDelDraw = 0;
   bool paused = false;
+  size_t playbackVisualN = 0;
+  uint32_t lastPbChromeSec = 0xFFFFFFFFUL;
+  uint32_t lastPbChromeHeldBucket = 0xFFFFFFFFUL;
   auto deleteHeldMs = [&]() -> uint32_t {
     if (delHoldStart == 0) return 0;
     uint32_t held = millis() - delHoldStart;
@@ -1657,7 +1863,29 @@ int playbackScreen(const char *path, int recNum, int prevRec, int nextRec) {
     return held > DELETE_HOLD_MS ? DELETE_HOLD_MS : held;
   };
   auto drawProgress = [&](uint32_t played, int16_t *liveWave = nullptr, size_t liveN = 0) {
-    if (useSprite) {
+    if (useWaveSprite) {
+      if (liveWave && liveN > 0) {
+        if (liveN > PB_N) liveN = PB_N;
+        memcpy(playbackVisualBuf, liveWave, liveN * sizeof(int16_t));
+        playbackVisualN = liveN;
+      }
+      int16_t *visualWave = playbackVisualN ? playbackVisualBuf : nullptr;
+      drawPlaybackWaveCanvas(waveCv, played, dataSize, visualWave, playbackVisualN);
+      waveCv.pushSprite(0, WAVE_TOP);
+      uint32_t held = deleteHeldMs();
+      uint32_t chromeSec = (played / 2) / REC_RATE;
+      uint32_t heldBucket = held / 60;
+      if (chromeSec != lastPbChromeSec || heldBucket != lastPbChromeHeldBucket) {
+        if (useBottomSprite) {
+          drawPlaybackBottomCanvas(bottomCv, played, dataSize, held);
+          bottomCv.pushSprite(0, CHROME_TOP);
+        } else {
+          drawPlaybackChrome(d, played, dataSize, held);
+        }
+        lastPbChromeSec = chromeSec;
+        lastPbChromeHeldBucket = heldBucket;
+      }
+    } else if (useSprite) {
       drawPlaybackCanvas(cv, played, dataSize, liveWave, liveN, paused, deleteHeldMs());
       cv.pushSprite(0, 0);
     } else {
@@ -1670,12 +1898,14 @@ int playbackScreen(const char *path, int recNum, int prevRec, int nextRec) {
   uint32_t played = 0, remaining = dataSize;
   uint32_t lastSeek = 0;
   uint32_t lastPreviewDraw = 0;
+  uint32_t lastProgressDraw = 0;
   uint32_t fadeBytesLeft = REC_RATE * 2 * 80 / 1000;
   uint8_t previewBar = 0;
   int pi = 0;
 
   drawStatic();
   drawProgress(0);
+  lastProgressDraw = millis();
   speakerOn();
   bool ignoreKeysUntilRelease = M5Cardputer.Keyboard.isPressed();
 
@@ -1688,9 +1918,13 @@ int playbackScreen(const char *path, int recNum, int prevRec, int nextRec) {
         if (delHoldStart == 0) { delHoldStart = millis(); lastDelDraw = 0; }
         uint32_t held = millis() - delHoldStart;
         if (held >= DELETE_HOLD_MS) { ret = R_DELETE; stop = true; }
-        else if (held >= DELETE_HINT_MS && millis() - lastDelDraw > 60) { lastDelDraw = millis(); drawProgress(played); }
+        else if (held >= DELETE_HINT_MS && millis() - lastDelDraw > 60) { lastDelDraw = millis(); drawProgress(played); lastProgressDraw = lastDelDraw; }
       } else if (delHoldStart != 0) {
         delHoldStart = 0;
+        if (useWaveSprite) {
+          clearPlaybackDeleteChrome(d);
+          lastPbChromeHeldBucket = 0xFFFFFFFFUL;
+        }
         drawPlaybackAction(cv, "BACK", COL_DIM);
         ret = R_LIST; stop = true;                         // 退格短按=回上一层
       }
@@ -1707,10 +1941,21 @@ int playbackScreen(const char *path, int recNum, int prevRec, int nextRec) {
         else if (keySpace()) { drawPlaybackAction(cv, "REC", COL_RED); ret = R_RECORD; stop = true; }   // 空格=去录音
         else if (keyUp() && prevRec > 0) { drawPlaybackAction(cv, "PREV", COL_GREEN); g_nextPlay = prevRec; ret = R_PLAY; stop = true; }
         else if (keyDown() && nextRec > 0) { drawPlaybackAction(cv, "NEXT", COL_GREEN); g_nextPlay = nextRec; ret = R_PLAY; stop = true; }
+        else if (keyUpload()) {
+          bool queued = enqueueUploadMounted(recNum, recKindOf(recNum));
+          uint8_t status = queued ? validateUploadConfigMounted() : UPSTAT_NO_SD;
+          if (uploadDone(recNum)) status = UPSTAT_DONE;
+          else if (status == UPSTAT_IDLE) status = UPSTAT_QUEUED;
+          g_uploadStatus = status;
+          if (status == UPSTAT_QUEUED) lastUploadTickMs = millis();
+          drawActionToast(uploadStatusLabel(status), (status == UPSTAT_QUEUED || status == UPSTAT_DONE) ? COL_GREEN : COL_RED);
+          waitRelease();
+        }
         else if (keyEnter()) {
           paused = !paused;
           if (paused) M5Cardputer.Speaker.stop();
           drawProgress(played);
+          lastProgressDraw = millis();
           drawPlaybackAction(cv, paused ? "PAUSE" : "PLAY", paused ? COL_DIM : COL_GREEN);
           waitRelease();
         }
@@ -1750,8 +1995,11 @@ int playbackScreen(const char *path, int recNum, int prevRec, int nextRec) {
       played &= ~1U;
       remaining = dataSize - played;
       f.seek(44 + played);
+      playbackVisualN = 0;
+      memset(playbackLiveWave, 0, sizeof(playbackLiveWave));
       fadeBytesLeft = REC_RATE * 2 * 80 / 1000;
       drawProgress(played);
+      lastProgressDraw = millis();
       playSeekFeedback(seekRight && !seekLeft);
       delay(8);
       continue;
@@ -1774,10 +2022,11 @@ int playbackScreen(const char *path, int recNum, int prevRec, int nextRec) {
       delay(8); continue;
     }
     if (M5Cardputer.Speaker.isPlaying(0) >= 2) {
-      previewPlaybackWaveStep(f, dataSize, previewBar, 4);
-      if (millis() - lastPreviewDraw > 70) {
+      previewPlaybackWaveStep(f, dataSize, previewBar, 1);
+      if (millis() - lastPreviewDraw > PB_UI_FRAME_MS) {
         lastPreviewDraw = millis();
         drawProgress(played);
+        lastProgressDraw = lastPreviewDraw;
       }
       delay(1);
       continue;
@@ -1800,8 +2049,14 @@ int playbackScreen(const char *path, int recNum, int prevRec, int nextRec) {
     M5Cardputer.Speaker.playRaw(liveWave, liveN, REC_RATE, false, 1, 0, false);
     pi ^= 1;
     played += got;
-    drawProgress(played, liveWave, liveN);
+    uint32_t now = millis();
+    if (now - lastProgressDraw >= PB_UI_FRAME_MS) {
+      lastProgressDraw = now;
+      drawProgress(played, liveWave, liveN);
+    }
   }
+  if (useBottomSprite) bottomCv.deleteSprite();
+  if (useWaveSprite) waveCv.deleteSprite();
   if (useSprite) cv.deleteSprite();
   M5Cardputer.Speaker.stop();
   f.close();
@@ -2063,7 +2318,7 @@ static bool boxSyncClockIfNeeded() {
   uint32_t start = millis();
   while (!boxClockHasTime() && millis() - start < 3500) {
     M5Cardputer.update();
-    if (M5Cardputer.Keyboard.isPressed()) return false;
+    if (keyUploadAbort()) return false;
     delay(100);
   }
   boxClockSynced = boxClockHasTime();
@@ -2096,7 +2351,7 @@ static bool tryWifiProfile(const char *ssid, const char *password) {
   uint32_t start = millis();
   while (WiFi.status() != WL_CONNECTED && millis() - start < 4500) {
     M5Cardputer.update();
-    if (M5Cardputer.Keyboard.isPressed()) return false;
+    if (keyUploadAbort()) return false;
     delay(100);
   }
   return WiFi.status() == WL_CONNECTED;
@@ -2226,6 +2481,7 @@ static uint8_t validateUploadConfigMounted() {
 }
 
 static bool uploadOneJobMounted() {
+  g_uploadPausedForInput = false;
   if (!loadUploadConfig()) { g_uploadStatus = UPSTAT_NO_CFG; return false; }
   if (!uploadCfg.syncEnabled) { wifiPowerDown(); g_uploadStatus = UPSTAT_SYNC_OFF; return false; }
   auto failAfterWifi = [&](uint8_t status) {
@@ -2236,6 +2492,8 @@ static bool uploadOneJobMounted() {
   int recNum = 0;
   uint8_t kind = REC_NORMAL;
   if (!uploadReadFirstJob(recNum, kind)) return false;
+  g_uploadActiveRec = recNum;
+  g_uploadStatus = UPSTAT_UPLOADING;
   char path[40];
   uint8_t currentKind = recKindOf(recNum);
   recordingPathKind(recNum, currentKind, path, sizeof(path));
@@ -2245,7 +2503,10 @@ static bool uploadOneJobMounted() {
     g_uploadStatus = UPSTAT_NO_FILE;
     return true;
   }
-  if (!ensureWifiConnected()) { g_uploadStatus = UPSTAT_WIFI_ERR; return false; }
+  if (!ensureWifiConnected()) {
+    g_uploadStatus = g_uploadPausedForInput ? UPSTAT_QUEUED : UPSTAT_WIFI_ERR;
+    return false;
+  }
   char recordedAt[24] = {0};
   if (!boxReadRecordedAtMounted(recNum, recordedAt, sizeof(recordedAt))) boxFormatNow(recordedAt, sizeof(recordedAt));
   File f = SD.open(path, FILE_READ);
@@ -2321,7 +2582,7 @@ static bool uploadOneJobMounted() {
       if (outN && client.write(adpcmBuf, outN) != outN) { client.stop(); f.close(); return failAfterWifi(UPSTAT_HTTP_ERR); }
       if ((++uiTick & 0x03) == 0) {
         M5Cardputer.update();
-        if (keyUploadAbort()) { client.stop(); f.close(); return failAfterWifi(UPSTAT_ABORTED); }
+        if (keyUploadAbort()) { client.stop(); f.close(); return failAfterWifi(UPSTAT_QUEUED); }
         delay(0);
       }
     }
@@ -2333,7 +2594,7 @@ static bool uploadOneJobMounted() {
       if (client.write(buf, n) != n) { client.stop(); f.close(); return failAfterWifi(UPSTAT_HTTP_ERR); }
       if ((++uiTick & 0x07) == 0) {
         M5Cardputer.update();
-        if (keyUploadAbort()) { client.stop(); f.close(); return failAfterWifi(UPSTAT_ABORTED); }
+        if (keyUploadAbort()) { client.stop(); f.close(); return failAfterWifi(UPSTAT_QUEUED); }
         delay(0);
       }
     }
@@ -2341,7 +2602,7 @@ static bool uploadOneJobMounted() {
   uint32_t start = millis();
   while (!client.available() && client.connected() && millis() - start < 4000) {
     M5Cardputer.update();
-    if (keyUploadAbort()) { client.stop(); f.close(); return failAfterWifi(UPSTAT_ABORTED); }
+    if (keyUploadAbort()) { client.stop(); f.close(); return failAfterWifi(UPSTAT_QUEUED); }
     delay(20);
   }
   int code = 0;
@@ -2381,8 +2642,9 @@ static uint8_t validateUploadConfigMounted() {
 
 static const char *uploadStatusLabel(uint8_t status) {
   switch (status) {
-    case UPSTAT_QUEUED: return "UPLOAD";
-    case UPSTAT_DONE: return "SV";
+    case UPSTAT_UPLOADING: return "GO";
+    case UPSTAT_QUEUED: return "WT";
+    case UPSTAT_DONE: return "OK";
     case UPSTAT_NO_CFG: return "NO CFG";
     case UPSTAT_BAD_URL: return "BAD URL";
     case UPSTAT_WIFI_ERR: return "WIFI ERR";
@@ -2391,7 +2653,7 @@ static const char *uploadStatusLabel(uint8_t status) {
     case UPSTAT_NO_FILE: return "NO FILE";
     case UPSTAT_ABORTED: return "ABORT";
     case UPSTAT_SYNC_OFF: return "SYNC OFF";
-    default: return "UPLOAD";
+    default: return "WT";
   }
 }
 
@@ -2399,8 +2661,13 @@ static bool uploadQueuedJobsMounted(uint8_t maxJobs = 1, uint32_t budgetMs = 900
   bool changed = false;
   uint32_t start = millis();
   for (uint8_t i = 0; i < maxJobs; i++) {
-    if (M5Cardputer.Keyboard.isPressed()) break;
     if (millis() - start > budgetMs) break;
+    M5Cardputer.update();
+    if (M5Cardputer.Keyboard.isPressed()) {
+      g_uploadPausedForInput = true;
+      g_uploadStatus = UPSTAT_QUEUED;
+      break;
+    }
     bool oneChanged = uploadOneJobMounted();
     if (!oneChanged) break;
     changed = true;
@@ -2417,14 +2684,44 @@ static bool systemIdleTick() {
 #if !UPLOAD_WIFI_ENABLED
   return false;
 #endif
-  if (M5Cardputer.Keyboard.isPressed()) return false;
+  if (M5Cardputer.Keyboard.isPressed()) {
+    if (g_uploadActiveAnnounced) {
+      g_uploadActiveAnnounced = false;
+      g_uploadActiveRec = 0;
+      g_uploadStatus = UPSTAT_QUEUED;
+      return true;
+    }
+    return false;
+  }
   uint32_t now = millis();
-  if (now - lastUploadTickMs < 30000) return false;
+  if (!g_uploadActiveAnnounced && now - lastUploadTickMs < UPLOAD_IDLE_DELAY_MS) return false;
+  if (!sdMount()) {
+    bool wasActive = g_uploadActiveAnnounced || g_uploadActiveRec != 0;
+    g_uploadActiveAnnounced = false;
+    g_uploadActiveRec = 0;
+    g_uploadStatus = UPSTAT_NO_SD;
+    return wasActive;
+  }
+  if (!g_uploadActiveAnnounced) {
+    int nextRec = 0;
+    uint8_t nextKind = REC_NORMAL;
+    if (!uploadReadFirstJob(nextRec, nextKind)) {
+      SD.end();
+      return false;
+    }
+    g_uploadActiveRec = nextRec;
+    g_uploadStatus = UPSTAT_UPLOADING;
+    g_uploadActiveAnnounced = true;
+    SD.end();
+    return true;
+  }
   lastUploadTickMs = now;
-  if (!sdMount()) { g_uploadStatus = UPSTAT_NO_SD; return false; }
   bool changed = uploadQueuedJobsMounted();
+  g_uploadActiveAnnounced = false;
+  g_uploadActiveRec = 0;
+  if (g_uploadStatus == UPSTAT_UPLOADING) g_uploadStatus = UPSTAT_QUEUED;
   SD.end();
-  return changed;
+  return true;
 }
 
 // ---------- 按键摩擦后处理: 只压低低能量、高变化率的细碎刮擦声 ----------
@@ -2710,6 +3007,34 @@ void drawRecCanvas(m5gfx::M5GFX &g, uint32_t elapsedMs, bool blink, int16_t *wav
   drawDeleteProgress(g, deleteHeldMs);
 }
 
+static void drawRecWaveCanvas(M5Canvas &cv, int16_t *wave) {
+  updateLiveWaveVisual(recLiveWave, wave, REC_N, B_HALF, REC_B_SMOOTH, B_DECAY);
+  cv.fillScreen(COL_BG);
+  cv.drawFastHLine(0, A_CY - WAVE_TOP, CONTENT_W, 0x0440);
+  drawTrackBarsLocal(cv);
+  cv.drawFastHLine(0, B_CY - WAVE_TOP, CONTENT_W, 0x0440);
+  drawLiveWaveVisual(cv, recLiveWave, B_CY - WAVE_TOP);
+}
+
+static void drawRecChrome(m5gfx::M5GFX &g, uint32_t elapsedMs, bool blink, bool ready = false, bool paused = false, uint32_t deleteHeldMs = 0) {
+  if (ready || paused) {
+    const char *status = ready ? "READY" : "PAUSE";
+    uint16_t statusCol = COL_DIM;
+    drawStatusTitleNoLine(g, status, statusCol);
+  } else {
+    g.fillRect(42, 3, 14, 14, COL_BG);
+    if (blink) g.fillCircle(48, 9, 5, COL_RED);
+    else g.drawCircle(48, 9, 5, 0x2000);
+  }
+
+  g.fillRect(0, WAVE_BOT + 1, 84, 135 - WAVE_BOT - 1, COL_BG);
+  uint32_t s = elapsedMs / 1000;
+  char recTime[8];
+  snprintf(recTime, sizeof(recTime), "%02lu:%02lu", (unsigned long)(s / 60), (unsigned long)(s % 60));
+  drawDseg14Text(g, 4, WAVE_BOT + 2, recTime, COL_GREEN);
+  drawDeleteProgress(g, deleteHeldMs);
+}
+
 // 录制. 开机自动进入; 调用此函数后创建文件并开始写入
 int recordingScreen() {
   auto &d = M5Cardputer.Display;
@@ -2721,13 +3046,74 @@ int recordingScreen() {
   memset(waveBarCounts, 0, sizeof(waveBarCounts));
   memset(recLiveWave, 0, sizeof(recLiveWave));
   M5Canvas cv(&d);
-  bool useSprite = cv.createSprite(CONTENT_W, d.height()) != nullptr;
+  M5Canvas waveCv(&d);
+  bool useWaveSprite = waveCv.createSprite(CONTENT_W, WAVE_H) != nullptr;
+  M5Canvas bottomCv(&d);
+  bool useBottomSprite = useWaveSprite && bottomCv.createSprite(CONTENT_W, CHROME_H) != nullptr;
+  bool useSprite = !useWaveSprite && cv.createSprite(CONTENT_W, d.height()) != nullptr;
+  uint32_t lastRecChromeSec = 0xFFFFFFFFUL;
+  bool lastRecChromeBlink = false;
+  uint32_t lastRecChromeHeldBucket = 0xFFFFFFFFUL;
   auto drawRecFrame = [&](uint32_t elapsedMs, bool blink, int16_t *wave, bool ready = false, bool pausedFrame = false, uint32_t deleteHeldMs = 0) {
     if (useSprite) {
       drawRecCanvas(cv, elapsedMs, blink, wave, ready, pausedFrame, deleteHeldMs);
       cv.pushSprite(0, 0);
     } else {
       drawRecCanvas(d, elapsedMs, blink, wave, ready, pausedFrame, deleteHeldMs);
+    }
+    lastRecChromeSec = elapsedMs / 1000;
+    lastRecChromeBlink = blink;
+    lastRecChromeHeldBucket = deleteHeldMs / 60;
+  };
+  auto drawRecChromePartial = [&](uint32_t elapsedMs, bool blink, bool ready = false, bool pausedFrame = false, uint32_t deleteHeldMs = 0, bool forceTop = false, bool forceBottom = false) {
+    if (!useWaveSprite) {
+      drawRecFrame(elapsedMs, blink, nullptr, ready, pausedFrame, deleteHeldMs);
+      return;
+    }
+    uint32_t sec = elapsedMs / 1000;
+    uint32_t heldBucket = deleteHeldMs / 60;
+    if (forceTop || ready || pausedFrame) {
+      const char *status = ready ? "READY" : (pausedFrame ? "PAUSE" : "REC");
+      uint16_t statusCol = (ready || pausedFrame) ? COL_DIM : COL_GREEN;
+      drawStatusTitleNoLine(d, status, statusCol);
+      if (!ready && !pausedFrame) {
+        d.fillRect(42, 3, 14, 14, COL_BG);
+        if (blink) d.fillCircle(48, 9, 5, COL_RED);
+        else d.drawCircle(48, 9, 5, 0x2000);
+      }
+    } else if (blink != lastRecChromeBlink) {
+      d.fillRect(42, 3, 14, 14, COL_BG);
+      if (blink) d.fillCircle(48, 9, 5, COL_RED);
+      else d.drawCircle(48, 9, 5, 0x2000);
+    }
+    if (forceBottom || sec != lastRecChromeSec || heldBucket != lastRecChromeHeldBucket) {
+      if (useBottomSprite) {
+        drawRecBottomCanvas(bottomCv, elapsedMs, deleteHeldMs);
+        bottomCv.pushSprite(0, CHROME_TOP);
+      } else {
+        d.fillRect(0, WAVE_BOT + 1, 84, 135 - WAVE_BOT - 1, COL_BG);
+        uint32_t s = elapsedMs / 1000;
+        char recTime[8];
+        snprintf(recTime, sizeof(recTime), "%02lu:%02lu", (unsigned long)(s / 60), (unsigned long)(s % 60));
+        drawDseg14Text(d, 4, WAVE_BOT + 2, recTime, COL_GREEN);
+        drawDeleteProgress(d, deleteHeldMs);
+      }
+    }
+    lastRecChromeSec = sec;
+    lastRecChromeBlink = blink;
+    lastRecChromeHeldBucket = heldBucket;
+  };
+  auto drawRecRealtime = [&](uint32_t elapsedMs, bool blink, int16_t *wave, uint32_t deleteHeldMs = 0) {
+    if (!useWaveSprite) {
+      drawRecFrame(elapsedMs, blink, wave, false, false, deleteHeldMs);
+      return;
+    }
+    drawRecWaveCanvas(waveCv, wave);
+    waveCv.pushSprite(0, WAVE_TOP);
+    uint32_t sec = elapsedMs / 1000;
+    uint32_t heldBucket = deleteHeldMs / 60;
+    if (sec != lastRecChromeSec || blink != lastRecChromeBlink || heldBucket != lastRecChromeHeldBucket) {
+      drawRecChromePartial(elapsedMs, blink, false, false, deleteHeldMs);
     }
   };
   auto drawRecToast = [&](const char *msg, uint16_t col = COL_GREEN) {
@@ -2747,6 +3133,8 @@ int recordingScreen() {
     else drawActionToast("SAVE", COL_GREEN);
   };
   auto cleanupRecSprite = [&]() {
+    if (useBottomSprite) bottomCv.deleteSprite();
+    if (useWaveSprite) waveCv.deleteSprite();
     if (useSprite) cv.deleteSprite();
   };
   drawRecFrame(0, false, nullptr, true);
@@ -2764,9 +3152,9 @@ int recordingScreen() {
   bool mustRearm = forceMicRearm;
   bool micWasReady = micInputReady && !mustRearm;
   if (!prepareMicInput(mustRearm)) { cleanupRecSprite(); f.close(); SD.end(); showMsg("录音机", "麦克风启动失败", COL_RED); return 0; }
-  if (!micWasReady) delay(20);
+  if (!micWasReady && !mustRearm) delay(20);
   if (mustRearm) {
-    for (int i = 0; i < 12; i++) {
+    for (int i = 0; i < REC_REARM_SETTLE_BUFFERS; i++) {
       M5Cardputer.Mic.record(recBuf[0], REC_N, REC_RATE);
       while (M5Cardputer.Mic.isRecording() > 0) delay(1);
     }
@@ -2774,6 +3162,7 @@ int recordingScreen() {
   }
 
   uint32_t dataBytes = 0;
+  size_t recWriteSamples = 0;
   int b = 0;
   uint32_t startMs = millis(), pausedTotal = 0, pauseStart = 0, lastDraw = 0;
   bool paused = false;
@@ -2787,8 +3176,15 @@ int recordingScreen() {
     M5Cardputer.Mic.record(recBuf[0], REC_N, REC_RATE);
     M5Cardputer.Mic.record(recBuf[1], REC_N, REC_RATE);
   };
+  auto flushRecWrite = [&]() {
+    if (recWriteSamples == 0) return;
+    size_t bytes = recWriteSamples * sizeof(int16_t);
+    f.write((uint8_t *)recWriteBuf, bytes);
+    dataBytes += bytes;
+    recWriteSamples = 0;
+  };
   queueRecordBuffers();
-  drawRecFrame(0, true, nullptr);
+  drawRecChromePartial(0, true, false, false, 0, true, true);
   bool stop = false;
   bool cancelRec = false;
   bool recScreenOff = false;
@@ -2811,7 +3207,7 @@ int recordingScreen() {
             delHoldStart = 0;
             lastDelDraw = 0;
             applyBrightness();
-            drawRecFrame(activeElapsed(), true, nullptr, false, paused);
+            drawRecChromePartial(activeElapsed(), true, false, paused, 0, true, true);
           }
         }
       } else if (M5Cardputer.Keyboard.isChange() && M5Cardputer.Keyboard.isPressed()) {
@@ -2827,17 +3223,17 @@ int recordingScreen() {
             pausedTotal += millis() - pauseStart;
             if (skipBuffers < 2) skipBuffers = 2;
             queueRecordBuffers();
-            drawRecFrame(activeElapsed(), true, nullptr);
+            drawRecChromePartial(activeElapsed(), true, false, false, 0, true, true);
           } else {
             paused = true;
             pauseStart = millis();
             while (M5Cardputer.Mic.isRecording() > 0) { M5Cardputer.update(); delay(1); }
-            drawRecFrame(activeElapsed(), false, nullptr, false, true);
+            drawRecChromePartial(activeElapsed(), false, false, true, 0, true, true);
           }
           waitRelease();
         }
         else if (keyEsc()) { g_afterRecord = R_BACK; stop = true; break; }
-        else if (keyUpload()) { drawRecToast("UPLOAD", COL_GREEN); g_uploadAfterRecord = true; g_afterRecord = R_LIST; stop = true; break; }
+        else if (keyUpload()) { drawRecToast("WT", COL_GREEN); g_uploadAfterRecord = true; g_afterRecord = R_LIST; stop = true; break; }
         else if (keyEnter()) { drawRecSave(); g_afterRecord = R_LIST; stop = true; break; }
         else if (keyAlt()) { drawRecToast("WAIT", COL_GREEN); g_afterRecord = R_NOISE; stop = true; break; }
         else if (keyVolUp()) { adjustPlayVolume(25); drawRecVolume(COL_GREEN); waitRelease(); }
@@ -2855,11 +3251,11 @@ int recordingScreen() {
           if (held >= DELETE_HOLD_MS) { cancelRec = true; g_afterRecord = R_BACK; stop = true; break; }
           if (held >= DELETE_HINT_MS && millis() - lastDelDraw > 60) {
             lastDelDraw = millis();
-            drawRecFrame(activeElapsed(), false, nullptr, false, paused, held);
+            drawRecChromePartial(activeElapsed(), false, false, false, held, false, true);
           }
         } else if (delHoldStart != 0) {
           delHoldStart = 0;
-          drawRecFrame(activeElapsed(), false, nullptr, false, paused);
+          drawRecChromePartial(activeElapsed(), false, false, false, 0, false, true);
         }
       }
       if (stop) break;
@@ -2871,24 +3267,30 @@ int recordingScreen() {
     if (paused) continue;
     int16_t *filled = recBuf[b];
     processMicBuffer(filled, REC_N, lpf);
+    memcpy(recVisualBuf, filled, REC_N * sizeof(int16_t));
     if (skipBuffers > 0) skipBuffers--;
-    else { f.write((uint8_t *)filled, REC_N * sizeof(int16_t)); dataBytes += REC_N * sizeof(int16_t); }
-    uint32_t now = millis();
-    if (now - lastDraw >= 16) {
-      lastDraw = now;
-      bool blink = ((now / 400) % 2) == 0;
-      uint32_t elapsed = activeElapsed();
-      pushTrackBar(calcTrackAmp(filled, REC_N));
-      uint32_t held = delHoldStart ? millis() - delHoldStart : 0;
-      if (!recScreenOff) {
-        drawRecFrame(elapsed, blink, filled, false, false, held);
-      }
+    else {
+      memcpy(recWriteBuf + recWriteSamples, filled, REC_N * sizeof(int16_t));
+      recWriteSamples += REC_N;
     }
     M5Cardputer.Mic.record(filled, REC_N, REC_RATE);
     b ^= 1;
+    if (recWriteSamples >= REC_WRITE_BATCH * REC_N) flushRecWrite();
+    uint32_t now = millis();
+    if (now - lastDraw >= REC_UI_FRAME_MS) {
+      lastDraw = now;
+      bool blink = ((now / 400) % 2) == 0;
+      uint32_t elapsed = activeElapsed();
+      pushTrackBar(calcTrackAmp(recVisualBuf, REC_N));
+      uint32_t held = delHoldStart ? millis() - delHoldStart : 0;
+      if (!recScreenOff) {
+        drawRecRealtime(elapsed, blink, recVisualBuf, held);
+      }
+    }
   }
   if (recScreenOff) applyBrightness();
   cleanupRecSprite();
+  flushRecWrite();
   // 掐尾 ~0.3s.
   uint32_t tailTrim = REC_RATE * 6 / 10;
   uint32_t effData = (dataBytes > tailTrim) ? (dataBytes - tailTrim) : 0;
@@ -2897,10 +3299,11 @@ int recordingScreen() {
   f.close();
   if (!cancelRec && effData > 0) {
     setRecDuration(idx, 44 + effData);
+    appendRecordingOrderMounted(idx);
     boxSaveRecordedAtMounted(idx);
     if (g_uploadAfterRecord) {
       enqueueUploadMounted(idx, REC_NORMAL);
-      lastUploadTickMs = 0;
+      lastUploadTickMs = millis();
     }
     uint16_t dur = getRecDuration(idx);
     if (dur <= FRICTION_NOW_SEC) {
@@ -2924,7 +3327,7 @@ int recordingScreen() {
     M5Cardputer.In_I2C.writeRegister8(ES, 0x00, 0x80, 400000);
   }
   if (cancelRec) return 0;
-  insertRecListSorted(idx);
+  insertRecListAtEnd(idx);
   if (g_uploadAfterRecord) setUploadQueued(idx, true);
   nextRecHint = (idx < 9999) ? idx + 1 : 9999;
   writeNextIndexCache(nextRecHint);
@@ -2942,6 +3345,7 @@ static void deleteRecording(int recNum) {
   SD.remove(p);
   recordingPathKind(recNum, REC_IMPORTANT, p, sizeof(p));
   SD.remove(p);
+  removeRecordingOrderMounted(recNum);
   SD.end();
   setShortcutRec(recNum, false);
   setImportantRec(recNum, false);
@@ -3188,9 +3592,11 @@ int listScreen(int selectIdx) {
           drawDseg14Text(d, tagX, y, "IMP", on ? COL_GREEN : COL_DIM);
         }
         if (uploadDone(recList[i])) {
-          drawDseg14Text(d, uploadX, y, "SV", on ? COL_GREEN : COL_DIM);
+          drawDseg14Text(d, uploadX, y, "OK", on ? COL_GREEN : COL_DIM);
+        } else if (g_uploadActiveRec == recList[i]) {
+          drawDseg14Text(d, uploadX, y, "GO", on ? COL_GREEN : COL_DIM);
         } else if (uploadQueued(recList[i])) {
-          drawDseg14Text(d, uploadX, y, "UP", on ? COL_GREEN : COL_DIM);
+          drawDseg14Text(d, uploadX, y, "WT", on ? COL_GREEN : COL_DIM);
         }
         char dur[8];
         formatDuration(getRecDuration(recList[i]), dur, sizeof(dur));
@@ -3304,20 +3710,10 @@ int listScreen(int selectIdx) {
           status = validateUploadConfigMounted();
           if (status == UPSTAT_IDLE) {
             status = UPSTAT_QUEUED;
-            SD.end();
             g_uploadStatus = status;
-            drawActionToast(uploadStatusLabel(status), COL_GREEN);
-            waitRelease();
-            if (sdMount()) {
-              uploadQueuedJobsMounted();
-              status = g_uploadStatus;
-              SD.end();
-            } else {
-              status = UPSTAT_NO_SD;
-            }
-          } else {
-            SD.end();
+            lastUploadTickMs = millis();
           }
+          SD.end();
         }
         g_uploadStatus = status;
         drawActionToast(uploadStatusLabel(status), (status == UPSTAT_QUEUED || status == UPSTAT_DONE) ? COL_GREEN : COL_RED);

@@ -37,6 +37,21 @@ Copy-Item "D:\github仓库同步\小机器\toolbox\toolbox.ino" `
 
 ---
 
+## 2026-05-25 实时录音/播放刷新经验
+
+当前 `toolbox/toolbox.ino` 的录音/播放链路按“音频连续优先，显示局部刷新”的原则调过一轮：
+
+- 录音内圈必须先续上 `Mic.record()`，再做 SD 批量写入和 UI 刷新；不要在采样续接前做慢操作。
+- A/B 波形使用 `WAVE_TOP..WAVE_BOT` 局部 canvas 刷新，目标约 60fps；不要为了波形流畅改回整屏刷新。
+- 底部时间栏使用独立小 canvas，先离屏画完再 `pushSprite` 到底部，避免数字每秒清黑闪烁。
+- 开始录音、暂停/继续、长按删除进度只刷顶栏/底栏局部区域；不要再调用全屏 `drawRecFrame()` 处理这些状态动作。
+- 上传是协作式后台队列：空闲时推进，按键时暂停当前尝试，录音/播放时不上传。不要让 Wi-Fi/NTP/HTTP 与录音/播放实时链路并行抢 SD 和 CPU。
+
+编译/烧录仍固定使用：
+`esp32:esp32:m5stack_cardputer:FlashSize=8M,PartitionScheme=default_8MB`
+
+---
+
 ## 三、Arduino CLI 环境
 
 ### 二进制
