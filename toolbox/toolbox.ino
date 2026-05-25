@@ -2262,7 +2262,7 @@ static uint8_t validateUploadConfigMounted() {
 static const char *uploadStatusLabel(uint8_t status) {
   switch (status) {
     case UPSTAT_QUEUED: return "UPLOAD";
-    case UPSTAT_DONE: return "OK";
+    case UPSTAT_DONE: return "SV";
     case UPSTAT_NO_CFG: return "NO CFG";
     case UPSTAT_BAD_URL: return "BAD URL";
     case UPSTAT_WIFI_ERR: return "WIFI ERR";
@@ -3068,7 +3068,7 @@ int listScreen(int selectIdx) {
           drawDseg14Text(d, tagX, y, "IMP", on ? COL_GREEN : COL_DIM);
         }
         if (uploadDone(recList[i])) {
-          drawDseg14Text(d, uploadX, y, "OK", on ? COL_GREEN : COL_DIM);
+          drawDseg14Text(d, uploadX, y, "SV", on ? COL_GREEN : COL_DIM);
         } else if (uploadQueued(recList[i])) {
           drawDseg14Text(d, uploadX, y, "UP", on ? COL_GREEN : COL_DIM);
         }
