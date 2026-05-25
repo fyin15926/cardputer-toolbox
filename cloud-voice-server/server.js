@@ -415,6 +415,7 @@ function dashboardHtml() {
   <header>
     <div class="head">
       <h1>Cardputer Voice Dashboard</h1>
+      <div class="statusline" style="margin:-6px 0 12px"><a class="button" href="/dashboard/lab">打开音频实验室</a></div>
       <div class="bar">
         <input id="token" type="password" autocomplete="off" placeholder="UPLOAD_TOKEN">
         <button id="save">保存</button>
@@ -602,6 +603,172 @@ function dashboardHtml() {
 
     load();
     setInterval(load, 3000);
+  </script>
+</body>
+</html>`;
+}
+
+function dashboardLabHtml() {
+  return `<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Cardputer Audio Lab</title>
+  <style>
+    :root { color-scheme: dark; --bg:#070b09; --panel:#101613; --soft:#0c120f; --line:#21412f; --text:#e8fff0; --muted:#8fb09b; --ok:#40ff83; --bad:#ff5d5d; --warn:#ffd166; }
+    * { box-sizing: border-box; }
+    body { margin: 0; font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; background: var(--bg); color: var(--text); }
+    header { border-bottom: 1px solid var(--line); background: #090f0c; position: sticky; top: 0; z-index: 5; }
+    .head, main { max-width: 1380px; margin: 0 auto; padding: 14px 18px; }
+    h1 { margin: 0 0 10px; font-size: 22px; }
+    h2 { margin: 0 0 10px; font-size: 15px; color: var(--ok); }
+    input, button, select, textarea { border: 1px solid var(--line); background: var(--soft); color: var(--text); border-radius: 6px; padding: 0 10px; font: inherit; min-width: 0; }
+    input, button, select { height: 38px; }
+    textarea { width: 100%; min-height: 80px; padding: 10px; resize: vertical; }
+    button { cursor: pointer; color: var(--ok); white-space: nowrap; }
+    button:hover { border-color: var(--ok); }
+    .bar { display: grid; grid-template-columns: minmax(220px, 1fr) auto auto auto auto; gap: 8px; align-items: center; }
+    .layout { display: grid; grid-template-columns: minmax(280px, 380px) minmax(0, 1fr); gap: 14px; align-items: start; }
+    .panel { border: 1px solid var(--line); background: var(--panel); border-radius: 8px; padding: 12px; }
+    .stack { display: grid; gap: 14px; }
+    .list { display: grid; gap: 8px; max-height: calc(100vh - 190px); overflow: auto; padding-right: 4px; }
+    .job { border: 1px solid #17251d; background: #080d0a; border-radius: 8px; padding: 10px; cursor: pointer; }
+    .job:hover, .job.active { border-color: var(--ok); background: #0d1711; }
+    .job-title { display: flex; justify-content: space-between; gap: 8px; align-items: center; font-weight: 700; }
+    .grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; }
+    .grid.two { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    .label { color: var(--muted); font-size: 12px; margin-bottom: 6px; }
+    .value { font-size: 16px; font-weight: 700; overflow-wrap: anywhere; }
+    .muted { color: var(--muted); }
+    .error, .bad { color: var(--bad); }
+    .ok { color: var(--ok); }
+    .warn { color: var(--warn); }
+    .pill { display: inline-block; border: 1px solid var(--line); border-radius: 999px; padding: 2px 7px; white-space: nowrap; font-size: 12px; }
+    .pill.ok { color: var(--ok); }
+    .pill.bad { color: var(--bad); }
+    .pill.warn { color: var(--warn); }
+    .section-title { display: flex; justify-content: space-between; gap: 10px; align-items: center; margin-bottom: 10px; }
+    .section-title h2 { margin: 0; }
+    .statusline, .actions { display: flex; gap: 8px; align-items: center; min-height: 24px; margin-top: 8px; color: var(--muted); font-size: 13px; flex-wrap: wrap; }
+    .kv { display: grid; grid-template-columns: 120px minmax(0, 1fr); gap: 8px 12px; font-size: 14px; }
+    .kv div:nth-child(odd) { color: var(--muted); }
+    audio { width: 100%; margin-top: 8px; }
+    pre { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; font: 12px/1.5 ui-monospace, SFMono-Regular, Consolas, monospace; background: #080d0a; border: 1px solid #17251d; border-radius: 6px; padding: 10px; max-height: 230px; overflow: auto; }
+    .feedback-item { border: 1px solid #17251d; border-radius: 6px; padding: 10px; background: #080d0a; margin-top: 8px; }
+    .hidden { display: none !important; }
+    a { color: var(--ok); }
+    @media (max-width: 980px) { .layout { grid-template-columns: 1fr; } .list { max-height: 360px; } .grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } .bar { grid-template-columns: 1fr auto auto; } }
+    @media (max-width: 560px) { .grid, .grid.two, .kv { grid-template-columns: 1fr; } .bar { grid-template-columns: 1fr 1fr; } #token { grid-column: 1 / -1; } }
+  </style>
+</head>
+<body>
+  <header><div class="head">
+    <div class="section-title"><h1>Cardputer Audio Lab</h1><a href="/dashboard">返回后台</a></div>
+    <div class="bar">
+      <input id="token" type="password" autocomplete="off" placeholder="UPLOAD_TOKEN">
+      <button id="save">保存</button><button id="refresh">刷新列表</button><button id="clear">清除</button>
+      <select id="limit"><option>20</option><option selected>50</option><option>100</option></select>
+    </div>
+    <div class="statusline"><span id="stamp">等待登录</span><span id="error" class="error"></span></div>
+  </div></header>
+  <main>
+    <div class="layout">
+      <aside class="panel">
+        <div class="section-title"><h2>录音列表</h2><span id="listCount" class="muted">-</span></div>
+        <div class="actions"><select id="statusFilter"><option value="">全部</option><option value="done">完成</option><option value="failed">失败</option><option value="uploaded">已上传</option></select><button id="reloadJobs">刷新</button></div>
+        <div id="jobs" class="list"><div class="muted">输入 token 后读取。</div></div>
+      </aside>
+      <section class="stack">
+        <div class="panel">
+          <div class="section-title"><h2 id="currentTitle">选择一条录音</h2><span id="currentStatus" class="muted"></span></div>
+          <div class="grid">
+            <div><div class="label">上传格式</div><div id="encoding" class="value">-</div></div>
+            <div><div class="label">大小</div><div id="bytes" class="value">-</div></div>
+            <div><div class="label">时长</div><div id="duration" class="value">-</div></div>
+            <div><div class="label">压缩倍率</div><div id="ratio" class="value">-</div></div>
+          </div>
+          <div class="statusline"><a id="detailLink" class="hidden" href="#">打开详情页</a><span id="jobMeta"></span></div>
+        </div>
+        <div id="labBody" class="hidden stack">
+          <div class="panel">
+            <div class="section-title"><h2>A/B 播放</h2><span id="audioStatus" class="muted"></span></div>
+            <div class="grid two"><div><div class="label">原始录音</div><audio id="rawAudio" controls></audio></div><div><div class="label">试听版</div><audio id="previewAudio" controls></audio></div></div>
+          </div>
+          <div class="panel">
+            <div class="section-title"><h2>试听参数</h2><span id="previewStatus" class="muted"></span></div>
+            <div class="grid">
+              <div><div class="label">增益</div><input id="previewGain" type="number" step="0.1" min="0.2" max="3"></div>
+              <div><div class="label">低通系数</div><input id="previewLowpass" type="number" step="1" min="1" max="255"></div>
+              <div><div class="label">高频保留</div><input id="previewHighMix" type="number" step="0.05" min="0" max="1"></div>
+              <div><div class="label">命中保持帧</div><input id="previewHold" type="number" step="1" min="0" max="20"></div>
+              <div><div class="label">RMS 上限</div><input id="previewRms" type="number" step="50" min="0" max="10000"></div>
+              <div><div class="label">Diff 下限</div><input id="previewDiff" type="number" step="10" min="0" max="5000"></div>
+              <div><div class="label">Diff/RMS 比例</div><input id="previewRatio" type="number" step="5" min="1" max="512"></div>
+              <div><div class="label">帧采样数</div><input id="previewFrame" type="number" step="64" min="64" max="2048"></div>
+            </div>
+            <div class="actions"><button id="presetGentle">轻柔</button><button id="presetDefault">默认</button><button id="presetStrong">强力</button><button id="generatePreview">生成并加载试听版</button><button id="loadPreview">只加载试听版</button></div>
+            <div id="previewMeta" class="kv" style="margin-top:10px"></div>
+          </div>
+          <div class="panel">
+            <div class="section-title"><h2>听感记录</h2><span id="feedbackStatus" class="muted"></span></div>
+            <div class="grid two"><div><div class="label">结论</div><select id="feedbackRating"><option value="">选择结论</option><option value="better">更好</option><option value="worse">更差</option><option value="mixed">有好有坏</option><option value="neutral">差不多</option></select></div><div><div class="label">保存</div><button id="saveFeedback">保存听感记录</button></div></div>
+            <div style="margin-top:10px"><div class="label">备注</div><textarea id="feedbackNote" placeholder="例如：默认版刮擦少了，但人声闷；轻柔版更自然。"></textarea></div>
+            <div id="feedbackList"></div>
+          </div>
+          <div class="panel">
+            <div class="section-title"><h2>转写 / memo</h2><span class="muted">辅助判断</span></div>
+            <div class="grid two"><div><div class="label">转写</div><pre id="transcript">-</pre></div><div><div class="label">flomo memo</div><pre id="memo">-</pre></div></div>
+          </div>
+        </div>
+      </section>
+    </div>
+  </main>
+  <script>
+    const $ = (id) => document.getElementById(id);
+    const esc = (v) => String(v ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+    const fmtTime = (v) => v ? new Date(v).toLocaleString() : '-';
+    const fmtBytes = (n) => Number.isFinite(n) ? (n > 1048576 ? (n / 1048576).toFixed(1) + ' MB' : Math.round(n / 1024) + ' KB') : '-';
+    const fmtDuration = (s) => Number.isFinite(s) ? (s >= 60 ? Math.floor(s / 60) + 'm ' + Math.round(s % 60) + 's' : s.toFixed(1) + 's') : '-';
+    const normalizeToken = (value) => String(value || '').trim().replace(/^UPLOAD_TOKEN\\s*=\\s*/i, '').replace(/^token\\s*=\\s*/i, '').replace(/^['"]|['"]$/g, '').trim();
+    const tokenInput = $('token');
+    let jobs = [];
+    let currentId = '';
+    const defaultPreviewParams = { gain: 1, lowpass: 96, highMix: 0.25, scratchRmsMax: 1900, scratchDiffMin: 140, scratchRatio: 90, holdFrames: 2, frameSamples: 256 };
+    tokenInput.value = localStorage.getItem('cardputerUploadToken') || '';
+    $('save').onclick = () => { tokenInput.value = normalizeToken(tokenInput.value); localStorage.setItem('cardputerUploadToken', tokenInput.value); loadJobs(); };
+    $('refresh').onclick = () => loadJobs();
+    $('reloadJobs').onclick = () => loadJobs();
+    $('statusFilter').onchange = () => loadJobs();
+    $('limit').onchange = () => loadJobs();
+    $('clear').onclick = () => { localStorage.removeItem('cardputerUploadToken'); tokenInput.value = ''; jobs = []; renderJobs(); };
+    $('presetGentle').onclick = () => setPreviewParams({ gain: 1, lowpass: 72, highMix: 0.45, scratchRmsMax: 1600, scratchDiffMin: 180, scratchRatio: 105, holdFrames: 1, frameSamples: 256 });
+    $('presetDefault').onclick = () => setPreviewParams(defaultPreviewParams);
+    $('presetStrong').onclick = () => setPreviewParams({ gain: 1, lowpass: 112, highMix: 0.12, scratchRmsMax: 2400, scratchDiffMin: 110, scratchRatio: 70, holdFrames: 3, frameSamples: 256 });
+    $('generatePreview').onclick = () => generatePreview();
+    $('loadPreview').onclick = () => loadPreviewAudio();
+    $('saveFeedback').onclick = () => saveFeedback();
+    setPreviewParams(defaultPreviewParams);
+    function token() { const value = normalizeToken(tokenInput.value); if (tokenInput.value && tokenInput.value !== value) tokenInput.value = value; return value; }
+    function statusClass(status) { if (status === 'done' || status === 'uploaded' || status === 'transcribed') return 'ok'; if (String(status || '').includes('failed')) return 'bad'; return 'warn'; }
+    function statusPill(status) { return '<span class="pill ' + statusClass(status) + '">' + esc(status || '-') + '</span>'; }
+    function setPreviewParams(params) { const p = { ...defaultPreviewParams, ...(params || {}) }; $('previewGain').value = p.gain; $('previewLowpass').value = p.lowpass; $('previewHighMix').value = p.highMix; $('previewHold').value = p.holdFrames; $('previewRms').value = p.scratchRmsMax; $('previewDiff').value = p.scratchDiffMin; $('previewRatio').value = p.scratchRatio; $('previewFrame').value = p.frameSamples; }
+    function previewParamsFromForm() { return { gain: Number($('previewGain').value), lowpass: Number($('previewLowpass').value), highMix: Number($('previewHighMix').value), holdFrames: Number($('previewHold').value), scratchRmsMax: Number($('previewRms').value), scratchDiffMin: Number($('previewDiff').value), scratchRatio: Number($('previewRatio').value), frameSamples: Number($('previewFrame').value) }; }
+    function kv(rows) { return rows.map(([k, v]) => '<div>' + esc(k) + '</div><div>' + (v || '-') + '</div>').join(''); }
+    function ratingLabel(value) { return ({ better: '更好', worse: '更差', mixed: '有好有坏', neutral: '差不多' })[value] || value || '-'; }
+    function renderPreviewMeta(preview) { if (!preview) { $('previewMeta').innerHTML = ''; return; } $('previewMeta').innerHTML = kv([['处理帧', esc((preview.metrics?.processedFrames ?? '-') + ' / ' + (preview.metrics?.totalFrames ?? '-'))], ['摩擦命中帧', esc(preview.metrics?.detectedFrames ?? '-')], ['时长', fmtDuration(preview.metrics?.durationSec)], ['生成时间', fmtTime(preview.createdAt)]]); }
+    function renderFeedback(items) { const list = Array.isArray(items) ? items : []; $('feedbackList').innerHTML = list.length ? list.map((item) => { const metrics = item.metrics ? '处理 ' + (item.metrics.processedFrames ?? '-') + '/' + (item.metrics.totalFrames ?? '-') + '，命中 ' + (item.metrics.detectedFrames ?? '-') : ''; return '<div class="feedback-item"><strong>' + esc(ratingLabel(item.rating)) + '</strong><span class="muted"> · ' + esc(fmtTime(item.createdAt)) + '</span><div>' + esc(item.note || '-') + '</div><div class="muted">' + esc(metrics) + '</div></div>'; }).join('') : '<div class="muted">还没有听感记录。</div>'; }
+    function renderJobs() { $('listCount').textContent = jobs.length ? jobs.length + ' 条' : '-'; $('jobs').innerHTML = jobs.length ? jobs.map((job) => { const encoding = job.uploadEncoding === 'ima-adpcm' ? 'ADPCM' : 'WAV'; return '<div class="job ' + (job.id === currentId ? 'active' : '') + '" data-id="' + esc(job.id) + '"><div class="job-title"><span>' + esc(job.id) + '</span>' + statusPill(job.status) + '</div><div class="muted">' + esc(job.recordingName || '-') + ' · ' + encoding + ' · ' + fmtBytes(job.bytes) + '</div><div class="muted">' + esc(job.recordedAt || '-') + '</div></div>'; }).join('') : '<div class="muted">没有任务。</div>'; document.querySelectorAll('.job[data-id]').forEach((el) => { el.onclick = () => selectJob(el.dataset.id); }); }
+    async function loadJobs() { const uploadToken = token(); if (!uploadToken) { $('stamp').textContent = '等待登录'; return; } $('stamp').textContent = '正在读取列表...'; $('error').textContent = ''; try { const params = new URLSearchParams({ limit: $('limit').value }); const status = $('statusFilter').value; if (status) params.set('status', status); const res = await fetch('/api/dashboard?' + params.toString(), { headers: { 'X-Upload-Token': uploadToken } }); const data = await res.json(); if (!res.ok) throw new Error(data.error || 'HTTP ' + res.status); jobs = data.jobs.jobs || []; $('stamp').textContent = '更新 ' + fmtTime(data.time); renderJobs(); if (!currentId && jobs[0]) await selectJob(jobs[0].id); } catch (error) { $('error').textContent = error.message === 'invalid upload token' ? 'token 不正确' : error.message; } }
+    function revokeAudio(audio) { if (audio.dataset.url) URL.revokeObjectURL(audio.dataset.url); audio.dataset.url = ''; audio.removeAttribute('src'); }
+    async function selectJob(id) { currentId = id; renderJobs(); $('labBody').classList.remove('hidden'); $('currentTitle').textContent = id; $('currentStatus').textContent = '正在读取...'; revokeAudio($('rawAudio')); revokeAudio($('previewAudio')); try { const res = await fetch('/api/jobs/' + encodeURIComponent(id), { headers: { 'X-Upload-Token': token() } }); const data = await res.json(); if (!res.ok) throw new Error(data.error || 'HTTP ' + res.status); renderJob(data); await loadRawAudio(); if (data.files?.preview) await loadPreviewAudio(false); } catch (error) { $('currentStatus').textContent = error.message; } }
+    function renderJob(data) { const job = data.job; const wav = data.files?.audio?.wav || {}; const encoding = job.uploadEncoding === 'ima-adpcm' ? 'ADPCM' : 'WAV'; $('currentTitle').textContent = job.id; $('currentStatus').innerHTML = statusPill(job.status); $('encoding').textContent = encoding; $('bytes').textContent = fmtBytes(job.bytes); $('duration').textContent = fmtDuration(wav.durationSec); $('ratio').textContent = job.compressionRatio ? job.compressionRatio + 'x' : '-'; $('jobMeta').textContent = (job.recordedAt || '-') + ' · ' + (job.deviceId || '-'); $('detailLink').href = '/dashboard/jobs/' + encodeURIComponent(job.id); $('detailLink').classList.remove('hidden'); $('transcript').textContent = data.transcriptText || '还没有转写文本。'; $('memo').textContent = data.memoText || '还没有 flomo memo。'; if (data.preview?.params) { setPreviewParams(data.preview.params); renderPreviewMeta(data.preview); $('previewStatus').textContent = '已读取上次试听参数。'; } else { setPreviewParams(defaultPreviewParams); renderPreviewMeta(null); $('previewStatus').textContent = '还没有试听版。'; } renderFeedback(data.previewFeedback); }
+    async function loadAudioTo(url, audio, statusEl, successText) { const res = await fetch(url, { headers: { 'X-Upload-Token': token() } }); if (!res.ok) { const data = await res.json().catch(() => ({})); throw new Error(data.error || 'HTTP ' + res.status); } const blob = await res.blob(); revokeAudio(audio); const objectUrl = URL.createObjectURL(blob); audio.dataset.url = objectUrl; audio.src = objectUrl; if (statusEl) statusEl.textContent = successText; }
+    async function loadRawAudio() { $('audioStatus').textContent = '正在加载原始录音...'; try { await loadAudioTo('/api/jobs/' + encodeURIComponent(currentId) + '/audio', $('rawAudio'), $('audioStatus'), '原始录音已加载。'); } catch (error) { $('audioStatus').textContent = error.message; } }
+    async function loadPreviewAudio(showStatus = true) { if (showStatus) $('previewStatus').textContent = '正在加载试听版...'; try { await loadAudioTo('/api/jobs/' + encodeURIComponent(currentId) + '/preview/audio', $('previewAudio'), $('previewStatus'), '试听版已加载。'); } catch (error) { $('previewStatus').textContent = error.message; } }
+    async function generatePreview() { if (!currentId) return; $('previewStatus').textContent = '正在生成试听版...'; try { const res = await fetch('/api/jobs/' + encodeURIComponent(currentId) + '/preview', { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Upload-Token': token() }, body: JSON.stringify({ params: previewParamsFromForm() }) }); const data = await res.json(); if (!res.ok) throw new Error(data.error || 'HTTP ' + res.status); renderPreviewMeta(data.preview); await loadPreviewAudio(false); await selectJob(currentId); } catch (error) { $('previewStatus').textContent = error.message; } }
+    async function saveFeedback() { if (!currentId) return; $('feedbackStatus').textContent = '正在保存...'; try { const res = await fetch('/api/jobs/' + encodeURIComponent(currentId) + '/preview/feedback', { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Upload-Token': token() }, body: JSON.stringify({ rating: $('feedbackRating').value, note: $('feedbackNote').value }) }); const data = await res.json(); if (!res.ok) throw new Error(data.error || 'HTTP ' + res.status); $('feedbackStatus').textContent = '已保存。'; $('feedbackNote').value = ''; renderFeedback(data.feedback); } catch (error) { $('feedbackStatus').textContent = error.message; } }
+    loadJobs();
   </script>
 </body>
 </html>`;
@@ -2381,6 +2548,10 @@ async function route(req, res) {
   }
   if (req.method === 'GET' && pathname === '/dashboard') {
     sendHtml(res, 200, dashboardHtml());
+    return;
+  }
+  if (req.method === 'GET' && pathname === '/dashboard/lab') {
+    sendHtml(res, 200, dashboardLabHtml());
     return;
   }
   if (req.method === 'GET' && pathname.startsWith('/dashboard/jobs/')) {
