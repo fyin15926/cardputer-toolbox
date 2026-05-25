@@ -104,8 +104,8 @@ $fqbn   = "esp32:esp32:m5stack_cardputer:FlashSize=8M,PartitionScheme=default_8M
 
 2026-05-24 更新：为容纳 Wi-Fi 上传模块，后续编译/烧录统一使用 8MB Flash + 3MB APP 分区：
 `esp32:esp32:m5stack_cardputer:FlashSize=8M,PartitionScheme=default_8MB`。
-最近一次编译通过：程序 1,739,024 bytes（52% / 3,342,336），全局变量 128,624 bytes（39% / 327,680）。
-最近一次烧录通过：COM3，写入 1,739,408 bytes，Hash verified，Hard resetting with RTC WDT。
+最近一次编译通过（2026-05-25）：程序 1,746,336 bytes，使用 8MB Flash + 3MB APP 分区。
+最近一次烧录通过（2026-05-25）：COM3，ESP32-S3，Embedded Flash 8MB，写入 1,746,336 bytes，Hash verified，Hard resetting with RTC WDT。
 
 ### 2026-05-24 联网上传当前状态
 
