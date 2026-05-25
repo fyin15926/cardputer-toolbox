@@ -26,7 +26,21 @@
   .grid{display:grid;grid-template-columns:1fr 1fr;gap:12px}
   .card{border:1px solid var(--border);border-radius:8px;padding:12px;background:#111820}
   .check td:first-child{font-family:Consolas,monospace;color:var(--green)}
+  .done{color:var(--green);font-weight:700}
+  .doing{color:var(--gold);font-weight:700}
+  .todo{color:var(--dim);font-weight:700}
   .dim{color:var(--dim)}
+  .tree{background:var(--code);border:1px solid var(--border);border-radius:8px;padding:14px 16px;margin:14px 0 22px;overflow:auto}
+  .tree ul{list-style:none;margin:0;padding-left:22px;border-left:1px solid #244b2d}
+  .tree>ul{padding-left:0;border-left:0}
+  .tree li{position:relative;margin:7px 0;padding-left:18px;white-space:nowrap}
+  .tree li::before{content:"";position:absolute;left:0;top:12px;width:12px;border-top:1px solid #244b2d}
+  .tree>ul>li::before{display:none}
+  .node{display:inline-block;border:1px solid #2ea043;background:#0f2a15;color:#b7f7c1;border-radius:6px;padding:3px 8px;font-weight:700}
+  .node.server{border-color:#1f6feb;background:#10243f;color:#a5d6ff}
+  .node.cloud{border-color:#f8c73a;background:#2c2308;color:#ffe58a}
+  .node.warn{border-color:#f85149;background:#311414;color:#ffb3ad}
+  .leaf{color:var(--dim)}
   @media(max-width:760px){.grid{grid-template-columns:1fr}body{padding:16px}}
 </style>
 </head>
@@ -35,12 +49,73 @@
 <h1>Cardputer 录音自动上传、转写与 flomo 同步方案</h1>
 <p class="dim">目标：Cardputer 录完音后自动上传到阿里云服务器，服务器转成文字，再自动写入 flomo。本文档用于后续开发对齐。</p>
 
+<div class="tree" aria-label="项目步骤树状图">
+  <ul>
+    <li><span class="node">完整链路</span>
+      <ul>
+        <li><span class="node">窗口 A：Cardputer 设备端</span>
+          <ul>
+            <li><span class="leaf">负责人：设备端 AI 窗口</span></li>
+            <li><span class="leaf">盒子层负责 Wi-Fi 登录、NTP、HTTP 上传，不在小键盘上输入长 token</span></li>
+            <li><span class="leaf">录音保存为 WAV</span></li>
+            <li><span class="leaf">录音中按 \：结束录音并把当前 WAV 加入上传队列</span></li>
+            <li><span class="leaf">列表选中录音按 \：只上传选中的 WAV</span></li>
+            <li><span class="leaf">写入 /UPLOAD/queue.txt 待上传队列</span></li>
+            <li><span class="leaf">读取 /UPLOAD/net.txt 连接 Wi-Fi 和服务器</span></li>
+            <li><span class="leaf">联网成功后由盒子层 NTP 校时，给上传附带真实时间</span></li>
+            <li><span class="leaf">空闲时 HTTP POST 上传 WAV</span></li>
+            <li><span class="leaf">成功后写入 /UPLOAD/done.txt</span></li>
+          </ul>
+        </li>
+        <li><span class="node server">电脑配置页</span>
+          <ul>
+            <li><span class="leaf">在电脑填写服务器 URL、上传 token</span></li>
+            <li><span class="leaf">生成 SD:/UPLOAD/net.txt</span></li>
+            <li><span class="leaf">阿里云 Key 和 flomo Webhook 只放服务器，不给小机器</span></li>
+          </ul>
+        </li>
+        <li><span class="node server">共同接口合同</span>
+          <ul>
+            <li><span class="leaf">两边都必须遵守同一套 /upload 协议</span></li>
+            <li><span class="leaf">Header: X-Upload-Token / X-Device-Id / X-Recording-Name / X-Recorded-At</span></li>
+            <li><span class="leaf">Body: 原始 WAV bytes</span></li>
+            <li><span class="leaf">成功返回: {"ok":true,"id":"REC_XXXX"}</span></li>
+          </ul>
+        </li>
+        <li><span class="node server">窗口 B：阿里云服务器端</span>
+          <ul>
+            <li><span class="leaf">负责端：服务器端 AI 窗口</span></li>
+            <li><span class="leaf">/upload 接收 WAV 并校验 token</span></li>
+            <li><span class="leaf">保存 uploads/REC_XXXX.wav</span></li>
+            <li><span class="leaf">创建 jobs/REC_XXXX.json 记录状态</span></li>
+          </ul>
+        </li>
+        <li><span class="node cloud">窗口 B：阿里云转写</span>
+          <ul>
+            <li><span class="leaf">调用 DashScope / Paraformer</span></li>
+            <li><span class="leaf">保存 transcripts/REC_XXXX.txt</span></li>
+          </ul>
+        </li>
+        <li><span class="node warn">窗口 B：flomo</span>
+          <ul>
+            <li><span class="leaf">服务器调用 Incoming Webhook</span></li>
+            <li><span class="leaf">生成 #Cardputer语音 memo</span></li>
+          </ul>
+        </li>
+      </ul>
+    </li>
+  </ul>
+</div>
+
 <nav>
   <a href="#goal">目标</a>
+  <a href="#current">当前状态</a>
   <a href="#flow">总链路</a>
+  <a href="#steps">步骤链路</a>
   <a href="#prepare">准备清单</a>
   <a href="#server">服务器</a>
   <a href="#device">设备端</a>
+  <a href="#pcconfig">电脑配置</a>
   <a href="#phases">实施阶段</a>
   <a href="#security">安全</a>
   <a href="#open">待确认</a>
@@ -49,30 +124,62 @@
 <h2 id="goal">一、目标与边界</h2>
 <table>
   <tr><th>项目</th><th>决定</th></tr>
-  <tr><td>设备端职责</td><td>只负责录音、本地保存、排队上传 WAV。不要在 Cardputer 上转文字，也不要把 flomo webhook 放进固件。</td></tr>
+  <tr><td>设备端职责</td><td>只负责录音、本地保存、排队上传 WAV，以及盒子层 Wi-Fi 登录 / NTP / HTTP。不要在 Cardputer 上转文字，也不要在小键盘上维护长 token、flomo webhook 或阿里云密钥。</td></tr>
   <tr><td>服务器职责</td><td>接收录音、保存文件、调用阿里云语音识别、生成文本、发送到 flomo。</td></tr>
+  <tr><td>电脑配置职责</td><td>电脑网页负责填写服务器地址、上传 token、设备名，并生成 <code>SD:/UPLOAD/net.txt</code>。之后换 Wi-Fi 时，可以直接在小机器端改 <code>ssid/password</code>。</td></tr>
   <tr><td>flomo 职责</td><td>只接收服务器发来的文字 memo。flomo 自带语音输入不作为后台音频转写 API 使用。</td></tr>
   <tr><td>性能原则</td><td>上传必须后台化、可重试，不能影响录音、播放和列表操作。</td></tr>
 </table>
 
-<h2 id="flow">二、总链路</h2>
+<h2 id="current">二、当前状态（2026-05-24）</h2>
+<table>
+  <tr><th>层级</th><th>状态</th><th>说明</th></tr>
+  <tr><td>分区</td><td><span class="done">已完成</span></td><td>已切到 <code>FlashSize=8M,PartitionScheme=default_8MB</code>，APP 上限从约 1.31MB 提高到 3.34MB。</td></tr>
+  <tr><td>编译尺寸</td><td><span class="done">已验证</span></td><td>开启 Wi-Fi 上传骨架后：程序 <code>1,729,020 bytes</code>，占 <code>51%</code>；RAM <code>126,016 bytes</code>，占 <code>38%</code>。</td></tr>
+  <tr><td>设备端架构</td><td><span class="done">已完成第一版</span></td><td>用户按 <code>\</code> 后，录音应用把当前/选中录音写入 <code>/UPLOAD/queue.txt</code>；盒子层提供 <code>systemIdleTick()</code> 作为空闲上传调度入口。Wi-Fi 可在小机器端修改，服务器长配置由电脑生成。</td></tr>
+  <tr><td>设备端 Wi-Fi</td><td><span class="doing">骨架已进固件</span></td><td>固件已包含轻量 <code>WiFiClient</code> 上传路径，只支持极简 HTTP POST；不在设备端做 HTTPS、阿里云 SDK、JSON 大解析。</td></tr>
+  <tr><td>设备端时钟</td><td><span class="doing">骨架已进固件</span></td><td>Cardputer 不依赖内置 RTC；盒子层在 Wi-Fi 连接成功后用 NTP 校时，上传时附带 <code>X-Recorded-At</code>。离线时仍可录音，只是没有真实时间戳。</td></tr>
+  <tr><td>服务器端</td><td><span class="todo">未开始</span></td><td>下一步要先写最小 <code>/upload</code> 服务，用电脑 <code>curl</code> 验证 WAV 能保存。</td></tr>
+  <tr><td>阿里云转写</td><td><span class="todo">未开始</span></td><td>服务器收到 WAV 后再接 DashScope / Paraformer，不让 Cardputer 直接调用云 API。</td></tr>
+  <tr><td>flomo</td><td><span class="todo">未开始</span></td><td>服务器转写完成后调用 flomo Incoming Webhook。</td></tr>
+</table>
+
+<h2 id="flow">三、总链路</h2>
 <pre>Cardputer 录音保存 WAV
-  -> Wi-Fi 上传到阿里云服务器 /upload
+  -> 用户按 \ 明确选择上传当前录音
+  -> 写入 SD:/UPLOAD/queue.txt
+  -> 盒子层在空闲时连接 Wi-Fi 并用 NTP 校时
+  -> HTTP POST 上传到阿里云服务器 /upload
   -> 服务器保存 uploads/REC_XXXX.wav
-  -> 调用阿里云 Paraformer / DashScope 转文字
-  -> 生成 notes/REC_XXXX.txt 和 JSON 状态
-  -> 调用 flomo Incoming Webhook 写入 flomo
-  -> 服务器返回上传/转写/发送结果
-  -> Cardputer 标记本地录音为已上传</pre>
+  -> 服务器创建 jobs/REC_XXXX.json 状态
+  -> 服务器调用阿里云 Paraformer / DashScope 转文字
+  -> 服务器保存 transcripts/REC_XXXX.txt
+  -> 服务器调用 flomo Incoming Webhook 写入 flomo
+  -> 服务器把 job 标记为 done
+  -> Cardputer 收到上传成功后写入 SD:/UPLOAD/done.txt</pre>
 
 <div class="note">
-  推荐先跑通“上传并保存 WAV”，再接转写，最后接 flomo。不要一开始就做全链路，否则排错会很乱。
+  核心原则：Cardputer 只负责录音、排队、联网、轻量上传；电脑负责生成本地配置文件；服务器负责鉴权、HTTPS、转写、flomo、日志和复杂重试。
 </div>
 
-<h2 id="prepare">三、准备清单</h2>
+<h2 id="steps">四、从现在开始的步骤链路</h2>
+<table class="check">
+  <tr><th>顺序</th><th>动作</th><th>验收标准</th></tr>
+  <tr><td>0</td><td><span class="done">大分区固件基线</span></td><td>已烧录 8MB Flash + 3MB APP 分区版本；后续所有编译/烧录都使用新 FQBN。</td></tr>
+  <tr><td>1</td><td><span class="doing">服务器最小上传接口</span></td><td>阿里云服务器跑起 Node.js 服务；电脑用 <code>curl</code> 上传 WAV，服务器保存到 <code>uploads/</code>。</td></tr>
+  <tr><td>2</td><td>服务器鉴权与状态文件</td><td><code>/upload</code> 校验 <code>X-Upload-Token</code>；保存 <code>jobs/REC_XXXX.json</code>，能通过 <code>/jobs/:id</code> 查看。</td></tr>
+  <tr><td>3</td><td>电脑生成服务器配置</td><td>在电脑打开 <code>toolbox/NET_CONFIG_HELPER.html</code>，填写服务器 URL、token、device id，生成 <code>/UPLOAD/net.txt</code> 放到 SD 卡；首次 Wi-Fi 也可在电脑填，之后可在小机器 Wi-Fi 设置里改。</td></tr>
+  <tr><td>4</td><td>Cardputer 上传联调</td><td>录音中按 <code>\</code> 或列表选中按 <code>\</code> 后入队；空闲时连 Wi-Fi 上传；服务器收到真实录音 WAV；成功后本地写 <code>/UPLOAD/done.txt</code>。</td></tr>
+  <tr><td>5</td><td>失败重试与 UI 状态</td><td>断网时不影响录音；重新进入列表/工具箱后继续上传；列表能看出待传/已传/失败。</td></tr>
+  <tr><td>6</td><td>接阿里云转写</td><td>服务器把 WAV 发给 DashScope / Paraformer，拿到文字并保存 <code>transcripts/REC_XXXX.txt</code>。</td></tr>
+  <tr><td>7</td><td>接 flomo</td><td>转写成功后自动写入 flomo，memo 格式稳定且含录音编号/时间/来源。</td></tr>
+  <tr><td>8</td><td>端到端稳定性</td><td>连续录多条、断网、重启、删除普通录音、快捷/重要录音都不破坏上传链路。</td></tr>
+</table>
+
+<h2 id="prepare">五、准备清单</h2>
 <table class="check">
   <tr><th>状态</th><th>事项</th><th>说明</th></tr>
-  <tr><td>[ ]</td><td>阿里云服务器</td><td>需要公网 IP 或域名，能 SSH 登录，建议 Ubuntu / Debian。</td></tr>
+  <tr><td>[ ]</td><td>阿里云服务器</td><td>需要公网 IP 或域名，能 SSH 登录，建议 Ubuntu / Debian。第一阶段可先用公网 IP + HTTP 端口测试。</td></tr>
   <tr><td>[ ]</td><td>Node.js 运行环境</td><td>建议 Node.js 20 LTS，用 Express 写轻量服务。</td></tr>
   <tr><td>[ ]</td><td>阿里云语音识别 API Key</td><td>开通 DashScope / Paraformer，拿到 <code>DASHSCOPE_API_KEY</code>。</td></tr>
   <tr><td>[ ]</td><td>flomo PRO</td><td>开通后获取 Incoming Webhook，形如 <code>https://flomoapp.com/iwh/...</code>。</td></tr>
@@ -80,7 +187,7 @@
   <tr><td>[ ]</td><td>服务器上传密钥</td><td>自定义一个 <code>UPLOAD_TOKEN</code>，Cardputer 上传时带上，避免接口裸奔。</td></tr>
 </table>
 
-<h2 id="server">四、服务器设计</h2>
+<h2 id="server">六、服务器设计</h2>
 <div class="grid">
   <div class="card">
     <h3>目录结构建议</h3>
@@ -111,15 +218,24 @@ PUBLIC_BASE_URL=https://你的域名</pre>
 </table>
 
 <h3>上传请求格式</h3>
-<pre>POST /upload
+<pre>POST /upload HTTP/1.1
 Headers:
   X-Upload-Token: UPLOAD_TOKEN
   X-Device-Id: cardputer-001
   X-Recording-Name: REC_0123.wav
+  X-Recorded-At: 2026-05-24 14:30:00
 Content-Type: audio/wav
 
 Body:
   WAV bytes</pre>
+
+<h3>第一阶段 curl 验证</h3>
+<pre>curl -X POST "http://你的服务器:3000/upload" \
+  -H "X-Upload-Token: UPLOAD_TOKEN" \
+  -H "X-Device-Id: cardputer-001" \
+  -H "X-Recording-Name: REC_0001.wav" \
+  -H "Content-Type: audio/wav" \
+  --data-binary "@REC_0001.wav"</pre>
 
 <h3>flomo 笔记格式建议</h3>
 <pre>#Cardputer语音
@@ -132,19 +248,49 @@ Body:
 来源：Cardputer
 状态：自动转写</pre>
 
-<h2 id="device">五、Cardputer 端设计</h2>
+<h2 id="device">七、Cardputer 端设计</h2>
 <table>
   <tr><th>模块</th><th>做法</th></tr>
-  <tr><td>上传时机</td><td>录音保存完成后加入上传队列；优先不阻塞 UI。</td></tr>
+  <tr><td>分区/FQBN</td><td>必须使用 <code>esp32:esp32:m5stack_cardputer:FlashSize=8M,PartitionScheme=default_8MB</code>。</td></tr>
+  <tr><td>上传时机</td><td>不自动上传所有录音。录音中按 <code>\</code> 会结束录音并入队；列表中选中录音按 <code>\</code> 只上传该录音；盒子层空闲时上传。</td></tr>
   <tr><td>失败处理</td><td>上传失败保留本地 WAV，下次开机/进入列表/空闲时重试。</td></tr>
-  <tr><td>状态记录</td><td>后续可在 SD 写 <code>/UPLOAD/status.txt</code>，记录已上传编号。</td></tr>
+  <tr><td>Wi-Fi 设置</td><td>工具箱里新增 <code>Wi-Fi</code> 应用：可在小机器上输入/修改 Wi-Fi 名和密码，保存后测试连接。它会保留电脑配置页写入的服务器 URL 和 token。</td></tr>
+  <tr><td>配置文件</td><td><code>/UPLOAD/net.txt</code> 只放在 SD 卡，不进 GitHub，不写死进源码。服务器 URL/token 由电脑配置页生成；小机器只维护 Wi-Fi。</td></tr>
+  <tr><td>状态记录</td><td><code>/UPLOAD/queue.txt</code> 记录待上传；<code>/UPLOAD/done.txt</code> 记录已上传。</td></tr>
+  <tr><td>盒子时钟</td><td>联网成功后用 NTP 校时；如果录音时已经有时间，就记录到 <code>/UPLOAD/recorded_at.txt</code>；上传时通过 <code>X-Recorded-At</code> 发给服务器。</td></tr>
   <tr><td>目录关系</td><td>普通、快捷、重要录音都可以上传；上传不应改变三列目录分类。</td></tr>
   <tr><td>性能约束</td><td>播放中不上传；录音中不上传；只在空闲、列表或保存后短窗口尝试。</td></tr>
 </table>
 
-<h2 id="phases">六、实施阶段</h2>
+<h3>SD 卡配置文件格式</h3>
+<pre># SD:/UPLOAD/net.txt
+ssid=你的WiFi名
+password=你的WiFi密码
+url=http://你的服务器:3000/upload
+token=一串随机长密码
+device=cardputer-001
+ntp=pool.ntp.org
+tz=8</pre>
+
+<div class="warn">
+  当前设备端轻量上传只按 <code>http://</code> 设计。公网正式入口可以由服务器/Nginx 负责 HTTPS；Cardputer 到服务器先走内网或测试 HTTP，避免把 TLS 复杂度塞进固件。
+</div>
+
+<h2 id="pcconfig">八、电脑配置页</h2>
+<table>
+  <tr><th>文件</th><th>作用</th></tr>
+  <tr><td><code>toolbox/NET_CONFIG_HELPER.html</code></td><td>在电脑浏览器填写服务器 URL、上传 token、设备名、NTP 和时区，自动生成 <code>net.txt</code> 内容。Wi-Fi 可先在电脑填，也可之后在小机器端改。</td></tr>
+  <tr><td><code>SD:/UPLOAD/net.txt</code></td><td>小机器读取这个文件后才能联网和上传。小机器不保存阿里云 Key、不保存 flomo Webhook。</td></tr>
+</table>
+
+<div class="note">
+  当前最省力的操作方式：服务器窗口给出 <code>url</code> 和 <code>token</code>；本窗口在电脑配置页生成 <code>net.txt</code>；把它放到 SD 卡 <code>/UPLOAD/</code>。以后到了新地方，只进小机器工具箱的 <code>Wi-Fi</code> 修改网络即可。
+</div>
+
+<h2 id="phases">九、实施阶段</h2>
 <table class="check">
   <tr><th>状态</th><th>阶段</th><th>验收标准</th></tr>
+  <tr><td>[x]</td><td>阶段 0：大分区 + 上传骨架</td><td>8MB/3MB APP 固件已烧录；Wi-Fi 上传骨架可编译进固件。</td></tr>
   <tr><td>[ ]</td><td>阶段 1：服务器最小上传接口</td><td>用电脑 curl 上传一个 WAV，服务器保存到 <code>uploads/</code>。</td></tr>
   <tr><td>[ ]</td><td>阶段 2：Cardputer 上传 WAV</td><td>录音保存后能上传到服务器；失败不会影响本地录音。</td></tr>
   <tr><td>[ ]</td><td>阶段 3：接阿里云 Paraformer</td><td>服务器能把上传的 WAV 转成文字，并保存 <code>.txt</code>。</td></tr>
@@ -153,30 +299,31 @@ Body:
   <tr><td>[ ]</td><td>阶段 6：清理策略</td><td>可安全清空普通 <code>/REC</code>，不影响 <code>/SHORTCUT</code> 与 <code>/IMPORTANT</code>。</td></tr>
 </table>
 
-<h2 id="security">七、安全原则</h2>
+<h2 id="security">十、安全原则</h2>
 <div class="warn">
   不要把 <code>DASHSCOPE_API_KEY</code>、<code>FLOMO_WEBHOOK_URL</code>、<code>UPLOAD_TOKEN</code>、Wi-Fi 密码提交到 GitHub。
 </div>
 <ul>
   <li>flomo webhook 只放服务器环境变量。</li>
   <li>阿里云 API Key 只放服务器环境变量。</li>
-  <li>Cardputer 固件最多只保存服务器上传地址和上传 token；如果后续能做本地配置文件，就不要写死进源码。</li>
+  <li>Cardputer 固件不写死任何密钥；小机器侧只读取电脑生成的 <code>/UPLOAD/net.txt</code>。</li>
+  <li>小机器不保存阿里云 API Key 和 flomo Webhook，这两项只在服务器环境变量里。</li>
   <li>服务器接口必须校验 <code>X-Upload-Token</code>。</li>
   <li>服务器日志不要打印完整 webhook 和 API Key。</li>
 </ul>
 
-<h2 id="open">八、待确认问题</h2>
+<h2 id="open">十一、待确认问题</h2>
 <table class="check">
   <tr><td>[ ]</td><td>服务器系统</td><td>Ubuntu / Debian / CentOS？</td></tr>
   <tr><td>[ ]</td><td>部署方式</td><td>Node.js + systemd，还是 Docker？建议先 Node.js + systemd。</td></tr>
-  <tr><td>[ ]</td><td>公网访问</td><td>用域名 + HTTPS，还是先公网 IP + HTTP 测试？</td></tr>
+  <tr><td>[ ]</td><td>公网访问</td><td>建议先公网 IP + HTTP 端口测试上传；稳定后再用域名 + Nginx + HTTPS。</td></tr>
   <tr><td>[ ]</td><td>阿里云语音识别</td><td>确认使用 DashScope Paraformer。</td></tr>
   <tr><td>[ ]</td><td>flomo PRO</td><td>开通后获取 Incoming Webhook。</td></tr>
   <tr><td>[ ]</td><td>笔记标签</td><td>默认用 <code>#Cardputer语音</code>，是否要加 <code>#录音</code>、<code>#灵感</code> 等。</td></tr>
 </table>
 
 <footer>
-  文档位置：<code>toolbox/CLOUD_TRANSCRIBE_FLOMO_PLAN.html</code>。下一步建议从“阶段 1：服务器最小上传接口”开始。
+  文档位置：<code>toolbox/CLOUD_TRANSCRIBE_FLOMO_PLAN.html</code>。下一步：实现“阶段 1：服务器最小上传接口”，先用电脑 curl 验证。
 </footer>
 
 </body>

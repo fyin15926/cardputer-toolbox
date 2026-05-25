@@ -1,0 +1,300 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Cardputer Toolbox 多应用架构建议</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      --bg: #07100b;
+      --panel: #0d1b12;
+      --panel-2: #102618;
+      --text: #d8ffe1;
+      --muted: #8dbb97;
+      --line: #20452a;
+      --green: #70ff8a;
+      --amber: #ffd166;
+      --red: #ff6b6b;
+      --blue: #84c5ff;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      background: var(--bg);
+      color: var(--text);
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Microsoft YaHei", sans-serif;
+      line-height: 1.65;
+    }
+    main {
+      width: min(1040px, calc(100% - 32px));
+      margin: 0 auto;
+      padding: 32px 0 56px;
+    }
+    header {
+      border-bottom: 1px solid var(--line);
+      padding-bottom: 20px;
+      margin-bottom: 24px;
+    }
+    h1 {
+      margin: 0 0 10px;
+      font-size: 30px;
+      letter-spacing: 0;
+      color: var(--green);
+    }
+    h2 {
+      margin: 30px 0 12px;
+      font-size: 20px;
+      color: var(--green);
+    }
+    h3 {
+      margin: 20px 0 8px;
+      font-size: 16px;
+      color: var(--blue);
+    }
+    p { margin: 8px 0; }
+    .subtitle {
+      color: var(--muted);
+      max-width: 760px;
+      margin: 0;
+    }
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+      gap: 12px;
+    }
+    section, .card {
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 16px;
+    }
+    section { margin: 14px 0; }
+    ul, ol { padding-left: 22px; margin: 8px 0; }
+    li { margin: 5px 0; }
+    code {
+      color: var(--amber);
+      background: #07150b;
+      border: 1px solid #1c3a24;
+      border-radius: 4px;
+      padding: 1px 5px;
+      font-family: "Cascadia Code", Consolas, monospace;
+      font-size: 0.95em;
+    }
+    pre {
+      overflow-x: auto;
+      background: #07150b;
+      border: 1px solid #1c3a24;
+      border-radius: 8px;
+      padding: 12px;
+    }
+    pre code {
+      border: 0;
+      padding: 0;
+      background: transparent;
+      color: #d8ffe1;
+    }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      margin: 10px 0;
+      overflow: hidden;
+      border-radius: 8px;
+    }
+    th, td {
+      border: 1px solid var(--line);
+      padding: 8px 10px;
+      text-align: left;
+      vertical-align: top;
+    }
+    th {
+      color: var(--green);
+      background: var(--panel-2);
+    }
+    .note {
+      border-left: 4px solid var(--amber);
+      padding: 10px 12px;
+      background: #1d1808;
+      color: #fff0c2;
+      border-radius: 6px;
+    }
+    .danger {
+      border-left: 4px solid var(--red);
+      padding: 10px 12px;
+      background: #220c0c;
+      color: #ffd6d6;
+      border-radius: 6px;
+    }
+    .ok { color: var(--green); }
+    .muted { color: var(--muted); }
+  </style>
+</head>
+<body>
+<main>
+  <header>
+    <h1>Cardputer Toolbox 多应用架构建议</h1>
+    <p class="subtitle">
+      目标是把当前录音应用扩展成一个按键驱动的小工具系统。录音、番茄钟、设置、快捷音频等应用应共享同一套启动器和系统层，但运行时尽量互相隔离。
+    </p>
+  </header>
+
+  <section>
+    <h2>结论</h2>
+    <p>
+      推荐继续做大，但不要在现有录音流程里继续堆功能。应先抽出一个很薄的“系统壳”：负责息屏唤醒、按键路由、应用列表、全局音量、电量显示和资源占用规则。
+    </p>
+    <p>
+      单个应用不会因为应用数量变多而明显变慢。真正影响速度的是后台任务、频繁扫描 SD、资源没有释放、UI 每帧重绘过多，以及 Mic/Speaker/SD 被多个功能同时争用。
+    </p>
+  </section>
+
+  <div class="grid">
+    <div class="card">
+      <h3>保留快速入口</h3>
+      <ul>
+        <li><code>Space</code>：快速录音</li>
+        <li><code>Enter</code>：录音列表</li>
+        <li><code>F</code>：番茄钟</li>
+        <li><code>Ctrl</code>：应用列表</li>
+      </ul>
+    </div>
+    <div class="card">
+      <h3>一次只运行一个应用</h3>
+      <p>录音、播放、番茄钟、设置页都作为前台应用运行。除非非常必要，不做复杂后台常驻任务。</p>
+    </div>
+    <div class="card">
+      <h3>录音资源独占</h3>
+      <p>录音和播放期间，其他应用不要动 <code>Mic</code>、<code>Speaker</code>、<code>SD</code> 的状态。</p>
+    </div>
+  </div>
+
+  <section>
+    <h2>推荐启动逻辑</h2>
+    <table>
+      <thead>
+        <tr>
+          <th>按键</th>
+          <th>唤醒后动作</th>
+          <th>备注</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td><code>Space</code></td>
+          <td>进入录音</td>
+          <td>保留现在最快的录音入口。</td>
+        </tr>
+        <tr>
+          <td><code>Enter</code></td>
+          <td>进入录音列表</td>
+          <td>适合回放、管理、绑定快捷键。</td>
+        </tr>
+        <tr>
+          <td><code>F</code></td>
+          <td>进入番茄钟</td>
+          <td>建议先做占位界面，再补完整计时逻辑。</td>
+        </tr>
+        <tr>
+          <td><code>Ctrl</code></td>
+          <td>进入应用列表</td>
+          <td>显示应用名、快捷键、状态，支持上下选择和回车进入。</td>
+        </tr>
+        <tr>
+          <td>其他字母</td>
+          <td>预留给未来应用</td>
+          <td>例如便签、计时器、文件管理、设置等。</td>
+        </tr>
+      </tbody>
+    </table>
+  </section>
+
+  <section>
+    <h2>代码结构建议</h2>
+    <p>先不必大规模拆文件，但应在代码层面建立应用边界。</p>
+    <pre><code>enum AppId {
+  APP_NONE,
+  APP_REC_RECORD,
+  APP_REC_LIST,
+  APP_POMODORO,
+  APP_LAUNCHER,
+  APP_SETTINGS
+};
+
+struct AppEntry {
+  char key;
+  const char *name;
+  AppId app;
+};
+
+static const AppEntry APPS[] = {
+  {' ', "REC", APP_REC_RECORD},
+  {'\n', "LIST", APP_REC_LIST},
+  {'f', "POMO", APP_POMODORO},
+  {0, "APPS", APP_LAUNCHER}
+};</code></pre>
+    <p>
+      主循环只做三件事：等待唤醒、解析按键、启动对应应用。应用内部结束后返回系统层，由系统层决定回息屏还是回应用列表。
+    </p>
+  </section>
+
+  <section>
+    <h2>资源规则</h2>
+    <ul>
+      <li>进入录音前调用 <code>prepareMicInput()</code>，并清掉扬声器状态。</li>
+      <li>进入播放前调用 <code>speakerOn()</code>，并清掉麦克风状态。</li>
+      <li>普通应用不要直接改 ES8311 寄存器，除非它是音频应用。</li>
+      <li>SD 目录扫描只在进入列表、录音完成、删除、绑定后进行，不要每帧扫描。</li>
+      <li>应用切换时清理长按删除、按键继承、临时 UI 提示等状态。</li>
+    </ul>
+    <p class="note">
+      番茄钟可以常驻计时状态，但 UI 不应常驻刷新。息屏时只保留目标结束时间或剩余秒数，唤醒后再重绘。
+    </p>
+  </section>
+
+  <section>
+    <h2>番茄钟建议</h2>
+    <ul>
+      <li>第一版只做：25 分钟工作、5 分钟休息、开始/暂停/重置。</li>
+      <li><code>F</code> 唤醒直达番茄钟。</li>
+      <li><code>Enter</code> 开始/暂停，<code>Del</code> 长按重置，<code>Esc</code> 返回息屏。</li>
+      <li>计时建议用 <code>millis()</code> 差值，不依赖真实时钟。</li>
+      <li>如果未来需要跨断电保存，再把番茄钟状态写入 SD。</li>
+    </ul>
+  </section>
+
+  <section>
+    <h2>录音应用后续整理</h2>
+    <p>录音应用已经比较复杂，建议后续逐步整理，而不是一次重写。</p>
+    <ol>
+      <li>先保留现有录音、播放、列表逻辑。</li>
+      <li>把入口从 <code>loop()</code> 迁移到统一启动器。</li>
+      <li>把录音相关全局状态加上 <code>rec</code> 前缀或集中到结构体。</li>
+      <li>把文件扫描、快捷键、分类 KEY/IMP 做成录音模块内部服务。</li>
+      <li>最后再考虑拆成多个 <code>.h/.cpp</code> 文件。</li>
+    </ol>
+  </section>
+
+  <section>
+    <h2>性能判断</h2>
+    <ul>
+      <li><span class="ok">不会明显变慢：</span>多个应用只存在于固件里，一次只运行一个。</li>
+      <li><span class="ok">RAM 目前还够：</span>当前 RAM 使用约 30%，空间比较宽裕。</li>
+      <li><span class="muted">Flash 要留意：</span>当前程序区约 88%，新增大功能时要控制代码体积。</li>
+      <li><span class="danger">最该避免：</span>后台同时跑多个任务、频繁扫 SD、多个应用争用音频资源。</li>
+    </ul>
+  </section>
+
+  <section>
+    <h2>建议实施顺序</h2>
+    <ol>
+      <li>新增应用枚举和应用表。</li>
+      <li>新增应用列表界面，通过 <code>Ctrl</code> 进入。</li>
+      <li>保留 <code>Space</code> 和 <code>Enter</code> 当前行为。</li>
+      <li>新增 <code>F</code> 进入番茄钟占位页。</li>
+      <li>番茄钟占位页稳定后，再补完整计时功能。</li>
+      <li>最后再整理录音模块内部结构。</li>
+    </ol>
+  </section>
+</main>
+</body>
+</html>

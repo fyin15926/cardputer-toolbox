@@ -110,12 +110,16 @@ $fqbn   = "esp32:esp32:m5stack_cardputer:FlashSize=8M,PartitionScheme=default_8M
 ### 2026-05-24 联网上传当前状态
 
 - 固件已烧录进小机器：盒子层 Wi-Fi、轻量 HTTP 上传、上传队列、NTP 校时都在固件内。
+- 端到端已真机验证成功：Cardputer 录音后按 `\` 上传，服务器收到 WAV，完成转写并推送到 flomo。
 - 录音应用只表达用户意图：按 `\` 上传“当前/选中这一条”，不会自动上传全部录音。
 - 盒子层负责联网和上传：读取 `SD:/UPLOAD/net.txt`，连接 Wi-Fi，HTTP POST 到服务器，成功后写 `SD:/UPLOAD/done.txt`。
-- 电脑负责复杂配置：用 `toolbox/NET_CONFIG_HELPER.html` 生成 `net.txt`，不在小机器小键盘上敲长 token。
+- 小机器工具箱新增 `Wi-Fi` 应用并已成功烧录：可现场输入/修改 Wi-Fi 名和密码，保存后测试连接，并保留已有服务器 URL/token。
+- 电脑负责复杂服务器配置：用 `toolbox/NET_CONFIG_HELPER.html` 生成 `net.txt`，不在小机器小键盘上敲长 token。
 - 服务器负责复杂业务：鉴权、保存 WAV、阿里云转写、flomo Webhook；小机器不保存阿里云 Key 或 flomo Webhook。
 - 服务器窗口已经完成云端闭环：正式 URL 是 `http://cardputer.flye.cc/upload`；`UPLOAD_TOKEN` 只保存在服务器 `/etc/cardputer-voice.env`，不要写进 GitHub。
-- 下一步：用 `NET_CONFIG_HELPER.html` 生成 `SD:/UPLOAD/net.txt`，录一条测试音后按 `\` 联调真实设备音频。
+- `SD:/UPLOAD/net.txt` 已成功用于真实上传；Wi-Fi 可在小机器 `Wi-Fi` 应用里现场改，服务器 URL/token 继续由电脑配置页维护。
+- 录音列表状态含义：`UP` = 已入上传队列/等待或重试上传；`OK` = 设备已收到服务器 2xx，WAV 已上传到服务器。当前 `OK` 不表示设备确认 flomo 完成；flomo 完成由服务器 job 状态判断。
+- 下一步建议：服务器侧做可靠性和可观测性（`/jobs` 最近列表、failed 重试、服务重启后扫描未完成 jobs、避免 flomo 重复发送）。设备侧若要更精确，可把列表 `OK` 改为 `SV`，再新增查询 job 状态后显示 flomo 完成。
 
 `SD:/UPLOAD/net.txt` 格式：
 ```text

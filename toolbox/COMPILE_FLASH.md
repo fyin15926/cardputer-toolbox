@@ -27,7 +27,7 @@
 | Arduino CLI 配置文件 | `C:\Users\87194\AppData\Local\Arduino15\arduino-cli.yaml` |
 | esp32 核心版本 | **3.1.3-cn**（绝不能是 3.2.x / 3.3.x）|
 | esp32 核心路径 | `C:\Users\87194\AppData\Local\Arduino15\packages\esp32\hardware\esp32\3.1.3` |
-| FQBN | `esp32:esp32:m5stack_cardputer` |
+| FQBN | `esp32:esp32:m5stack_cardputer:FlashSize=8M,PartitionScheme=default_8MB` |
 | GitHub 源码路径 | `D:\github仓库同步\小机器\toolbox\toolbox.ino` |
 | 编译用安全路径 | `C:\cardputer\sketches\toolbox\toolbox.ino` |
 | 编译输出目录 | `C:\cardputer\build_fresh\out` |
@@ -77,7 +77,7 @@ Copy-Item -Recurse -Force "D:\github仓库同步\小机器\toolbox\*" `
 
 ```powershell
 $cli   = "C:\cardputer\tools\arduino-cli\arduino-cli.exe"
-$fqbn  = "esp32:esp32:m5stack_cardputer"
+$fqbn  = "esp32:esp32:m5stack_cardputer:FlashSize=8M,PartitionScheme=default_8MB"
 $sketch = "C:\cardputer\sketches\toolbox"
 $build  = "C:\cardputer\build_fresh\out"
 $outLog = "C:\cardputer\tools\tb.out.log"
@@ -181,7 +181,7 @@ Remove-Item -Recurse -Force "C:\cardputer\build_fresh\out" -ErrorAction Silently
 
 ```powershell
 $cli    = "C:\cardputer\tools\arduino-cli\arduino-cli.exe"
-$fqbn   = "esp32:esp32:m5stack_cardputer"
+$fqbn   = "esp32:esp32:m5stack_cardputer:FlashSize=8M,PartitionScheme=default_8MB"
 $build  = "C:\cardputer\build_fresh\out"
 $port   = "COM3"
 $outLog = "C:\cardputer\tools\tb.out.log"
@@ -443,7 +443,7 @@ Hard resetting with RTC WDT...
 # 用法：powershell -File C:\cardputer\tools\build_and_flash.ps1
 
 $cli    = "C:\cardputer\tools\arduino-cli\arduino-cli.exe"
-$fqbn   = "esp32:esp32:m5stack_cardputer"
+$fqbn   = "esp32:esp32:m5stack_cardputer:FlashSize=8M,PartitionScheme=default_8MB"
 $sketch = "C:\cardputer\sketches\toolbox"
 $build  = "C:\cardputer\build_fresh\out"
 $port   = "COM3"

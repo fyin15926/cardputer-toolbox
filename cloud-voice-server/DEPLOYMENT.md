@@ -13,6 +13,7 @@ Do not commit real tokens or production `.env` files.
   jobs/
   transcripts/
   logs/
+  terms.json              # optional correction dictionary
 
 /etc/cardputer-voice.env
 /etc/systemd/system/cardputer-voice.service
@@ -31,6 +32,7 @@ DASHSCOPE_API_KEY=sk-...
 FLOMO_WEBHOOK_URL=https://flomoapp.com/iwh/...
 MAX_UPLOAD_BYTES=26214400
 DATA_ROOT=/opt/cardputer-voice
+TERMS_PATH=/opt/cardputer-voice/terms.json
 ```
 
 `UPLOAD_TOKEN`, `ASR_FILE_TOKEN`, `DASHSCOPE_API_KEY`, and
@@ -82,4 +84,11 @@ Manual processing:
 
 ```bash
 curl -X POST http://cardputer.flye.cc/jobs/REC_0001/process
+```
+
+Resend an already transcribed memo to flomo after changing `terms.json` or the
+memo format:
+
+```bash
+curl -X POST http://cardputer.flye.cc/jobs/REC_0001/resend
 ```

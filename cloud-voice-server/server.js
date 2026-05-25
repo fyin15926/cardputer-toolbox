@@ -23,6 +23,9 @@ const DATA_ROOT = process.env.DATA_ROOT
 const UPLOAD_DIR = path.join(DATA_ROOT, 'uploads');
 const JOB_DIR = path.join(DATA_ROOT, 'jobs');
 const TRANSCRIPT_DIR = path.join(DATA_ROOT, 'transcripts');
+const TERMS_PATH = process.env.TERMS_PATH
+  ? path.resolve(process.env.TERMS_PATH)
+  : path.join(DATA_ROOT, 'terms.json');
 const processingJobs = new Set();
 
 function sendJson(res, statusCode, payload) {
@@ -91,6 +94,10 @@ function jobPathForId(id) {
   return path.join(JOB_DIR, `${id}.json`);
 }
 
+function transcriptMemoPathForId(id) {
+  return path.join(TRANSCRIPT_DIR, `${id}.memo.txt`);
+}
+
 async function readJob(id) {
   const raw = await fsp.readFile(jobPathForId(id), 'utf8');
   return JSON.parse(raw);
@@ -138,7 +145,7 @@ async function submitDashScopeTask(audioUrl) {
     parameters: {
       channel_id: [0],
       language_hints: ['zh', 'en'],
-      disfluency_removal_enabled: false,
+      disfluency_removal_enabled: true,
       timestamp_alignment_enabled: false
     }
   };
@@ -203,31 +210,251 @@ async function downloadTranscription(transcriptionUrl) {
   return fetchJson(transcriptionUrl, { method: 'GET' });
 }
 
-async function sendToFlomo(job, text) {
-  const content = [
-    '#Cardputer语音',
+function normalizeTranscriptText(text) {
+  return String(text || '')
+    .replace(/\r\n?/g, '\n')
+    .replace(/[ \t]+/g, ' ')
+    .replace(/\n{3,}/g, '\n\n')
+    .replace(/([。！？!?；;])\s+/g, '$1')
+    .replace(/(^|[。！？!?；;\n])\s*(嗯|呃|额)[，,、\s]+/g, '$1')
+    .replace(/[，,、]\s*(嗯|呃|额)\s*[，,、]/g, '，')
+    .trim();
+}
+
+function escapeRegExp(value) {
+  return String(value).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+async function loadCustomTermPairs() {
+  try {
+    const raw = await fsp.readFile(TERMS_PATH, 'utf8');
+    const parsed = JSON.parse(raw);
+    if (Array.isArray(parsed)) {
+      return parsed
+        .filter((item) => Array.isArray(item) && item.length >= 2)
+        .map(([from, to]) => [String(from), String(to)]);
+    }
+    if (parsed && typeof parsed === 'object') {
+      return Object.entries(parsed).map(([from, to]) => [String(from), String(to)]);
+    }
+  } catch (error) {
+    if (error.code !== 'ENOENT') {
+      console.error(`Failed to load terms file ${TERMS_PATH}: ${error.message}`);
+    }
+  }
+  return [];
+}
+
+async function applyProjectTermCorrections(text) {
+  let corrected = String(text || '');
+  const regexReplacements = [
+    [/摘\s*computer/gi, '在 Cardputer'],
+    [/card\s*puter/gi, 'Cardputer'],
+    [/flomo/gi, 'flomo'],
+    [/浮墨/g, 'flomo'],
+    [/扶墨/g, 'flomo'],
+    [/dash\s*scope/gi, 'DashScope'],
+    [/para\s*former/gi, 'Paraformer'],
+    [/REC[\s-]?(\d{4})/gi, 'REC_$1'],
+    [/套出来/g, '掏出来'],
+    [/制定为自定义/g, '自定义']
+  ];
+
+  for (const [pattern, replacement] of regexReplacements) {
+    corrected = corrected.replace(pattern, replacement);
+  }
+
+  for (const [from, to] of await loadCustomTermPairs()) {
+    if (from) corrected = corrected.replace(new RegExp(escapeRegExp(from), 'g'), to);
+  }
+
+  corrected = corrected.replace(/(^|[^A-Za-z])computer(?=上|里|录音|工具|这个|做|的|端|项目)/gi, '$1Cardputer');
+  return corrected;
+}
+
+function splitLongSentence(sentence, maxLength) {
+  const parts = [];
+  let rest = sentence.trim();
+  while (rest.length > maxLength) {
+    let cut = -1;
+    const searchStart = Math.floor(maxLength * 0.55);
+    for (const mark of ['，', '、', ',', ' ']) {
+      const idx = rest.lastIndexOf(mark, maxLength);
+      if (idx >= searchStart) {
+        cut = idx + (mark === ' ' ? 0 : 1);
+        break;
+      }
+    }
+    if (cut <= 0) cut = maxLength;
+    parts.push(rest.slice(0, cut).trim());
+    rest = rest.slice(cut).trim();
+  }
+  if (rest) parts.push(rest);
+  return parts;
+}
+
+function splitTranscriptSentences(text) {
+  const sentenceMatches = text.match(/[^。！？!?；;\n]+[。！？!?；;]?|\n+/g) || [text];
+  const sentences = [];
+  for (const item of sentenceMatches) {
+    const value = item.trim();
+    if (!value) continue;
+    sentences.push(...splitLongSentence(value, 92));
+  }
+  return sentences;
+}
+
+function formatTranscriptParagraphs(sentences) {
+  const paragraphs = [];
+  let current = [];
+  let currentLength = 0;
+  for (const sentence of sentences) {
+    const nextLength = currentLength + sentence.length;
+    if (current.length && nextLength > 150) {
+      paragraphs.push(current.join(''));
+      current = [];
+      currentLength = 0;
+    }
+    current.push(sentence);
+    currentLength += sentence.length;
+  }
+  if (current.length) paragraphs.push(current.join(''));
+  return paragraphs;
+}
+
+function stripSentenceEnd(sentence) {
+  return String(sentence || '').replace(/[。！？!?；;]+$/g, '').trim();
+}
+
+function makeTranscriptSummary(sentences) {
+  if (!sentences.length) return '（转写结果为空）';
+
+  const useful = sentences
+    .map(stripSentenceEnd)
+    .filter((sentence) => sentence.length >= 8);
+  const picked = useful.slice(0, 3);
+  if (!picked.length) return useful[0] || stripSentenceEnd(sentences[0]);
+
+  return picked
+    .map((sentence) => `- ${sentence}`)
+    .join('\n');
+}
+
+function makeMemoTitle(sentences, job) {
+  const first = sentences.map(stripSentenceEnd).find((sentence) => sentence.length >= 6);
+  if (!first) return job.id || '新录音';
+  return first
+    .replace(/^(介绍一下|说一下|记录一下|我想说一下|今天)?/, '')
+    .replace(/[，,、].*$/, '')
+    .slice(0, 22)
+    .trim() || (job.id || '新录音');
+}
+
+function classifyMemoSentences(sentences) {
+  const todoPattern = /(下一步|需要|要做|待办|todo|TODO|记得|提醒|回头|之后|稍后|明天|下次|准备|安排)/;
+  const ideaPattern = /(想法|思路|感觉|也许|可能|可以|建议|问题是|重点|结论|方案|优化|改成|做成)/;
+  const todos = [];
+  const ideas = [];
+
+  for (const sentence of sentences.map(stripSentenceEnd)) {
+    if (sentence.length < 6) continue;
+    if (todoPattern.test(sentence)) todos.push(sentence);
+    else if (ideaPattern.test(sentence)) ideas.push(sentence);
+  }
+
+  return {
+    todos: [...new Set(todos)].slice(0, 6),
+    ideas: [...new Set(ideas)].slice(0, 6)
+  };
+}
+
+async function buildMemoSections(text, job) {
+  const corrected = await applyProjectTermCorrections(normalizeTranscriptText(text));
+  if (!corrected) {
+    return {
+      title: job.id || '新录音',
+      summary: '（转写结果为空）',
+      todos: [],
+      ideas: [],
+      original: '（转写结果为空）'
+    };
+  }
+
+  const sentences = splitTranscriptSentences(corrected);
+  const paragraphs = formatTranscriptParagraphs(sentences);
+  const classified = classifyMemoSentences(sentences);
+  return {
+    title: makeMemoTitle(sentences, job),
+    summary: makeTranscriptSummary(sentences),
+    todos: classified.todos,
+    ideas: classified.ideas,
+    original: paragraphs.join('\n\n')
+  };
+}
+
+function formatBulletList(items) {
+  return items.map((item) => `- ${item}`).join('\n');
+}
+
+function formatJobTime(job) {
+  if (job.recordedAt) return job.recordedAt;
+  return new Date(job.createdAt || Date.now()).toLocaleString('zh-CN', {
+    timeZone: 'Asia/Shanghai'
+  });
+}
+
+async function buildFlomoContent(job, text) {
+  const memo = await buildMemoSections(text, job);
+  const parts = [
+    `#Cardputer语音 / ${memo.title}`,
     '',
-    text || '（转写结果为空）',
+    '## 摘要',
+    memo.summary
+  ];
+
+  if (memo.todos.length) {
+    parts.push('', '## 待办', formatBulletList(memo.todos));
+  }
+  if (memo.ideas.length) {
+    parts.push('', '## 想法', formatBulletList(memo.ideas));
+  }
+
+  parts.push(
+    '',
+    '## 原文',
+    memo.original,
     '',
     '---',
     `录音：${job.recordingName}`,
     `设备：${job.deviceId}`,
-    `时间：${new Date().toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai' })}`,
+    `时间：${formatJobTime(job)}`,
     '来源：Cardputer 自动转写'
-  ].join('\n');
+  );
 
+  return {
+    content: parts.join('\n'),
+    memo
+  };
+}
+
+async function sendToFlomo(job, text) {
+  const memoPayload = await buildFlomoContent(job, text);
   const result = await fetchJson(FLOMO_WEBHOOK_URL, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json'
     },
-    body: JSON.stringify({ content })
+    body: JSON.stringify({ content: memoPayload.content })
   });
 
   if (typeof result?.code === 'number' && result.code !== 0) {
     throw new Error(result?.message || `flomo returned code ${result.code}`);
   }
-  return result;
+  return {
+    result,
+    content: memoPayload.content,
+    memo: memoPayload.memo
+  };
 }
 
 async function processJob(id) {
@@ -287,13 +514,21 @@ async function processJob(id) {
       return;
     }
 
-    const flomoResult = await sendToFlomo(job, text);
+    const flomoPayload = await sendToFlomo(job, text);
+    const transcriptMemoPath = transcriptMemoPathForId(id);
+    await fsp.writeFile(transcriptMemoPath, `${flomoPayload.content}\n`, 'utf8');
     job = await readJob(id);
     job.status = 'done';
     job.phase = 4;
+    job.transcriptMemoPath = path.relative(DATA_ROOT, transcriptMemoPath);
+    job.memo = {
+      title: flomoPayload.memo.title,
+      hasTodos: flomoPayload.memo.todos.length > 0,
+      hasIdeas: flomoPayload.memo.ideas.length > 0
+    };
     job.flomo = {
       sentAt: new Date().toISOString(),
-      memoSlug: flomoResult?.memo?.slug
+      memoSlug: flomoPayload.result?.memo?.slug
     };
     delete job.pendingReason;
     await writeJob(job);
@@ -337,6 +572,7 @@ async function handleUpload(req, res) {
 
   const rawDeviceId = String(req.headers['x-device-id'] || '').trim();
   const rawRecordingName = String(req.headers['x-recording-name'] || '').trim();
+  const rawRecordedAt = String(req.headers['x-recorded-at'] || '').trim();
   if (!rawDeviceId || !rawRecordingName) {
     sendJson(res, 400, {
       ok: false,
@@ -389,6 +625,7 @@ async function handleUpload(req, res) {
       phase: 1,
       deviceId,
       recordingName,
+      recordedAt: rawRecordedAt.slice(0, 40),
       bytes,
       uploadPath: path.relative(DATA_ROOT, uploadPath),
       createdAt: startedAt,
@@ -468,6 +705,68 @@ async function handleJobProcess(req, res, pathname) {
   sendJson(res, 202, { ok: true, id, status: 'queued' });
 }
 
+async function handleJobResend(req, res, pathname) {
+  const id = decodeURIComponent(pathname.slice('/jobs/'.length, -'/resend'.length));
+  if (!/^[\w.-]+$/.test(id)) {
+    sendJson(res, 400, { ok: false, error: 'invalid job id' });
+    return;
+  }
+  if (!FLOMO_WEBHOOK_URL) {
+    sendJson(res, 500, { ok: false, error: 'flomo is not configured' });
+    return;
+  }
+
+  let job;
+  try {
+    job = await readJob(id);
+  } catch (error) {
+    if (error.code === 'ENOENT') {
+      sendJson(res, 404, { ok: false, error: 'job not found' });
+      return;
+    }
+    throw error;
+  }
+  let text = job.transcriptText || '';
+  if (!text && job.transcriptPath) {
+    text = await fsp.readFile(path.join(DATA_ROOT, job.transcriptPath), 'utf8');
+  }
+  text = text.trim();
+  if (!text) {
+    sendJson(res, 409, { ok: false, error: 'job has no transcript text to resend' });
+    return;
+  }
+
+  const flomoPayload = await sendToFlomo(job, text);
+  const transcriptMemoPath = transcriptMemoPathForId(id);
+  await fsp.writeFile(transcriptMemoPath, `${flomoPayload.content}\n`, 'utf8');
+
+  job = await readJob(id);
+  job.status = 'done';
+  job.phase = 4;
+  job.transcriptMemoPath = path.relative(DATA_ROOT, transcriptMemoPath);
+  job.memo = {
+    title: flomoPayload.memo.title,
+    hasTodos: flomoPayload.memo.todos.length > 0,
+    hasIdeas: flomoPayload.memo.ideas.length > 0
+  };
+  job.flomo = {
+    ...(job.flomo || {}),
+    resentAt: new Date().toISOString(),
+    memoSlug: flomoPayload.result?.memo?.slug || job.flomo?.memoSlug
+  };
+  delete job.pendingReason;
+  delete job.lastError;
+  await writeJob(job);
+
+  sendJson(res, 200, {
+    ok: true,
+    id,
+    status: 'resent',
+    memo: job.memo,
+    transcriptMemoPath: job.transcriptMemoPath
+  });
+}
+
 async function route(req, res) {
   const url = new URL(req.url, `http://${req.headers.host || '127.0.0.1'}`);
   const pathname = url.pathname;
@@ -486,6 +785,10 @@ async function route(req, res) {
   }
   if (req.method === 'POST' && pathname.startsWith('/jobs/') && pathname.endsWith('/process')) {
     await handleJobProcess(req, res, pathname);
+    return;
+  }
+  if (req.method === 'POST' && pathname.startsWith('/jobs/') && pathname.endsWith('/resend')) {
+    await handleJobResend(req, res, pathname);
     return;
   }
   if (req.method === 'GET' && pathname.startsWith('/jobs/')) {

@@ -25,6 +25,7 @@ npm start
 - `POST /upload`: accepts raw `audio/wav` bytes with `X-Upload-Token`.
 - `GET /jobs/:id`: returns saved upload metadata.
 - `POST /jobs/:id/process`: manually queues a saved job for transcription.
+- `POST /jobs/:id/resend`: resends an already transcribed job to flomo using the current memo format and `terms.json`.
 - `GET /audio/:recordingName?token=...`: private audio URL for DashScope fetch.
 
 Production deployment notes and nginx/systemd templates are in
@@ -62,5 +63,17 @@ Successful response:
 Runtime output is written as `uploads/REC_0123.wav` and `jobs/REC_0123.json`.
 These directories are intentionally ignored by Git.
 
-When transcription is configured, output is also written to
-`transcripts/REC_0123.txt` and sent to flomo.
+When transcription is configured, raw text is written to
+`transcripts/REC_0123.txt`, the formatted flomo memo is written to
+`transcripts/REC_0123.memo.txt`, and the memo is sent to flomo.
+
+Optional project-specific text corrections can be placed in `terms.json` next
+to `server.js` or at `TERMS_PATH`. Use `terms.example.json` as a starting
+point. The file may be either an array of pairs or an object:
+
+```json
+[
+  ["浮墨", "flomo"],
+  ["card puter", "Cardputer"]
+]
+```
