@@ -177,6 +177,7 @@ function dashboardAuth(req, res) {
 async function listJobs({ limit = 20, status = '' } = {}) {
   const entries = await fsp.readdir(JOB_DIR, { withFileTypes: true });
   const jobs = [];
+  const statusCounts = {};
   let skipped = 0;
 
   await Promise.all(entries.map(async (entry) => {
@@ -186,7 +187,9 @@ async function listJobs({ limit = 20, status = '' } = {}) {
     try {
       const raw = await fsp.readFile(path.join(JOB_DIR, entry.name), 'utf8');
       const job = JSON.parse(raw);
-      if (!status || job.status === status) {
+      const jobStatus = String(job.status || 'unknown');
+      statusCounts[jobStatus] = (statusCounts[jobStatus] || 0) + 1;
+      if (!status || (status === 'failed' ? jobStatus.includes('failed') : jobStatus === status)) {
         jobs.push(summarizeJob(job));
       }
     } catch {
@@ -203,6 +206,8 @@ async function listJobs({ limit = 20, status = '' } = {}) {
   return {
     count: Math.min(jobs.length, limit),
     total: jobs.length,
+    totalAll: Object.values(statusCounts).reduce((sum, count) => sum + count, 0),
+    statusCounts,
     skipped,
     jobs: jobs.slice(0, limit)
   };
@@ -254,6 +259,9 @@ function dashboardHtml() {
     .section-title { display: flex; justify-content: space-between; gap: 10px; align-items: center; margin-bottom: 10px; }
     .section-title h2 { margin: 0; }
     .actions { display: flex; gap: 6px; flex-wrap: wrap; }
+    .filters { display: flex; gap: 6px; flex-wrap: wrap; justify-content: flex-end; align-items: center; }
+    .filters button { height: 30px; padding: 0 9px; font-size: 12px; color: var(--muted); }
+    .filters button.active { color: var(--ok); border-color: var(--ok); background: #0f1f16; }
     .nowrap { white-space: nowrap; }
     @media (max-width: 900px) { .grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } .bar { grid-template-columns: 1fr auto auto; } #limit, #clear { grid-column: auto; } table { font-size: 12px; } }
     @media (max-width: 560px) { .grid { grid-template-columns: 1fr; } .bar { grid-template-columns: 1fr 1fr; } #token { grid-column: 1 / -1; } }
@@ -301,7 +309,17 @@ function dashboardHtml() {
       </section>
 
       <section class="panel">
-        <div class="section-title"><h2>最近任务</h2><span class="muted">失败任务可重跑，重发 flomo 会产生新 memo</span></div>
+        <div class="section-title">
+          <h2>最近任务</h2>
+          <div class="filters">
+            <button type="button" class="active" data-status="">全部</button>
+            <button type="button" data-status="failed">失败</button>
+            <button type="button" data-status="done">完成</button>
+            <button type="button" data-status="uploaded">已上传</button>
+            <button type="button" data-status="transcribing">转写中</button>
+          </div>
+        </div>
+        <div class="muted" style="margin-bottom:8px">失败任务可重跑，重发 flomo 会产生新 memo</div>
         <table><thead><tr><th>录音</th><th>状态</th><th>设备</th><th>大小</th><th>记录时间</th><th>更新</th><th>备注</th><th>操作</th></tr></thead><tbody id="jobs"></tbody></table>
       </section>
     </div>
@@ -313,12 +331,20 @@ function dashboardHtml() {
     const esc = (v) => String(v ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
     const normalizeToken = (value) => String(value || '').trim().replace(/^UPLOAD_TOKEN\s*=\s*/i, '').replace(/^token\s*=\s*/i, '').replace(/^['"]|['"]$/g, '').trim();
     const tokenInput = $('token');
+    let statusFilter = '';
     tokenInput.value = localStorage.getItem('cardputerUploadToken') || '';
     $('save').onclick = () => { tokenInput.value = normalizeToken(tokenInput.value); localStorage.setItem('cardputerUploadToken', tokenInput.value); load(); };
     $('refresh').onclick = () => load();
     $('clear').onclick = () => { localStorage.removeItem('cardputerUploadToken'); tokenInput.value = ''; load(); tokenInput.focus(); };
     $('focusToken').onclick = () => tokenInput.focus();
     $('limit').onchange = () => load();
+    document.querySelectorAll('[data-status]').forEach((button) => {
+      button.onclick = () => {
+        statusFilter = button.dataset.status || '';
+        document.querySelectorAll('[data-status]').forEach((item) => item.classList.toggle('active', item === button));
+        load();
+      };
+    });
 
     function statusClass(status) {
       if (status === 'done' || status === 'uploaded' || status === 'transcribed') return 'ok';
@@ -339,7 +365,9 @@ function dashboardHtml() {
       $('stamp').textContent = token ? '正在读取...' : '等待登录';
       if (!token) return;
       try {
-        const res = await fetch('/api/dashboard?limit=' + encodeURIComponent($('limit').value), {
+        const params = new URLSearchParams({ limit: $('limit').value });
+        if (statusFilter) params.set('status', statusFilter);
+        const res = await fetch('/api/dashboard?' + params.toString(), {
           headers: { 'X-Upload-Token': token }
         });
         const data = await res.json();
@@ -380,9 +408,11 @@ function dashboardHtml() {
 
     function render(data) {
       $('service').innerHTML = data.health.ok ? '<span class="ok">OK</span>' : '<span class="bad">ERR</span>';
-      $('total').textContent = data.jobs.total;
+      const statusCounts = data.jobs.statusCounts || {};
+      const failedTotal = Object.keys(statusCounts).reduce((sum, key) => key.includes('failed') ? sum + statusCounts[key] : sum, 0);
+      $('total').textContent = data.jobs.totalAll ?? data.jobs.total;
       $('active').textContent = data.activeUploads.length;
-      $('failed').textContent = data.jobs.jobs.filter(j => String(j.status || '').includes('failed')).length;
+      $('failed').textContent = failedTotal;
       $('stamp').textContent = '更新 ' + fmtTime(data.time);
 
       $('devices').innerHTML = data.devices.length ? data.devices.map(d => {
@@ -404,7 +434,7 @@ function dashboardHtml() {
           (canResend ? '<button class="small danger" onclick="resendJob(\\'' + esc(j.id) + '\\')">重发</button>' : '') +
           '</div>';
         return '<tr><td class="nowrap">' + esc(j.id) + '</td><td>' + statusPill(j.status) + '</td><td>' + esc(j.deviceId || '-') + '</td><td class="nowrap">' + fmtBytes(j.bytes) + '</td><td>' + esc(j.recordedAt || '-') + '</td><td class="nowrap">' + fmtTime(j.updatedAt || j.createdAt) + '</td><td>' + esc(note) + '</td><td>' + actions + '</td></tr>';
-      }).join('') : '<tr><td colspan="8" class="muted">没有任务。</td></tr>';
+      }).join('') : '<tr><td colspan="8" class="muted">没有匹配任务。</td></tr>';
     }
 
     load();
@@ -1013,6 +1043,11 @@ async function handleDashboardApi(req, res, url) {
   if (!dashboardAuth(req, res)) return;
   const rawLimit = parseInt(url.searchParams.get('limit') || '50', 10);
   const limit = Math.max(1, Math.min(Number.isFinite(rawLimit) ? rawLimit : 50, 100));
+  const status = String(url.searchParams.get('status') || '').trim();
+  if (status && !/^[\w.-]+$/.test(status)) {
+    sendJson(res, 400, { ok: false, error: 'invalid status filter' });
+    return;
+  }
   try {
     sendJson(res, 200, {
       ok: true,
@@ -1034,7 +1069,7 @@ async function handleDashboardApi(req, res, url) {
         const right = Date.parse(b.updatedAt || '') || 0;
         return right - left;
       }),
-      jobs: await listJobs({ limit })
+      jobs: await listJobs({ limit, status })
     });
   } catch (error) {
     sendJson(res, 500, { ok: false, error: error.message });

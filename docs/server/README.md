@@ -23,7 +23,7 @@ npm start
 
 - `GET /health`: health check.
 - `GET /dashboard`: browser dashboard for uploads, jobs, and device status.
-- `GET /api/dashboard`: dashboard JSON. Requires `X-Upload-Token`.
+- `GET /api/dashboard`: dashboard JSON. Requires `X-Upload-Token`; supports `limit=50` and `status=done` / `status=failed`.
 - `POST /upload`: accepts raw `audio/wav` bytes with `X-Upload-Token`.
 - `GET /jobs`: lists recent jobs. Requires `X-Upload-Token`; supports `limit=20` and `status=done`.
 - `GET /jobs/:id`: returns saved upload metadata.
@@ -73,7 +73,7 @@ curl http://127.0.0.1:3000/jobs?limit=20 \
   -H "X-Upload-Token: change-me-to-a-long-random-token"
 ```
 
-Filter by status when debugging:
+Filter by status when debugging. `status=failed` matches both transcription and flomo failures:
 
 ```bash
 curl "http://127.0.0.1:3000/jobs?status=flomo_failed&limit=10" \
