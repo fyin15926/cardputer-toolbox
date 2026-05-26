@@ -505,3 +505,16 @@ Write-Host "[3/3] 烧录成功 ✓  设备正在重启..."
 | esp32:esp32 core | **3.1.3** |
 
 这些版本组合已通过完整编译验证。不要随意升级，尤其是 esp32 core。
+## Fast Path: first command in a new Codex window
+
+Use the repository script instead of rebuilding the command by memory. It avoids the repeated first-compile failures by always copying the sketch to the English path, creating the build directory first, using the 8MB/3MB APP partition, and compiling with one job.
+
+```powershell
+# Compile only
+powershell -ExecutionPolicy Bypass -File "D:\github仓库同步\小机器\tools\cardputer_build.ps1"
+
+# Compile and flash, usually COM3
+powershell -ExecutionPolicy Bypass -File "D:\github仓库同步\小机器\tools\cardputer_build.ps1" -Flash -Port COM3
+```
+
+If Codex is running in the sandbox, this command may need external permission because Arduino CLI writes to `C:\Users\87194\AppData\Local\Arduino15` and uses the serial port. That is expected; do not treat `Access is denied` or `Platform 'esp32:esp32' not found` from a sandboxed run as a source-code error.
