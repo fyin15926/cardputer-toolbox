@@ -80,9 +80,10 @@ static const uint32_t SHORTCUT_RETRIM_HEAD_PAD = REC_RATE / 200; // 5ms
 static const uint32_t SHORTCUT_RETRIM_TAIL_PAD = REC_RATE / 40;  // 25ms
 static const uint32_t SHORTCUT_FADE_SAMPLES = REC_RATE / 125; // 8ms 淡入淡出
 static const size_t   REC_N    = 256;    // 每缓冲样本数 (~16ms, 小=波形更流畅)
-static const size_t   PB_N     = 512;    // 播放缓冲样本数 (~32ms, B线更顺)
+static const size_t   PB_N     = 256;    // 播放缓冲样本数 (~16ms, B线更贴近录音页)
 static const uint32_t REC_UI_FRAME_MS = 16;  // ~60fps wave-region refresh after mic buffer is re-queued.
 static const uint32_t PB_UI_FRAME_MS  = 16;  // ~60fps visual refresh; playback reuses latest PCM block between reads.
+static const uint32_t REC_AUTO_SEGMENT_MS = 30UL * 60UL * 1000UL;
 static const uint8_t  REC_WRITE_BATCH = 4;
 static const uint8_t  REC_REARM_SETTLE_BUFFERS = 6;
 static const uint32_t UPLOAD_IDLE_DELAY_MS = 3000;
@@ -92,7 +93,7 @@ static int16_t recWriteBuf[REC_WRITE_BATCH * REC_N];
 static int16_t recVisualBuf[REC_N];
 static int16_t playbackVisualBuf[PB_N];
 static int16_t seekToneBuf[384];
-int recGain = 50;                        // 录音软件增益默认值(W/S 现场可调, 带削波保护)
+int recGain = 36;                        // 录音软件增益默认值(W/S 现场可调, 带削波保护)
 int playVol = 200;                       // 回放音量(+/- 可调, 0..255)
 static const int VOL_LEVELS = 10;
 static const uint8_t BRIGHT_LEVELS = 5;
@@ -118,6 +119,7 @@ static uint32_t g_batteryLastSampleMs = 0;
 #define UPSTAT_UPLOADING 11
 static uint8_t g_uploadStatus = UPSTAT_IDLE;
 static bool g_uploadPausedForInput = false;
+static bool g_uploadCancelRequested = false;
 static int g_uploadActiveRec = 0;
 static bool g_uploadActiveAnnounced = false;
 
@@ -313,6 +315,7 @@ static bool keyBrightDn() { return M5Cardputer.Keyboard.isKeyPressed('[') || M5C
 static bool keyUploadAbort() {
   if (!M5Cardputer.Keyboard.isPressed()) return false;
   g_uploadPausedForInput = true;
+  if (keyCtrl() && keyUpload()) g_uploadCancelRequested = true;
   return true;
 }
 
@@ -396,22 +399,82 @@ static bool prepareMicInput(bool force = false) {
   return ok;
 }
 
-static void processMicBuffer(int16_t *buf, size_t n, int32_t &lpf) {
+static void processMicBuffer(int16_t *buf, size_t n, int32_t &dc, int32_t &hum, int32_t &lpf, int32_t &noiseRms, int32_t &softGateQ8) {
+  if (!buf || n == 0) return;
+
+  int64_t sumSq = 0;
+  int64_t sumDiff = 0;
   for (size_t k = 0; k < n; k++) {
-    int32_t x = (int32_t)buf[k] * recGain;
-    lpf += (int32_t)(((int64_t)(x - lpf) * 160) >> 8);
-    float yf = 32767.0f * tanhf((float)lpf / 32767.0f);
+    int32_t s = buf[k];
+    sumSq += (int64_t)s * s;
+    if (k > 0) sumDiff += abs((int)(buf[k] - buf[k - 1]));
+  }
+
+  int32_t rms = (int32_t)sqrtf((float)((double)sumSq / n));
+  int32_t avgDiff = (n > 1) ? (int32_t)(sumDiff / (n - 1)) : 0;
+  bool likelyFriction = rms > 0 &&
+                        rms < 520 &&
+                        avgDiff > 120 &&
+                        (int64_t)avgDiff * 256 > (int64_t)rms * 120;
+  bool quietEnoughForNoise = rms > 0 && rms < max((int32_t)220, noiseRms * 3) && !likelyFriction;
+
+  if (quietEnoughForNoise) {
+    noiseRms = (noiseRms * 31 + rms) >> 5;
+    if (noiseRms < 45) noiseRms = 45;
+  } else if (noiseRms < 90) {
+    noiseRms++;
+  }
+
+  int32_t targetGateQ8 = 256;
+  if (rms > 0 && rms < noiseRms * 2) {
+    targetGateQ8 = 224;
+  } else if (rms > 0 && rms < noiseRms * 3) {
+    targetGateQ8 = 240;
+  }
+  if (likelyFriction && targetGateQ8 > 232) targetGateQ8 = 232;
+  softGateQ8 += (targetGateQ8 - softGateQ8) >> 3;
+
+  bool voiceLike = rms > max(noiseRms * 4, (int32_t)900) || avgDiff > 90;
+  const int32_t hpShift = 7;
+  const int32_t humShift = voiceLike ? 11 : 8;
+  const int32_t humMixQ8 = voiceLike ? 32 : 144;
+  const int32_t lpfCoef = likelyFriction ? 128 : 160;
+  const int32_t hiMixQ8 = likelyFriction ? 176 : 256;
+
+  for (size_t k = 0; k < n; k++) {
+    int32_t raw = buf[k];
+    dc += (raw - dc) >> hpShift;
+    int32_t hp = raw - dc;
+    hum += (hp - hum) >> humShift;
+    int32_t cleaned = hp - ((hum * humMixQ8) >> 8);
+    int32_t x = (int32_t)(((int64_t)cleaned * recGain * softGateQ8) >> 8);
+    lpf += (int32_t)(((int64_t)(x - lpf) * lpfCoef) >> 8);
+    int32_t y = lpf;
+    if (hiMixQ8 < 256) {
+      int32_t hi = x - lpf;
+      y = lpf + ((hi * hiMixQ8) >> 8);
+    }
+    float yf = 32767.0f * tanhf((float)y / 32767.0f);
     buf[k] = (int16_t)yf;
   }
 }
 
 static int8_t calcTrackAmp(const int16_t *buf, size_t n) {
   if (!buf || n == 0) return 0;
+  int64_t sum = 0;
+  for (size_t k = 0; k < n; k++) sum += buf[k];
+  int32_t mean = (int32_t)(sum / (int64_t)n);
   int64_t sumSq = 0;
-  for (size_t k = 0; k < n; k++) sumSq += (int64_t)buf[k] * buf[k];
+  for (size_t k = 0; k < n; k++) {
+    int32_t centered = (int32_t)buf[k] - mean;
+    sumSq += (int64_t)centered * centered;
+  }
   float rms = sqrtf((float)((double)sumSq / n));
-  int sign = (buf[n / 2] >= 0) ? 1 : -1;
-  float norm = rms / (float)A_RMS_FULL;
+  const float visualFloor = 1400.0f;
+  if (rms <= visualFloor) return 0;
+  rms -= visualFloor;
+  int sign = (((int32_t)buf[n / 2] - mean) >= 0) ? 1 : -1;
+  float norm = rms / (float)(A_RMS_FULL - 1400);
   if (norm > 1.0f) norm = 1.0f;
   int amp = (int)(sqrtf(norm) * A_HALF + 0.5f) * sign;
   if (amp > A_HALF) amp = A_HALF;
@@ -1076,12 +1139,11 @@ static void insertRecListAtEnd(int recNum, uint8_t kind = REC_NORMAL) {
 static void applyRecordingOrderMounted() {
   File f = SD.open(REC_ORDER_PATH, FILE_READ);
   if (!f) return;
-  static uint16_t orderedTail[MAX_REC];
   static uint8_t orderedBits[(MAX_REC + 8) / 8];
   memset(orderedBits, 0, sizeof(orderedBits));
-  int tailCount = 0;
+  bool hasOrdered = false;
   char line[24];
-  while (f.available() && tailCount < recCount) {
+  while (f.available()) {
     int n = f.readBytesUntil('\n', line, sizeof(line) - 1);
     line[n] = 0;
     int recNum = atoi(line);
@@ -1089,15 +1151,25 @@ static void applyRecordingOrderMounted() {
     if (bitIsSet(orderedBits, recNum)) continue;
     if (recListIndexOf(recNum) < 0) continue;
     setBit(orderedBits, recNum, true);
-    orderedTail[tailCount++] = (uint16_t)recNum;
+    hasOrdered = true;
   }
   f.close();
-  if (tailCount == 0) return;
+  if (!hasOrdered) return;
   int write = 0;
   for (int i = 0; i < recCount; i++) {
     if (!bitIsSet(orderedBits, recList[i])) recList[write++] = recList[i];
   }
-  for (int i = 0; i < tailCount && write < recCount; i++) recList[write++] = orderedTail[i];
+  f = SD.open(REC_ORDER_PATH, FILE_READ);
+  if (!f) return;
+  while (f.available() && write < recCount) {
+    int n = f.readBytesUntil('\n', line, sizeof(line) - 1);
+    line[n] = 0;
+    int recNum = atoi(line);
+    if (!bitIsSet(orderedBits, recNum)) continue;
+    recList[write++] = recNum;
+    setBit(orderedBits, recNum, false);
+  }
+  f.close();
 }
 
 static void removeRecordingOrderMounted(int recNum) {
@@ -1662,10 +1734,16 @@ static void updateLiveWaveVisual(int8_t *dst, const int16_t *src, size_t n, int 
     }
     return;
   }
+  int64_t sum = 0;
+  for (size_t i = 0; i < n; i++) sum += src[i];
+  int32_t mean = (int32_t)(sum / (int64_t)n);
   for (int x = 0; x < CONTENT_W; x++) {
     int idx = (int)((uint32_t)x * n / CONTENT_W);
     if (idx >= (int)n) idx = n - 1;
-    int target = (int)((int32_t)src[idx] * gain * half / 32767);
+    int32_t centered = (int32_t)src[idx] - mean;
+    if (centered > 32767) centered = 32767;
+    if (centered < -32768) centered = -32768;
+    int target = (int)(centered * gain * half / 32767);
     if (target > half) target = half;
     if (target < -half) target = -half;
     int old = dst[x];
@@ -1796,6 +1874,7 @@ static void drawPlaybackAction(M5Canvas &cv, const char *msg, uint16_t col = COL
 }
 
 static bool enqueueUploadMounted(int recNum, uint8_t kind);
+static bool uploadCancelMounted(int recNum = 0);
 static uint8_t validateUploadConfigMounted();
 static const char *uploadStatusLabel(uint8_t status);
 
@@ -1941,11 +2020,16 @@ int playbackScreen(const char *path, int recNum, int prevRec, int nextRec) {
         else if (keySpace()) { drawPlaybackAction(cv, "REC", COL_RED); ret = R_RECORD; stop = true; }   // 空格=去录音
         else if (keyUp() && prevRec > 0) { drawPlaybackAction(cv, "PREV", COL_GREEN); g_nextPlay = prevRec; ret = R_PLAY; stop = true; }
         else if (keyDown() && nextRec > 0) { drawPlaybackAction(cv, "NEXT", COL_GREEN); g_nextPlay = nextRec; ret = R_PLAY; stop = true; }
+        else if (keyCtrl() && keyUpload()) {
+          bool cancelled = uploadCancelMounted(recNum);
+          g_uploadStatus = cancelled ? UPSTAT_ABORTED : UPSTAT_IDLE;
+          drawActionToast(cancelled ? "ABORT" : "NO WT", cancelled ? COL_GREEN : COL_DIM);
+          waitRelease();
+        }
         else if (keyUpload()) {
           bool queued = enqueueUploadMounted(recNum, recKindOf(recNum));
           uint8_t status = queued ? validateUploadConfigMounted() : UPSTAT_NO_SD;
-          if (uploadDone(recNum)) status = UPSTAT_DONE;
-          else if (status == UPSTAT_IDLE) status = UPSTAT_QUEUED;
+          if (status == UPSTAT_IDLE) status = UPSTAT_QUEUED;
           g_uploadStatus = status;
           if (status == UPSTAT_QUEUED) lastUploadTickMs = millis();
           drawActionToast(uploadStatusLabel(status), (status == UPSTAT_QUEUED || status == UPSTAT_DONE) ? COL_GREEN : COL_RED);
@@ -2195,13 +2279,46 @@ static bool uploadLineHasRec(const char *path, int recNum) {
   return false;
 }
 
+static bool uploadRemoveDoneMounted(int recNum) {
+  if (recNum <= 0) return false;
+  File in = SD.open(UPLOAD_DONE_PATH, FILE_READ);
+  if (!in) return false;
+  const char *tmp = "/UPLOAD/done.tmp";
+  SD.remove(tmp);
+  File out = SD.open(tmp, FILE_WRITE);
+  if (!out) {
+    in.close();
+    SD.remove(tmp);
+    return false;
+  }
+  bool removed = false;
+  char line[48];
+  while (in.available()) {
+    int n = in.readBytesUntil('\n', line, sizeof(line) - 1);
+    line[n] = 0;
+    char trimmed[48];
+    snprintf(trimmed, sizeof(trimmed), "%s", line);
+    strTrim(trimmed);
+    if (!trimmed[0]) continue;
+    if (atoi(trimmed) == recNum) {
+      removed = true;
+      continue;
+    }
+    out.printf("%s\n", trimmed);
+  }
+  in.close();
+  out.close();
+  SD.remove(UPLOAD_DONE_PATH);
+  bool committed = SD.rename(tmp, UPLOAD_DONE_PATH);
+  if (!committed) SD.remove(tmp);
+  if (removed && committed) setUploadDone(recNum, false);
+  return removed && committed;
+}
+
 static bool enqueueUploadMounted(int recNum, uint8_t kind) {
   if (recNum <= 0) return false;
   if (!SD.exists(UPLOAD_DIR)) SD.mkdir(UPLOAD_DIR);
-  if (uploadLineHasRec(UPLOAD_DONE_PATH, recNum)) {
-    setUploadDone(recNum, true);
-    return true;
-  }
+  if (uploadLineHasRec(UPLOAD_DONE_PATH, recNum) && !uploadRemoveDoneMounted(recNum)) return false;
   if (uploadLineHasRec(UPLOAD_QUEUE_PATH, recNum)) {
     setUploadQueued(recNum, true);
     return true;
@@ -2242,6 +2359,11 @@ static void uploadDropFirstJob() {
   const char *tmp = "/UPLOAD/queue.tmp";
   SD.remove(tmp);
   File out = SD.open(tmp, FILE_WRITE);
+  if (!out) {
+    in.close();
+    SD.remove(tmp);
+    return;
+  }
   bool dropped = false;
   int droppedRec = 0;
   char line[48];
@@ -2253,27 +2375,85 @@ static void uploadDropFirstJob() {
       droppedRec = atoi(line);
       continue;
     }
-    if (out) out.printf("%s\n", line);
+    out.printf("%s\n", line);
   }
   in.close();
-  if (out) {
-    out.close();
-    SD.remove(UPLOAD_QUEUE_PATH);
-    SD.rename(tmp, UPLOAD_QUEUE_PATH);
-  } else {
+  out.close();
+  SD.remove(UPLOAD_QUEUE_PATH);
+  bool committed = SD.rename(tmp, UPLOAD_QUEUE_PATH);
+  if (!committed) SD.remove(tmp);
+  if (droppedRec > 0 && committed) setUploadQueued(droppedRec, false);
+}
+
+static bool uploadRemoveQueuedMounted(int recNum) {
+  if (recNum <= 0) return false;
+  File in = SD.open(UPLOAD_QUEUE_PATH, FILE_READ);
+  if (!in) return false;
+  const char *tmp = "/UPLOAD/queue.tmp";
+  SD.remove(tmp);
+  File out = SD.open(tmp, FILE_WRITE);
+  if (!out) {
+    in.close();
     SD.remove(tmp);
+    return false;
   }
-  if (droppedRec > 0) setUploadQueued(droppedRec, false);
+  bool removed = false;
+  char line[48];
+  while (in.available()) {
+    int n = in.readBytesUntil('\n', line, sizeof(line) - 1);
+    line[n] = 0;
+    char trimmed[48];
+    snprintf(trimmed, sizeof(trimmed), "%s", line);
+    strTrim(trimmed);
+    if (!trimmed[0]) continue;
+    if (atoi(trimmed) == recNum) {
+      removed = true;
+      continue;
+    }
+    out.printf("%s\n", trimmed);
+  }
+  in.close();
+  out.close();
+  SD.remove(UPLOAD_QUEUE_PATH);
+  bool committed = SD.rename(tmp, UPLOAD_QUEUE_PATH);
+  if (!committed) SD.remove(tmp);
+  if (removed && committed) setUploadQueued(recNum, false);
+  return removed && committed;
+}
+
+static bool uploadCancelMounted(int recNum) {
+  if (recNum <= 0) {
+    uint8_t kind = REC_NORMAL;
+    uploadReadFirstJob(recNum, kind);
+  }
+  bool removed = uploadRemoveQueuedMounted(recNum);
+  if (removed) {
+    g_uploadCancelRequested = false;
+    g_uploadPausedForInput = false;
+    if (g_uploadActiveRec == recNum) g_uploadActiveRec = 0;
+    if (g_uploadStatus == UPSTAT_UPLOADING || g_uploadStatus == UPSTAT_QUEUED) g_uploadStatus = UPSTAT_ABORTED;
+  }
+  return removed;
 }
 
 static void uploadMarkDone(int recNum) {
   if (!SD.exists(UPLOAD_DIR)) SD.mkdir(UPLOAD_DIR);
-  File f = SD.open(UPLOAD_DONE_PATH, FILE_APPEND);
-  if (!f) return;
-  f.printf("%d\n", recNum);
-  f.close();
+  if (!uploadLineHasRec(UPLOAD_DONE_PATH, recNum)) {
+    File f = SD.open(UPLOAD_DONE_PATH, FILE_APPEND);
+    if (!f) return;
+    f.printf("%d\n", recNum);
+    f.close();
+  }
   setUploadDone(recNum, true);
   setUploadQueued(recNum, false);
+}
+
+static void uploadForgetRecordMounted(int recNum) {
+  if (recNum <= 0) return;
+  uploadRemoveQueuedMounted(recNum);
+  uploadRemoveDoneMounted(recNum);
+  setUploadQueued(recNum, false);
+  setUploadDone(recNum, false);
 }
 
 static bool saveUploadConfigMounted() {
@@ -2504,6 +2684,13 @@ static bool uploadOneJobMounted() {
     return true;
   }
   if (!ensureWifiConnected()) {
+    if (g_uploadCancelRequested) {
+      uploadDropFirstJob();
+      g_uploadCancelRequested = false;
+      g_uploadStatus = UPSTAT_ABORTED;
+      wifiPowerDown();
+      return true;
+    }
     g_uploadStatus = g_uploadPausedForInput ? UPSTAT_QUEUED : UPSTAT_WIFI_ERR;
     return false;
   }
@@ -2537,6 +2724,16 @@ static bool uploadOneJobMounted() {
   client.setTimeout(4000);
   if (!client.connect(host, port, 3000)) { f.close(); return failAfterWifi(UPSTAT_HTTP_ERR); }
   client.setNoDelay(true);
+  auto abortUploadNow = [&]() {
+    client.stop();
+    f.close();
+    if (g_uploadCancelRequested) {
+      uploadDropFirstJob();
+      g_uploadCancelRequested = false;
+      return failAfterWifi(UPSTAT_ABORTED);
+    }
+    return failAfterWifi(UPSTAT_QUEUED);
+  };
   client.printf("POST %s HTTP/1.1\r\n", urlPath);
   client.printf("Host: %s\r\n", hostHeader);
   client.print("Connection: close\r\n");
@@ -2582,7 +2779,7 @@ static bool uploadOneJobMounted() {
       if (outN && client.write(adpcmBuf, outN) != outN) { client.stop(); f.close(); return failAfterWifi(UPSTAT_HTTP_ERR); }
       if ((++uiTick & 0x03) == 0) {
         M5Cardputer.update();
-        if (keyUploadAbort()) { client.stop(); f.close(); return failAfterWifi(UPSTAT_QUEUED); }
+        if (keyUploadAbort()) return abortUploadNow();
         delay(0);
       }
     }
@@ -2594,7 +2791,7 @@ static bool uploadOneJobMounted() {
       if (client.write(buf, n) != n) { client.stop(); f.close(); return failAfterWifi(UPSTAT_HTTP_ERR); }
       if ((++uiTick & 0x07) == 0) {
         M5Cardputer.update();
-        if (keyUploadAbort()) { client.stop(); f.close(); return failAfterWifi(UPSTAT_QUEUED); }
+        if (keyUploadAbort()) return abortUploadNow();
         delay(0);
       }
     }
@@ -2602,7 +2799,7 @@ static bool uploadOneJobMounted() {
   uint32_t start = millis();
   while (!client.available() && client.connected() && millis() - start < 4000) {
     M5Cardputer.update();
-    if (keyUploadAbort()) { client.stop(); f.close(); return failAfterWifi(UPSTAT_QUEUED); }
+    if (keyUploadAbort()) return abortUploadNow();
     delay(20);
   }
   int code = 0;
@@ -3142,6 +3339,7 @@ int recordingScreen() {
   if (!sdMount()) { cleanupRecSprite(); showMsg("录音机", "未检测到 SD 卡", COL_RED); return 0; }
   if (!SD.exists(REC_DIR)) SD.mkdir(REC_DIR);
   int idx = nextRecordingIndex();
+  uploadForgetRecordMounted(idx);
   char path[40];
   recordingPathKind(idx, REC_NORMAL, path, sizeof(path));
   File f = SD.open(path, FILE_WRITE);
@@ -3164,6 +3362,9 @@ int recordingScreen() {
   uint32_t dataBytes = 0;
   size_t recWriteSamples = 0;
   int b = 0;
+  int lastSavedIdx = 0;
+  bool currentFileOpen = true;
+  bool autoSegmented = false;
   uint32_t startMs = millis(), pausedTotal = 0, pauseStart = 0, lastDraw = 0;
   bool paused = false;
   auto activeElapsed = [&]() -> uint32_t {
@@ -3183,6 +3384,65 @@ int recordingScreen() {
     dataBytes += bytes;
     recWriteSamples = 0;
   };
+  auto finishCurrentSegment = [&](bool autoSplit, bool cancelCurrent) {
+    if (!currentFileOpen) return false;
+    flushRecWrite();
+    uint32_t finalData = dataBytes;
+    if (!autoSplit) {
+      uint32_t tailTrim = REC_RATE * 6 / 10;
+      finalData = (dataBytes > tailTrim) ? (dataBytes - tailTrim) : 0;
+    }
+    bool drop = cancelCurrent || finalData < REC_RATE;
+    if (!drop) {
+      writeWavHeader(f, REC_RATE, finalData);
+      f.close();
+      currentFileOpen = false;
+      setRecDuration(idx, 44 + finalData);
+      appendRecordingOrderMounted(idx);
+      boxSaveRecordedAtMounted(idx);
+      bool queueThis = autoSplit || autoSegmented || g_uploadAfterRecord;
+      if (queueThis && enqueueUploadMounted(idx, REC_NORMAL)) {
+        lastUploadTickMs = millis();
+      }
+      if (autoSplit) autoSegmented = true;
+      if (!autoSplit) {
+        uint16_t dur = getRecDuration(idx);
+        if (dur <= FRICTION_NOW_SEC) {
+          if (suppressKeyFriction(path, finalData)) setFrictionDone(idx, true);
+        } else if (dur <= FRICTION_IDLE_MAX_SEC) {
+          setFrictionPending(idx, true);
+        }
+      }
+      insertRecListAtEnd(idx);
+      lastSavedIdx = idx;
+      nextRecHint = (idx < 9999) ? idx + 1 : 9999;
+      writeNextIndexCache(nextRecHint);
+      return true;
+    }
+    f.close();
+    currentFileOpen = false;
+    SD.remove(path);
+    nextRecHint = idx;
+    writeNextIndexCache(idx);
+    return false;
+  };
+  auto openNextSegment = [&]() {
+    idx = nextRecordingIndex();
+    uploadForgetRecordMounted(idx);
+    recordingPathKind(idx, REC_NORMAL, path, sizeof(path));
+    f = SD.open(path, FILE_WRITE);
+    if (!f) return false;
+    currentFileOpen = true;
+    nextRecHint = (idx < 9999) ? idx + 1 : 9999;
+    writeWavHeader(f, REC_RATE, 0);
+    dataBytes = 0;
+    recWriteSamples = 0;
+    startMs = millis();
+    pausedTotal = 0;
+    pauseStart = 0;
+    lastDraw = 0;
+    return true;
+  };
   queueRecordBuffers();
   drawRecChromePartial(0, true, false, false, 0, true, true);
   bool stop = false;
@@ -3191,7 +3451,11 @@ int recordingScreen() {
   uint32_t delHoldStart = 0;
   uint32_t lastDelDraw = 0;
   bool ignoreStartKey = M5Cardputer.Keyboard.isPressed();
-  int32_t lpf = 0;
+  int32_t recDc = 0;
+  int32_t recHum = 0;
+  int32_t recLpf = 0;
+  int32_t recNoiseRms = 90;
+  int32_t recSoftGateQ8 = 256;
   uint32_t skipBuffers = micWasReady ? 4 : 8;   // 准备阶段已热机, 只短掐头防按键声
 
   while (!stop) {
@@ -3233,6 +3497,12 @@ int recordingScreen() {
           waitRelease();
         }
         else if (keyEsc()) { g_afterRecord = R_BACK; stop = true; break; }
+        else if (keyCtrl() && keyUpload()) {
+          bool cancelled = uploadCancelMounted();
+          g_uploadStatus = cancelled ? UPSTAT_ABORTED : UPSTAT_IDLE;
+          drawRecToast(cancelled ? "ABORT" : "NO WT", cancelled ? COL_GREEN : COL_DIM);
+          waitRelease();
+        }
         else if (keyUpload()) { drawRecToast("WT", COL_GREEN); g_uploadAfterRecord = true; g_afterRecord = R_LIST; stop = true; break; }
         else if (keyEnter()) { drawRecSave(); g_afterRecord = R_LIST; stop = true; break; }
         else if (keyAlt()) { drawRecToast("WAIT", COL_GREEN); g_afterRecord = R_NOISE; stop = true; break; }
@@ -3266,7 +3536,7 @@ int recordingScreen() {
     if (stop) break;
     if (paused) continue;
     int16_t *filled = recBuf[b];
-    processMicBuffer(filled, REC_N, lpf);
+    processMicBuffer(filled, REC_N, recDc, recHum, recLpf, recNoiseRms, recSoftGateQ8);
     memcpy(recVisualBuf, filled, REC_N * sizeof(int16_t));
     if (skipBuffers > 0) skipBuffers--;
     else {
@@ -3287,36 +3557,19 @@ int recordingScreen() {
         drawRecRealtime(elapsed, blink, recVisualBuf, held);
       }
     }
+    if (activeElapsed() >= REC_AUTO_SEGMENT_MS) {
+      finishCurrentSegment(true, false);
+      if (!openNextSegment()) {
+        g_afterRecord = R_LIST;
+        stop = true;
+      } else if (!recScreenOff) {
+        drawRecChromePartial(0, true, false, false, 0, true, true);
+      }
+    }
   }
   if (recScreenOff) applyBrightness();
   cleanupRecSprite();
-  flushRecWrite();
-  // 掐尾 ~0.3s.
-  uint32_t tailTrim = REC_RATE * 6 / 10;
-  uint32_t effData = (dataBytes > tailTrim) ? (dataBytes - tailTrim) : 0;
-  if (!cancelRec && effData < REC_RATE) cancelRec = true;
-  if (!cancelRec) writeWavHeader(f, REC_RATE, effData);
-  f.close();
-  if (!cancelRec && effData > 0) {
-    setRecDuration(idx, 44 + effData);
-    appendRecordingOrderMounted(idx);
-    boxSaveRecordedAtMounted(idx);
-    if (g_uploadAfterRecord) {
-      enqueueUploadMounted(idx, REC_NORMAL);
-      lastUploadTickMs = millis();
-    }
-    uint16_t dur = getRecDuration(idx);
-    if (dur <= FRICTION_NOW_SEC) {
-      if (suppressKeyFriction(path, effData)) setFrictionDone(idx, true);
-    } else if (dur <= FRICTION_IDLE_MAX_SEC) {
-      setFrictionPending(idx, true);
-    }
-  }
-  if (cancelRec) {
-    SD.remove(path);
-    nextRecHint = idx;
-    writeNextIndexCache(idx);
-  }
+  if (currentFileOpen) finishCurrentSegment(false, cancelRec);
   SD.end();
   while (M5Cardputer.Mic.isRecording() > 0) delay(1);
   if (g_afterRecord != R_BACK) {
@@ -3326,12 +3579,8 @@ int recordingScreen() {
     M5Cardputer.In_I2C.writeRegister8(ES, 0x0D, 0x01, 400000);
     M5Cardputer.In_I2C.writeRegister8(ES, 0x00, 0x80, 400000);
   }
-  if (cancelRec) return 0;
-  insertRecListAtEnd(idx);
-  if (g_uploadAfterRecord) setUploadQueued(idx, true);
-  nextRecHint = (idx < 9999) ? idx + 1 : 9999;
-  writeNextIndexCache(nextRecHint);
-  return idx;
+  if (cancelRec && lastSavedIdx <= 0) return 0;
+  return lastSavedIdx;
 }
 
 // ---------- 录音列表: ;/.选, 回车放, Ctrl+键绑定, Alt降噪, 空格录音, Esc退出, 长按Del删除 ----------
@@ -3345,6 +3594,7 @@ static void deleteRecording(int recNum) {
   SD.remove(p);
   recordingPathKind(recNum, REC_IMPORTANT, p, sizeof(p));
   SD.remove(p);
+  uploadForgetRecordMounted(recNum);
   removeRecordingOrderMounted(recNum);
   SD.end();
   setShortcutRec(recNum, false);
@@ -3377,7 +3627,10 @@ static int deleteUnmarkedRecordings() {
       if (n <= 0) continue;
       char p[40];
       recordingPathKind(n, REC_NORMAL, p, sizeof(p));
-      if (SD.remove(p)) deleted++;
+      if (SD.remove(p)) {
+        uploadForgetRecordMounted(n);
+        deleted++;
+      }
     }
     dir.close();
   }
@@ -3703,11 +3956,27 @@ int listScreen(int selectIdx) {
           redraw = true; waitRelease();
         }
       }
+      else if (keyCtrl() && keyUpload()) {
+        uint8_t status = UPSTAT_IDLE;
+        bool cancelled = false;
+        if (sdMount()) {
+          int recNum = (sel >= 0) ? recList[sel] : 0;
+          cancelled = uploadCancelMounted(recNum);
+          SD.end();
+        } else {
+          status = UPSTAT_NO_SD;
+        }
+        if (cancelled) status = UPSTAT_ABORTED;
+        g_uploadStatus = status;
+        drawActionToast(cancelled ? "ABORT" : (status == UPSTAT_NO_SD ? uploadStatusLabel(status) : "NO WT"), cancelled ? COL_GREEN : COL_DIM);
+        redraw = true;
+        if (M5Cardputer.Keyboard.isPressed()) waitRelease();
+      }
       else if (keyUpload() && sel >= 0) {
         uint8_t status = UPSTAT_NO_SD;
         if (sdMount()) {
-          enqueueUploadMounted(recList[sel], recKindOf(recList[sel]));
-          status = validateUploadConfigMounted();
+          bool queued = enqueueUploadMounted(recList[sel], recKindOf(recList[sel]));
+          status = queued ? validateUploadConfigMounted() : UPSTAT_NO_SD;
           if (status == UPSTAT_IDLE) {
             status = UPSTAT_QUEUED;
             g_uploadStatus = status;

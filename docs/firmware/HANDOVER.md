@@ -401,3 +401,12 @@ Do not reintroduce without a very specific reason:
 - Mic-hot/no-`Mic.end()` across playback/list/sleep without clear boundaries: caused no-audio/low-audio regressions.
 - Delaying record-stop `Mic.end()` until playback start: moved the pop to playback start, which was worse.
 - ES8311 DAC digital mute / 0x31/0x37 ramp experiment: no improvement for record transition pop.
+## 2026-05-26 录音底噪源头处理备注
+
+服务器试听 v16 已经证明 `20260526_120803_cardputer-001_REC_0045` 这类“蒙在被子里”样本里的底噪主要来自机器录音链路本身，不只是环境声。完整 v16 是离线频谱处理，不适合直接塞进 Cardputer 实时录音内圈。
+
+当前固件端采用轻量方案：`recGain` 默认从 `50` 降为 `36`，`processMicBuffer()` 增加 `recHum` 慢速低频底座跟踪。静音段更积极扣除机器低频底座，说话段降低扣除比例保护人声。录音时仍可用 `W/S` 调整软件增益。
+
+编译记录：普通默认分区会因程序超过 1.31MB 失败；使用正式 FQBN `esp32:esp32:m5stack_cardputer:FlashSize=8M,PartitionScheme=default_8MB` 编译通过，程序 `1753396 bytes`，全局变量 `138200 bytes`。
+
+这版只做源头减噪，不替代服务器端四档试听/频谱降噪。当前尚未烧录；若后续烧录验证，请同时录一条静音底噪样本和一条正常人声样本，再看原始 WAV 是否已经比旧固件更干净。

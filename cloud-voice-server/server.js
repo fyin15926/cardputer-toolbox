@@ -11,11 +11,25 @@ const PORT = parseInt(process.env.PORT || '3000', 10);
 const UPLOAD_TOKEN = process.env.UPLOAD_TOKEN || '';
 const ASR_FILE_TOKEN = process.env.ASR_FILE_TOKEN || '';
 const DASHSCOPE_API_KEY = process.env.DASHSCOPE_API_KEY || '';
+const DASHSCOPE_MODEL = process.env.DASHSCOPE_MODEL || 'paraformer-v2';
+const DASHSCOPE_MAX_WAIT_MS = parseInt(process.env.DASHSCOPE_MAX_WAIT_MS || `${15 * 60 * 1000}`, 10);
+const DASHSCOPE_POLL_INTERVAL_MS = parseInt(process.env.DASHSCOPE_POLL_INTERVAL_MS || '1500', 10);
+const DASHSCOPE_DISFLUENCY_REMOVAL = /^(1|true|yes)$/i.test(process.env.DASHSCOPE_DISFLUENCY_REMOVAL || 'false');
+const DEFAULT_ASR_AUDIO_SOURCE = normalizeAsrSource(process.env.ASR_AUDIO_SOURCE) || 'raw';
+const DEFAULT_ASR_SPEAKER_COUNT = normalizeSpeakerCount(process.env.ASR_SPEAKER_COUNT);
 const FLOMO_WEBHOOK_URL = process.env.FLOMO_WEBHOOK_URL || '';
 const PUBLIC_BASE_URL = (process.env.PUBLIC_BASE_URL || '').replace(/\/+$/, '');
 const MAX_UPLOAD_BYTES = parseInt(process.env.MAX_UPLOAD_BYTES || `${64 * 1024 * 1024}`, 10);
+const DEEPSEEK_API_KEY = process.env.DEEPSEEK_API_KEY || '';
+const DEEPSEEK_BASE_URL = (process.env.DEEPSEEK_BASE_URL || 'https://api.deepseek.com').replace(/\/+$/, '');
+const DEEPSEEK_MODEL = process.env.DEEPSEEK_MODEL || 'deepseek-v4-flash';
+const DEEPSEEK_TIMEOUT_MS = parseInt(process.env.DEEPSEEK_TIMEOUT_MS || '45000', 10);
+const DEEPSEEK_MAX_TRANSCRIPT_CHARS = parseInt(process.env.DEEPSEEK_MAX_TRANSCRIPT_CHARS || '20000', 10);
 const DASH_SCOPE_TRANSCRIPTION_URL = 'https://dashscope.aliyuncs.com/api/v1/services/audio/asr/transcription';
 const DASH_SCOPE_TASK_URL = 'https://dashscope.aliyuncs.com/api/v1/tasks/';
+const PLAY_PREVIEW_ALGORITHM = 'smooth-play-preview-four-button-v16-spectral-profile';
+const PLAY_PREVIEW_MODES = new Set(['light', 'heavy', 'strong']);
+const MACHINE_NOISE_REFERENCE_ID = process.env.MACHINE_NOISE_REFERENCE_ID || '20260526_120803_cardputer-001_REC_0045';
 
 const DATA_ROOT = process.env.DATA_ROOT
   ? path.resolve(process.env.DATA_ROOT)
@@ -27,21 +41,69 @@ const PREVIEW_DIR = path.join(DATA_ROOT, 'previews');
 const TERMS_PATH = process.env.TERMS_PATH
   ? path.resolve(process.env.TERMS_PATH)
   : path.join(DATA_ROOT, 'terms.json');
+const DEEPSEEK_SETTINGS_PATH = process.env.DEEPSEEK_SETTINGS_PATH
+  ? path.resolve(process.env.DEEPSEEK_SETTINGS_PATH)
+  : path.join(DATA_ROOT, 'deepseek-settings.json');
 const processingJobs = new Set();
 const activeUploads = new Map();
 const deviceStatuses = new Map();
 
 const DEFAULT_PREVIEW_PARAMS = {
-  gain: 1,
-  lowpass: 72,
-  highMix: 0.45,
+  gain: 1.08,
+  rumbleHighpass: 0.91,
+  lowpass: 56,
+  highMix: 0.84,
   scratchRmsMax: 1500,
-  scratchDiffMin: 180,
-  scratchRatio: 110,
+  scratchDiffMin: 210,
+  scratchRatio: 125,
   holdFrames: 1,
   frameSamples: 256,
-  noiseRmsMax: 900,
-  noiseMix: 0.28
+  noiseRmsMax: 2000,
+  noiseMix: 0.2
+};
+
+const DEFAULT_ASR_PARAMS = {
+  gain: 1.25,
+  highpass: 0.985,
+  preEmphasis: 0.18,
+  noiseGateRms: 520,
+  noiseGateFloor: 0.18,
+  compressorThreshold: 5200,
+  compressorRatio: 3.2,
+  targetPeak: 26000,
+  limiter: 30000,
+  frameSamples: 320
+};
+
+const DEFAULT_DEEPSEEK_SETTINGS = {
+  enabled: true,
+  model: DEEPSEEK_MODEL,
+  temperature: 0.15,
+  maxTokens: 4096,
+  timeoutMs: DEEPSEEK_TIMEOUT_MS,
+  maxTranscriptChars: DEEPSEEK_MAX_TRANSCRIPT_CHARS,
+  thinkingDisabled: true,
+  fixedTerms: 'Cardputer、M5Stack、DashScope、Paraformer、flomo、ADPCM、WAV、Wi-Fi、SD 卡。',
+  systemPrompt: [
+    '你是中文语音转文字后处理器，只处理用户给出的 ASR 文本。',
+    '任务：修正常见同音错字、品牌/项目名、标点、断句和少量口头禅；保留说话者原意，不扩写、不编造没有说过的内容。',
+    '输出必须是 JSON 对象，不要 Markdown，不要代码块。字段：title, summary, todos, ideas, corrected_text。',
+    'title 不超过 24 个中文字符；summary 用 1 到 3 条短句，可含换行项目符号；todos 和 ideas 必须是字符串数组；corrected_text 是分段后的校正文。'
+  ].join('\n'),
+  userPrompt: [
+    '请根据下面的录音元信息、项目词典和 ASR 原始文本，生成适合写入 flomo 的整理结果。',
+    '只允许基于原文纠错和整理，不要加入原文没有的信息。',
+    '如果原文很短，摘要也保持简短。',
+    '如果 ASR 文本已经包含“说话人1：”“说话人2：”等角色标签，corrected_text 必须保留这些标签和对话顺序，不要把不同说话人的内容合并成一段；每一次说话人切换都必须单独换行。',
+    '如果对话中有人说“我是A/我叫A”，后续请优先用“A：”作为标签，不要写“说话人A：”。如果一句话里粘连了“我是A，我是B”，请拆成“A：我是A。”和“B：我是B。”两行。',
+    '如果某句以另一个参与者名字开头并在提问，例如“大宝贝为什么还不去洗澡呢？”，通常这是对那个人的称呼或提问，不代表说话人就是大宝贝；请结合上一下文纠正角色标签。',
+    '常见同音错词：上下文是“考虑全面”时，“考得/考的”通常应改为“考虑得”；上下文是责任压力时，“当多少职人/担多少职人”通常应改为“担多少责任”。',
+    '如果 ASR 原始文本主要是英文、日文或其他外语，corrected_text 必须先输出完整中文翻译；如果原文识别很破碎，请在不编造事实的前提下翻译可确认部分，并标注“部分语句疑似识别不清”。',
+    '外语内容不要只保留原文；可在中文翻译后追加“原文转写：...”以便核对。',
+    'todos 只放明确行动项，例如“要做/记得/下次/待办/提醒/需要去/准备/检查/联系/购买/发送/整理”。如果只是观点、解释、经历、判断或感受，todos 必须返回空数组。',
+    'ideas 放值得保留的观点、洞察、判断和灵感；不要把普通叙述强行写成待办。',
+    'corrected_text 要按语义分段，必须用空行分隔段落。长独白至少按主题分成 2 到 4 段，避免整段堆在一起。'
+  ].join('\n')
 };
 
 function sendJson(res, statusCode, payload) {
@@ -56,9 +118,18 @@ function sendJson(res, statusCode, payload) {
 function sendHtml(res, statusCode, body) {
   res.writeHead(statusCode, {
     'Content-Type': 'text/html; charset=utf-8',
-    'Content-Length': Buffer.byteLength(body)
+    'Content-Length': Buffer.byteLength(body),
+    'Cache-Control': 'no-store'
   });
   res.end(body);
+}
+
+function redirect(res, location) {
+  res.writeHead(302, {
+    Location: location,
+    'Cache-Control': 'no-store'
+  });
+  res.end();
 }
 
 function timingSafeEqualText(a, b) {
@@ -90,6 +161,39 @@ function normalizeRecordingName(name) {
   };
 }
 
+function slugForIdentity(value, fallback, maxLength = 80) {
+  const slug = String(value || '')
+    .trim()
+    .replace(/[^\w.-]+/g, '_')
+    .replace(/^_+|_+$/g, '')
+    .slice(0, maxLength);
+  return slug || fallback;
+}
+
+function compactTimestampForIdentity(value, fallbackDate = new Date()) {
+  const raw = String(value || '').trim();
+  const match = raw.match(/^(\d{4})-(\d{2})-(\d{2})[ T_](\d{2}):?(\d{2}):?(\d{2})/);
+  if (match) {
+    return `${match[1]}${match[2]}${match[3]}_${match[4]}${match[5]}${match[6]}`;
+  }
+
+  const d = fallbackDate instanceof Date && !Number.isNaN(fallbackDate.getTime()) ? fallbackDate : new Date();
+  const pad = (n) => String(n).padStart(2, '0');
+  return `${d.getUTCFullYear()}${pad(d.getUTCMonth() + 1)}${pad(d.getUTCDate())}_${pad(d.getUTCHours())}${pad(d.getUTCMinutes())}${pad(d.getUTCSeconds())}`;
+}
+
+function uploadIdentityFor(normalized, deviceId, rawRecordedAt, startedAt) {
+  const recordedPart = compactTimestampForIdentity(rawRecordedAt, new Date(startedAt));
+  const devicePart = slugForIdentity(deviceId, 'device', 40);
+  const sourcePart = slugForIdentity(normalized.id, 'recording', 80);
+  const id = `${recordedPart}_${devicePart}_${sourcePart}`.slice(0, 160).replace(/_+$/g, '');
+  return {
+    id,
+    recordingName: `${id}.wav`,
+    sourceRecordingName: normalized.recordingName
+  };
+}
+
 async function ensureRuntimeDirs() {
   await Promise.all([
     fsp.mkdir(UPLOAD_DIR, { recursive: true }),
@@ -109,6 +213,7 @@ async function handleHealth(_req, res) {
       publicBaseUrl: Boolean(PUBLIC_BASE_URL),
       asrFileToken: Boolean(ASR_FILE_TOKEN),
       dashScope: Boolean(DASHSCOPE_API_KEY),
+      deepSeek: Boolean(DEEPSEEK_API_KEY),
       flomo: Boolean(FLOMO_WEBHOOK_URL)
     },
     time: new Date().toISOString()
@@ -127,20 +232,50 @@ function transcriptMemoPathForId(id) {
   return path.join(TRANSCRIPT_DIR, `${id}.memo.txt`);
 }
 
-function previewPathForId(id) {
-  return path.join(PREVIEW_DIR, `${id}.play-preview.wav`);
+function transcriptDeepSeekPathForId(id) {
+  return path.join(TRANSCRIPT_DIR, `${id}.deepseek.json`);
 }
 
-function previewMetaPathForId(id) {
-  return path.join(PREVIEW_DIR, `${id}.play-preview.json`);
+function transcriptPolishedPathForId(id) {
+  return path.join(TRANSCRIPT_DIR, `${id}.polished.txt`);
+}
+
+function normalizePreviewMode(value) {
+  const mode = String(value || '').trim().toLowerCase();
+  return PLAY_PREVIEW_MODES.has(mode) ? mode : 'heavy';
+}
+
+function previewModeSuffix(mode) {
+  const normalized = normalizePreviewMode(mode);
+  return normalized === 'heavy' ? '' : `.${normalized}`;
+}
+
+function previewPathForId(id, mode = 'heavy') {
+  return path.join(PREVIEW_DIR, `${id}.play-preview${previewModeSuffix(mode)}.wav`);
+}
+
+function previewMetaPathForId(id, mode = 'heavy') {
+  return path.join(PREVIEW_DIR, `${id}.play-preview${previewModeSuffix(mode)}.json`);
 }
 
 function previewFeedbackPathForId(id) {
   return path.join(PREVIEW_DIR, `${id}.feedback.json`);
 }
 
+function asrCleanPathForId(id) {
+  return path.join(PREVIEW_DIR, `${id}.clean-for-asr.wav`);
+}
+
+function asrCleanMetaPathForId(id) {
+  return path.join(PREVIEW_DIR, `${id}.clean-for-asr.json`);
+}
+
 function audioPathForJob(job) {
   return job.uploadPath ? resolveDataPath(job.uploadPath) : path.join(UPLOAD_DIR, job.recordingName || '');
+}
+
+function machineNoiseReferencePath() {
+  return path.join(UPLOAD_DIR, `${MACHINE_NOISE_REFERENCE_ID}.wav`);
 }
 
 async function readJob(id) {
@@ -160,6 +295,7 @@ function summarizeJob(job) {
     phase: job.phase,
     deviceId: job.deviceId,
     recordingName: job.recordingName,
+    sourceRecordingName: job.sourceRecordingName,
     recordedAt: job.recordedAt,
     bytes: job.bytes,
     uploadEncoding: job.uploadEncoding,
@@ -375,6 +511,8 @@ function dashboardHtml() {
     input, button, select { height: 38px; border: 1px solid var(--line); background: var(--soft); color: var(--text); border-radius: 6px; padding: 0 10px; font: inherit; min-width: 0; }
     button { cursor: pointer; color: var(--ok); white-space: nowrap; }
     button:hover { border-color: var(--ok); }
+    button.primary { color: #061009; background: var(--ok); border-color: var(--ok); font-weight: 700; }
+    button.ghost { color: var(--muted); }
     button.danger { color: var(--bad); }
     button.small { height: 28px; padding: 0 8px; font-size: 12px; }
     main { padding: 16px 18px 24px; max-width: 1180px; margin: 0 auto; }
@@ -616,7 +754,7 @@ function dashboardLabHtml() {
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Cardputer Audio Lab</title>
+  <title>Cardputer Dashboard</title>
   <style>
     :root { color-scheme: dark; --bg:#070b09; --panel:#101613; --soft:#0c120f; --line:#21412f; --text:#e8fff0; --muted:#8fb09b; --ok:#40ff83; --bad:#ff5d5d; --warn:#ffd166; }
     * { box-sizing: border-box; }
@@ -641,6 +779,23 @@ function dashboardLabHtml() {
     .grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; }
     .grid.two { grid-template-columns: repeat(2, minmax(0, 1fr)); }
     .label { color: var(--muted); font-size: 12px; margin-bottom: 6px; }
+    .param { border: 1px solid #17251d; background: #080d0a; border-radius: 8px; padding: 10px; min-width: 0; }
+    .param input { width: 100%; }
+    .param-hint { color: var(--muted); font-size: 12px; line-height: 1.35; margin-top: 6px; }
+    .prompt-editor { min-height: 150px; font-family: ui-monospace, SFMono-Regular, Consolas, monospace; line-height: 1.45; }
+    .prompt-editor.large { min-height: 220px; }
+    .tune-note { border: 1px solid #243925; background: #0b130e; border-radius: 8px; padding: 10px; color: var(--muted); font-size: 13px; line-height: 1.45; margin-bottom: 10px; }
+    .mode-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; }
+    .mode-card { text-align: left; height: auto; min-height: 86px; padding: 12px; color: var(--text); border-radius: 8px; white-space: normal; }
+    .mode-card strong { display: block; color: var(--ok); font-size: 16px; margin-bottom: 6px; }
+    .mode-card span { display: block; color: var(--muted); font-size: 12px; line-height: 1.4; }
+    .mode-card.active { background: #102116; border-color: var(--ok); box-shadow: inset 0 0 0 1px rgba(64,255,131,.3); }
+    .tabbar { display: flex; gap: 8px; flex-wrap: wrap; }
+    .tab-button { min-width: 120px; }
+    .tab-button.active { background: var(--ok); border-color: var(--ok); color: #061009; font-weight: 700; }
+    details.advanced { border: 1px solid #17251d; border-radius: 8px; padding: 10px; background: #080d0a; margin-top: 10px; }
+    details.advanced summary { cursor: pointer; color: var(--muted); }
+    details.advanced[open] summary { margin-bottom: 10px; color: var(--ok); }
     .value { font-size: 16px; font-weight: 700; overflow-wrap: anywhere; }
     .muted { color: var(--muted); }
     .error, .bad { color: var(--bad); }
@@ -653,6 +808,10 @@ function dashboardLabHtml() {
     .section-title { display: flex; justify-content: space-between; gap: 10px; align-items: center; margin-bottom: 10px; }
     .section-title h2 { margin: 0; }
     .statusline, .actions { display: flex; gap: 8px; align-items: center; min-height: 24px; margin-top: 8px; color: var(--muted); font-size: 13px; flex-wrap: wrap; }
+    .listen-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; }
+    .listen-button { height: 76px; border-radius: 8px; font-size: 18px; font-weight: 800; color: var(--text); background: #0b1510; border-color: #28583a; white-space: normal; }
+    .listen-button.playing { color: #061009; background: var(--ok); border-color: var(--ok); box-shadow: 0 0 0 2px rgba(64,255,131,.35) inset; }
+    .audio-hidden { display: none; }
     .kv { display: grid; grid-template-columns: 120px minmax(0, 1fr); gap: 8px 12px; font-size: 14px; }
     .kv div:nth-child(odd) { color: var(--muted); }
     audio { width: 100%; margin-top: 8px; }
@@ -661,18 +820,18 @@ function dashboardLabHtml() {
     .hidden { display: none !important; }
     a { color: var(--ok); }
     @media (max-width: 980px) { .layout { grid-template-columns: 1fr; } .list { max-height: 360px; } .grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } .bar { grid-template-columns: 1fr auto auto; } }
-    @media (max-width: 560px) { .grid, .grid.two, .kv { grid-template-columns: 1fr; } .bar { grid-template-columns: 1fr 1fr; } #token { grid-column: 1 / -1; } }
+    @media (max-width: 560px) { .grid, .grid.two, .kv, .mode-grid, .listen-grid { grid-template-columns: 1fr; } .bar { grid-template-columns: 1fr 1fr; } #token { grid-column: 1 / -1; } }
   </style>
 </head>
 <body>
   <header><div class="head">
-    <div class="section-title"><h1>Cardputer Audio Lab</h1><a href="/dashboard">返回后台</a></div>
+    <div class="section-title"><h1>Cardputer Dashboard</h1><span class="muted">一个页面完成查看、试听、调参和重跑</span></div>
     <div class="bar">
       <input id="token" type="password" autocomplete="off" placeholder="UPLOAD_TOKEN">
       <button id="save">保存</button><button id="refresh">刷新列表</button><button id="clear">清除</button>
       <select id="limit"><option>20</option><option selected>50</option><option>100</option></select>
     </div>
-    <div class="statusline"><span id="stamp">等待登录</span><span id="error" class="error"></span><span>听完直接写备注；保存后告诉 Codex“按备注调参”。</span></div>
+    <div class="statusline"><span id="stamp">等待登录</span><span id="error" class="error"></span></div>
   </div></header>
   <main>
     <div class="layout">
@@ -690,38 +849,107 @@ function dashboardLabHtml() {
             <div><div class="label">时长</div><div id="duration" class="value">-</div></div>
             <div><div class="label">压缩倍率</div><div id="ratio" class="value">-</div></div>
           </div>
-          <div class="statusline"><a id="detailLink" class="hidden" href="#">打开详情页</a><span id="jobMeta"></span></div>
+          <div class="statusline"><span id="jobMeta"></span></div>
+        </div>
+        <div class="panel">
+          <div class="section-title"><h2>工作区</h2><span class="muted">把录音处理和转写设置分开</span></div>
+          <div class="tabbar">
+            <button id="tabAudio" class="tab-button active" type="button">录音处理</button>
+            <button id="tabTranscription" class="tab-button" type="button">转写设置</button>
+          </div>
+        </div>
+        <div class="panel transcription-section hidden">
+          <div class="section-title"><h2>DeepSeek 设置</h2><span id="deepSeekStatus" class="muted">输入 token 后读取。</span></div>
+          <div class="tune-note">这里控制语音转文字后的二次整理提示词。保存后立即用于下一次“重跑转写”或“重发 flomo”，不需要重启服务。</div>
+          <div class="grid">
+            <div class="param"><div class="label">启用</div><select id="deepSeekEnabled"><option value="true">启用</option><option value="false">停用</option></select><div class="param-hint">停用后只使用原来的规则整理。</div></div>
+            <div class="param"><div class="label">模型</div><input id="deepSeekModel" type="text"><div class="param-hint">默认 deepseek-v4-flash。</div></div>
+            <div class="param"><div class="label">温度</div><input id="deepSeekTemperature" type="number" min="0" max="2" step="0.05"><div class="param-hint">越低越稳。建议 0.1 到 0.3。</div></div>
+            <div class="param"><div class="label">最大输出 token</div><input id="deepSeekMaxTokens" type="number" min="512" max="16000" step="256"><div class="param-hint">长录音 memo 不够完整时调大。</div></div>
+            <div class="param"><div class="label">超时 ms</div><input id="deepSeekTimeoutMs" type="number" min="5000" max="180000" step="5000"><div class="param-hint">超时会回退规则整理。</div></div>
+            <div class="param"><div class="label">送入最大字符</div><input id="deepSeekMaxTranscriptChars" type="number" min="1000" max="100000" step="1000"><div class="param-hint">控制长文本成本和速度。</div></div>
+            <div class="param"><div class="label">Thinking</div><select id="deepSeekThinkingDisabled"><option value="true">关闭</option><option value="false">不强制关闭</option></select><div class="param-hint">后处理建议关闭，JSON 更稳。</div></div>
+            <div class="param"><div class="label">说话人数量</div><select id="speakerCount"><option value="0">不分角色</option><option value="2">2 人</option><option value="3">3 人</option><option value="4">4 人</option></select><div class="param-hint">也可在录音开头或结尾说“这是两人对话/按三个人分角色”，服务器会自动重跑。</div></div>
+          </div>
+          <div style="margin-top:10px"><div class="label">固定词</div><textarea id="deepSeekFixedTerms" class="prompt-editor" placeholder="Cardputer、M5Stack、DashScope..."></textarea></div>
+          <div style="margin-top:10px"><div class="label">系统提示词</div><textarea id="deepSeekSystemPrompt" class="prompt-editor large"></textarea></div>
+          <div style="margin-top:10px"><div class="label">用户提示词</div><textarea id="deepSeekUserPrompt" class="prompt-editor"></textarea></div>
+          <div class="actions"><button id="saveDeepSeekSettings">保存 DeepSeek 设置</button><button id="saveDeepSeekAndPolish">保存并仅重跑 DeepSeek</button><button id="saveDeepSeekAndReprocess">保存并重跑完整转写</button><button id="reloadDeepSeekSettings">重新读取</button><button id="resetDeepSeekDefaults">恢复默认文本</button></div>
         </div>
         <div id="labBody" class="hidden stack">
-          <div class="panel">
-            <div class="section-title"><h2>A/B 播放</h2><span id="audioStatus" class="muted"></span></div>
-            <div class="grid two"><div><div class="label">原始录音</div><audio id="rawAudio" controls></audio></div><div><div class="label">试听版</div><audio id="previewAudio" controls></audio></div></div>
-            <div class="actions"><button id="playRawStart">从头听原始</button><button id="playPreviewStart">从头听试听</button><button id="switchToPreview">同位置切到试听</button><button id="switchToRaw">同位置切回原始</button><button id="pauseAudio">暂停</button></div>
-          </div>
-          <div class="panel">
-            <div class="section-title"><h2>试听参数</h2><span id="previewStatus" class="muted"></span></div>
-            <div class="grid">
-              <div><div class="label">增益</div><input id="previewGain" type="number" step="0.1" min="0.2" max="3"></div>
-              <div><div class="label">低通系数</div><input id="previewLowpass" type="number" step="1" min="1" max="255"></div>
-              <div><div class="label">高频保留</div><input id="previewHighMix" type="number" step="0.05" min="0" max="1"></div>
-              <div><div class="label">命中保持帧</div><input id="previewHold" type="number" step="1" min="0" max="20"></div>
-              <div><div class="label">RMS 上限</div><input id="previewRms" type="number" step="50" min="0" max="10000"></div>
-              <div><div class="label">Diff 下限</div><input id="previewDiff" type="number" step="10" min="0" max="5000"></div>
-              <div><div class="label">Diff/RMS 比例</div><input id="previewRatio" type="number" step="5" min="1" max="512"></div>
-              <div><div class="label">帧采样数</div><input id="previewFrame" type="number" step="64" min="64" max="2048"></div>
-              <div><div class="label">底噪 RMS 上限</div><input id="previewNoiseRms" type="number" step="25" min="0" max="5000"></div>
-              <div><div class="label">底噪保留比例</div><input id="previewNoiseMix" type="number" step="0.05" min="0" max="1"></div>
+          <div class="panel audio-section">
+            <div class="section-title"><h2>试听对比</h2><span id="audioStatus" class="muted"></span></div>
+            <div class="listen-grid">
+              <button id="playRawStart" class="listen-button" type="button">原版</button>
+              <button id="playLightStart" class="listen-button" type="button">一档</button>
+              <button id="playHeavyStart" class="listen-button" type="button">二档</button>
+              <button id="playStrongStart" class="listen-button" type="button">三档</button>
             </div>
-            <div class="actions"><button id="presetGentle">轻柔</button><button id="presetDefault">默认</button><button id="presetStrong">强力</button><button id="generatePreview">生成并加载试听版</button><button id="loadPreview">只加载试听版</button></div>
+            <audio id="rawAudio" class="audio-hidden"></audio>
+            <audio id="lightAudio" class="audio-hidden"></audio>
+            <audio id="heavyAudio" class="audio-hidden"></audio>
+            <audio id="strongAudio" class="audio-hidden"></audio>
+            <audio id="asrAudio" class="audio-hidden"></audio>
+            <div class="statusline"><span id="listenHint">选中录音后会预加载四档；预加载完成后点击可同位置快速切换。</span></div>
+          </div>
+          <div class="panel audio-section">
+            <div class="section-title"><h2>试听参数</h2><span id="previewStatus" class="muted"></span></div>
+            <div class="tune-note">日常只用上面的原版、一档、二档、三档。下面参数仅用于后续调试。</div>
+            <div class="mode-grid">
+              <button class="mode-card active" id="modeAuto" type="button"><strong>二档</strong><span>默认试听档，比原声更削低频风扇声，同时尽量保住人声厚度。</span></button>
+              <button class="mode-card" id="modeVoice" type="button"><strong>三档</strong><span>处理更明显，适合测试“最干净”的上限。</span></button>
+              <button class="mode-card" id="modeAmbient" type="button"><strong>一档</strong><span>更接近原声，只做轻处理，适合自然听感。</span></button>
+            </div>
+            <div class="actions"><button id="generateModePreview">生成本机试听版</button><button id="generateModeAsr">生成识别对比版</button><button id="reprocessMode">用原始音频重跑转写</button></div>
+            <details class="advanced">
+              <summary>高级参数（一般不用打开）</summary>
+            <div class="tune-note">建议顺序：原版对比二档；差异不明显再听三档；如果人声变薄或发闷，退回一档。</div>
+            <div class="grid">
+              <div class="param"><div class="label">增益</div><input id="previewGain" type="number" step="0.1" min="0.2" max="3"><div class="param-hint">整体音量。大了更响，也更容易把底噪一起放大。</div></div>
+              <div class="param"><div class="label">低频削减</div><input id="previewRumbleHighpass" type="number" step="0.005" min="0" max="0.999"><div class="param-hint">削电脑风扇/空调/桌面低沉轰鸣。小=削得多但人声变薄；大=更保留原声。</div></div>
+              <div class="param"><div class="label">低通系数</div><input id="previewLowpass" type="number" step="1" min="1" max="255"><div class="param-hint">刮擦命中时怎么削尖声。小=更柔但更闷；大=更清楚但刺声更多。</div></div>
+              <div class="param"><div class="label">高频保留</div><input id="previewHighMix" type="number" step="0.05" min="0" max="1"><div class="param-hint">刮擦命中时保留多少亮度。大=自然清晰；小=更降刺但人声会闷。</div></div>
+              <div class="param"><div class="label">命中保持帧</div><input id="previewHold" type="number" step="1" min="0" max="20"><div class="param-hint">命中刮擦后延续处理多久。大=更稳；太大会拖尾、发闷。</div></div>
+              <div class="param"><div class="label">RMS 上限</div><input id="previewRms" type="number" step="50" min="0" max="10000"><div class="param-hint">只处理低音量刮擦。大=更容易命中；太大会误伤轻声人声。</div></div>
+              <div class="param"><div class="label">Diff 下限</div><input id="previewDiff" type="number" step="10" min="0" max="5000"><div class="param-hint">高频变化多大才算刮擦。小=更敏感；大=只抓明显刮擦。</div></div>
+              <div class="param"><div class="label">Diff/RMS 比例</div><input id="previewRatio" type="number" step="5" min="1" max="512"><div class="param-hint">刮擦“尖锐程度”门槛。小=更容易处理；大=更保守。</div></div>
+              <div class="param"><div class="label">帧采样数</div><input id="previewFrame" type="number" step="64" min="64" max="2048"><div class="param-hint">分析窗口大小。小=反应快但可能抖；大=更平滑但反应慢。</div></div>
+              <div class="param"><div class="label">底噪 RMS 上限</div><input id="previewNoiseRms" type="number" step="25" min="0" max="5000"><div class="param-hint">低于多少算底噪。大=降噪更多；太大会把轻声压没。</div></div>
+              <div class="param"><div class="label">底噪保留比例</div><input id="previewNoiseMix" type="number" step="0.05" min="0" max="1"><div class="param-hint">底噪保留多少。大=自然不卡；小=更安静但容易一抽一抽。</div></div>
+            </div>
+            <div class="actions"><button id="presetGentle">一档</button><button id="presetDefault">二档</button><button id="presetStrong">三档</button><button id="generatePreview">生成并加载试听版</button><button id="loadPreview">只加载试听版</button></div>
+            </details>
             <div id="previewMeta" class="kv" style="margin-top:10px"></div>
           </div>
-          <div class="panel">
+          <div class="panel transcription-section hidden">
+            <div class="section-title"><h2>ASR 识别参数</h2><span id="asrStatus" class="muted"></span></div>
+            <div class="tune-note">识别版会按上面选择的模式自动生成。这里的高级参数只用于排查特殊录音，不建议日常手调。</div>
+            <details class="advanced">
+              <summary>高级识别参数（一般不用打开）</summary>
+            <div class="tune-note">这一组主要给转写用，不一定好听。一般只需要动“增益”和“噪声门 RMS”；如果转写漏字，先把噪声门 RMS 调低或门限保留调高。</div>
+            <div class="grid">
+              <div class="param"><div class="label">增益</div><input id="asrGain" type="number" step="0.05" min="0.2" max="4"><div class="param-hint">给转写版提音量。大了更容易识别轻声，也会放大底噪。</div></div>
+              <div class="param"><div class="label">高通系数</div><input id="asrHighpass" type="number" step="0.001" min="0" max="0.999"><div class="param-hint">削低频轰隆声。接近 1 更保留低频；小一点削得更多。</div></div>
+              <div class="param"><div class="label">预加重</div><input id="asrPreEmphasis" type="number" step="0.05" min="0" max="0.95"><div class="param-hint">突出字头和清晰度。大了更清楚，也可能更尖。</div></div>
+              <div class="param"><div class="label">噪声门 RMS</div><input id="asrNoiseGateRms" type="number" step="20" min="0" max="5000"><div class="param-hint">低于多少当噪声压下去。大=更干净；太大会漏掉轻声。</div></div>
+              <div class="param"><div class="label">门限保留</div><input id="asrNoiseGateFloor" type="number" step="0.05" min="0" max="1"><div class="param-hint">被判噪声时还保留多少。大=不容易断字；小=更安静。</div></div>
+              <div class="param"><div class="label">压缩阈值</div><input id="asrCompressorThreshold" type="number" step="100" min="500" max="24000"><div class="param-hint">多大声音开始压缩。小=大小声更平均；太小会闷。</div></div>
+              <div class="param"><div class="label">压缩比</div><input id="asrCompressorRatio" type="number" step="0.1" min="1" max="12"><div class="param-hint">压缩强度。大=大声被压更多；太大会不自然。</div></div>
+              <div class="param"><div class="label">目标峰值</div><input id="asrTargetPeak" type="number" step="500" min="4000" max="32000"><div class="param-hint">处理后目标音量峰值。大=更响；太大容易刺耳。</div></div>
+              <div class="param"><div class="label">限幅</div><input id="asrLimiter" type="number" step="500" min="4000" max="32767"><div class="param-hint">最高不超过多少，防爆音。一般不用动。</div></div>
+              <div class="param"><div class="label">帧采样数</div><input id="asrFrameSamples" type="number" step="80" min="80" max="2048"><div class="param-hint">噪声判断窗口。小=反应快；大=更平滑。</div></div>
+            </div>
+            <div class="actions"><button id="asrPresetDefault">ASR 默认</button><button id="generateAsrClean">生成并加载识别对比版</button><button id="loadAsrClean">只加载识别对比版</button><button id="reprocessFromAsr">实验：用识别版转写</button></div>
+            </details>
+            <div id="asrMeta" class="kv" style="margin-top:10px"></div>
+          </div>
+          <div class="panel audio-section">
             <div class="section-title"><h2>听感记录</h2><span id="feedbackStatus" class="muted"></span></div>
             <div class="grid two"><div><div class="label">结论</div><select id="feedbackRating"><option value="">选择结论</option><option value="better">更好</option><option value="worse">更差</option><option value="mixed">有好有坏</option><option value="neutral">差不多</option></select></div><div><div class="label">保存</div><button id="saveFeedback">保存听感记录</button></div></div>
             <div style="margin-top:10px"><div class="label">备注</div><textarea id="feedbackNote" placeholder="例如：默认版刮擦少了，但人声闷；轻柔版更自然。"></textarea></div>
             <div id="feedbackList"></div>
           </div>
-          <div class="panel">
+          <div class="panel transcription-section hidden">
             <div class="section-title"><h2>转写 / memo</h2><span class="muted">辅助判断</span></div>
             <div class="grid two"><div><div class="label">转写</div><pre id="transcript">-</pre></div><div><div class="label">flomo memo</div><pre id="memo">-</pre></div></div>
           </div>
@@ -739,46 +967,258 @@ function dashboardLabHtml() {
     const tokenInput = $('token');
     let jobs = [];
     let currentId = '';
-    const defaultPreviewParams = { gain: 1, lowpass: 72, highMix: 0.45, scratchRmsMax: 1500, scratchDiffMin: 180, scratchRatio: 110, holdFrames: 1, frameSamples: 256, noiseRmsMax: 900, noiseMix: 0.28 };
-    tokenInput.value = localStorage.getItem('cardputerUploadToken') || '';
-    $('save').onclick = () => { tokenInput.value = normalizeToken(tokenInput.value); localStorage.setItem('cardputerUploadToken', tokenInput.value); loadJobs(); };
+    let selectionSeq = 0;
+    let activeTab = 'audio';
+    let activeListenAudioId = '';
+    const initialJobId = new URLSearchParams(location.search).get('job') || '';
+    const defaultPreviewParams = { gain: 1.08, rumbleHighpass: 0.91, lowpass: 56, highMix: 0.84, scratchRmsMax: 1500, scratchDiffMin: 210, scratchRatio: 125, holdFrames: 1, frameSamples: 256, noiseRmsMax: 2000, noiseMix: 0.2 };
+    const defaultAsrParams = { gain: 1.25, highpass: 0.985, preEmphasis: 0.18, noiseGateRms: 520, noiseGateFloor: 0.18, compressorThreshold: 5200, compressorRatio: 3.2, targetPeak: 26000, limiter: 30000, frameSamples: 320 };
+    const defaultDeepSeekSettings = ${JSON.stringify(DEFAULT_DEEPSEEK_SETTINGS)};
+    const currentPreviewAlgorithm = ${JSON.stringify(PLAY_PREVIEW_ALGORITHM)};
+    let currentMode = 'auto';
+    const audioModePresets = {
+      auto: {
+        label: '二档',
+        preview: defaultPreviewParams,
+        asr: defaultAsrParams
+      },
+      voice: {
+        label: '三档',
+        preview: { gain: 1.12, rumbleHighpass: 0.91, lowpass: 54, highMix: 0.8, scratchRmsMax: 1600, scratchDiffMin: 200, scratchRatio: 125, holdFrames: 1, frameSamples: 256, noiseRmsMax: 3400, noiseMix: 0.11 },
+        asr: { gain: 1.35, highpass: 0.982, preEmphasis: 0.2, noiseGateRms: 430, noiseGateFloor: 0.26, compressorThreshold: 4800, compressorRatio: 3, targetPeak: 25500, limiter: 30000, frameSamples: 320 }
+      },
+      ambient: {
+        label: '一档',
+        preview: { gain: 1.03, rumbleHighpass: 0.95, lowpass: 62, highMix: 0.88, scratchRmsMax: 1100, scratchDiffMin: 300, scratchRatio: 160, holdFrames: 0, frameSamples: 256, noiseRmsMax: 1200, noiseMix: 0.48 },
+        asr: { gain: 1.15, highpass: 0.992, preEmphasis: 0.12, noiseGateRms: 220, noiseGateFloor: 0.45, compressorThreshold: 7000, compressorRatio: 2, targetPeak: 24000, limiter: 30000, frameSamples: 320 }
+      }
+    };
+    const previewListenModes = {
+      light: { label: '一档', preset: audioModePresets.ambient.preview, audioId: 'lightAudio', buttonId: 'playLightStart' },
+      heavy: { label: '二档', preset: audioModePresets.auto.preview, audioId: 'heavyAudio', buttonId: 'playHeavyStart' },
+      strong: { label: '三档', preset: audioModePresets.voice.preview, audioId: 'strongAudio', buttonId: 'playStrongStart' }
+    };
+    function getStoredToken() { try { return localStorage.getItem('cardputerUploadToken') || ''; } catch { return ''; } }
+    function setStoredToken(value) { try { localStorage.setItem('cardputerUploadToken', value); return true; } catch { return false; } }
+    function removeStoredToken() { try { localStorage.removeItem('cardputerUploadToken'); } catch {} }
+    tokenInput.value = getStoredToken();
+    $('save').onclick = () => {
+      tokenInput.value = normalizeToken(tokenInput.value);
+      const saved = setStoredToken(tokenInput.value);
+      $('stamp').textContent = saved ? '已保存，正在读取列表...' : '已使用当前 token，正在读取列表...';
+      loadJobs();
+    };
+    tokenInput.addEventListener('keydown', (event) => {
+      if (event.key === 'Enter') $('save').click();
+    });
     $('refresh').onclick = () => loadJobs();
     $('reloadJobs').onclick = () => loadJobs();
     $('statusFilter').onchange = () => loadJobs();
     $('limit').onchange = () => loadJobs();
-    $('clear').onclick = () => { localStorage.removeItem('cardputerUploadToken'); tokenInput.value = ''; jobs = []; renderJobs(); };
-    $('presetGentle').onclick = () => setPreviewParams({ gain: 1, lowpass: 56, highMix: 0.65, scratchRmsMax: 1100, scratchDiffMin: 220, scratchRatio: 130, holdFrames: 0, frameSamples: 256, noiseRmsMax: 650, noiseMix: 0.45 });
+    $('clear').onclick = () => { removeStoredToken(); tokenInput.value = ''; jobs = []; currentId = ''; renderJobs(); $('stamp').textContent = '等待登录'; };
+    $('modeAuto').onclick = () => setMode('auto');
+    $('modeVoice').onclick = () => setMode('voice');
+    $('modeAmbient').onclick = () => setMode('ambient');
+    $('generateModePreview').onclick = () => generatePreview();
+    $('generateModeAsr').onclick = () => generateAsrClean();
+    $('reprocessMode').onclick = async () => { await generateAsrClean(); await postJob('process', 'raw'); };
+    $('presetGentle').onclick = () => setPreviewParams(audioModePresets.ambient.preview);
     $('presetDefault').onclick = () => setPreviewParams(defaultPreviewParams);
-    $('presetStrong').onclick = () => setPreviewParams({ gain: 1, lowpass: 96, highMix: 0.28, scratchRmsMax: 1900, scratchDiffMin: 150, scratchRatio: 92, holdFrames: 2, frameSamples: 256, noiseRmsMax: 1200, noiseMix: 0.18 });
+    $('presetStrong').onclick = () => setPreviewParams(audioModePresets.voice.preview);
     $('generatePreview').onclick = () => generatePreview();
     $('loadPreview').onclick = () => loadPreviewAudio();
+    $('asrPresetDefault').onclick = () => setAsrParams(defaultAsrParams);
+    $('generateAsrClean').onclick = () => generateAsrClean();
+    $('loadAsrClean').onclick = () => loadAsrCleanAudio();
+    $('reprocessFromAsr').onclick = () => {
+      if (confirm('识别版是实验对比路径，可能让转写变差。确认要用它覆盖最终转写吗？')) {
+        postJob('process', 'clean-for-asr');
+      }
+    };
     $('saveFeedback').onclick = () => saveFeedback();
-    $('playRawStart').onclick = () => playOnly($('rawAudio'), 0);
-    $('playPreviewStart').onclick = () => playOnly($('previewAudio'), 0);
-    $('switchToPreview').onclick = () => playOnly($('previewAudio'), $('rawAudio').currentTime || $('previewAudio').currentTime || 0);
-    $('switchToRaw').onclick = () => playOnly($('rawAudio'), $('previewAudio').currentTime || $('rawAudio').currentTime || 0);
-    $('pauseAudio').onclick = () => pauseBoth();
-    setPreviewParams(defaultPreviewParams);
+    $('saveDeepSeekSettings').onclick = () => saveDeepSeekSettings();
+    $('saveDeepSeekAndPolish').onclick = async () => { const ok = await saveDeepSeekSettings(); if (ok) await postJob('polish'); };
+    $('saveDeepSeekAndReprocess').onclick = async () => { const ok = await saveDeepSeekSettings(); if (ok) await postJob('process'); };
+    $('reloadDeepSeekSettings').onclick = () => loadDeepSeekSettings();
+    $('resetDeepSeekDefaults').onclick = () => setDeepSeekSettings(defaultDeepSeekSettings);
+    $('tabAudio').onclick = () => setActiveTab('audio');
+    $('tabTranscription').onclick = () => setActiveTab('transcription');
+    $('playRawStart').onclick = () => playRawButton();
+    $('playLightStart').onclick = () => playPreviewButton('light');
+    $('playHeavyStart').onclick = () => playPreviewButton('heavy');
+    $('playStrongStart').onclick = () => playPreviewButton('strong');
+    function setActiveTab(tab) {
+      activeTab = tab === 'transcription' ? 'transcription' : 'audio';
+      $('tabAudio').classList.toggle('active', activeTab === 'audio');
+      $('tabTranscription').classList.toggle('active', activeTab === 'transcription');
+      document.querySelectorAll('.audio-section').forEach((el) => el.classList.toggle('hidden', activeTab !== 'audio'));
+      document.querySelectorAll('.transcription-section').forEach((el) => el.classList.toggle('hidden', activeTab !== 'transcription'));
+    }
+    setActiveTab('audio');
+    setMode('auto');
     function token() { const value = normalizeToken(tokenInput.value); if (tokenInput.value && tokenInput.value !== value) tokenInput.value = value; return value; }
     function statusClass(status) { if (status === 'done' || status === 'uploaded' || status === 'transcribed') return 'ok'; if (String(status || '').includes('failed')) return 'bad'; return 'warn'; }
     function statusPill(status) { return '<span class="pill ' + statusClass(status) + '">' + esc(status || '-') + '</span>'; }
-    function setPreviewParams(params) { const p = { ...defaultPreviewParams, ...(params || {}) }; $('previewGain').value = p.gain; $('previewLowpass').value = p.lowpass; $('previewHighMix').value = p.highMix; $('previewHold').value = p.holdFrames; $('previewRms').value = p.scratchRmsMax; $('previewDiff').value = p.scratchDiffMin; $('previewRatio').value = p.scratchRatio; $('previewFrame').value = p.frameSamples; $('previewNoiseRms').value = p.noiseRmsMax; $('previewNoiseMix').value = p.noiseMix; }
-    function previewParamsFromForm() { return { gain: Number($('previewGain').value), lowpass: Number($('previewLowpass').value), highMix: Number($('previewHighMix').value), holdFrames: Number($('previewHold').value), scratchRmsMax: Number($('previewRms').value), scratchDiffMin: Number($('previewDiff').value), scratchRatio: Number($('previewRatio').value), frameSamples: Number($('previewFrame').value), noiseRmsMax: Number($('previewNoiseRms').value), noiseMix: Number($('previewNoiseMix').value) }; }
+    function setMode(mode) {
+      const preset = audioModePresets[mode] || audioModePresets.auto;
+      currentMode = mode in audioModePresets ? mode : 'auto';
+      document.querySelectorAll('.mode-card').forEach((button) => button.classList.remove('active'));
+      const active = currentMode === 'voice' ? $('modeVoice') : (currentMode === 'ambient' ? $('modeAmbient') : $('modeAuto'));
+      if (active) active.classList.add('active');
+      setPreviewParams(preset.preview);
+      setAsrParams(preset.asr);
+      $('previewStatus').textContent = preset.label + '模式：用于本机播放的轻处理参数已套用。';
+      $('asrStatus').textContent = preset.label + '模式：用于转写的识别参数已套用。';
+    }
+    function setPreviewParams(params) { const p = { ...defaultPreviewParams, ...(params || {}) }; $('previewGain').value = p.gain; $('previewRumbleHighpass').value = p.rumbleHighpass; $('previewLowpass').value = p.lowpass; $('previewHighMix').value = p.highMix; $('previewHold').value = p.holdFrames; $('previewRms').value = p.scratchRmsMax; $('previewDiff').value = p.scratchDiffMin; $('previewRatio').value = p.scratchRatio; $('previewFrame').value = p.frameSamples; $('previewNoiseRms').value = p.noiseRmsMax; $('previewNoiseMix').value = p.noiseMix; }
+    function previewParamsFromForm() { return { gain: Number($('previewGain').value), rumbleHighpass: Number($('previewRumbleHighpass').value), lowpass: Number($('previewLowpass').value), highMix: Number($('previewHighMix').value), holdFrames: Number($('previewHold').value), scratchRmsMax: Number($('previewRms').value), scratchDiffMin: Number($('previewDiff').value), scratchRatio: Number($('previewRatio').value), frameSamples: Number($('previewFrame').value), noiseRmsMax: Number($('previewNoiseRms').value), noiseMix: Number($('previewNoiseMix').value) }; }
+    function setAsrParams(params) { const p = { ...defaultAsrParams, ...(params || {}) }; $('asrGain').value = p.gain; $('asrHighpass').value = p.highpass; $('asrPreEmphasis').value = p.preEmphasis; $('asrNoiseGateRms').value = p.noiseGateRms; $('asrNoiseGateFloor').value = p.noiseGateFloor; $('asrCompressorThreshold').value = p.compressorThreshold; $('asrCompressorRatio').value = p.compressorRatio; $('asrTargetPeak').value = p.targetPeak; $('asrLimiter').value = p.limiter; $('asrFrameSamples').value = p.frameSamples; }
+    function asrParamsFromForm() { return { gain: Number($('asrGain').value), highpass: Number($('asrHighpass').value), preEmphasis: Number($('asrPreEmphasis').value), noiseGateRms: Number($('asrNoiseGateRms').value), noiseGateFloor: Number($('asrNoiseGateFloor').value), compressorThreshold: Number($('asrCompressorThreshold').value), compressorRatio: Number($('asrCompressorRatio').value), targetPeak: Number($('asrTargetPeak').value), limiter: Number($('asrLimiter').value), frameSamples: Number($('asrFrameSamples').value) }; }
+    function setDeepSeekSettings(settings) { const s = { ...defaultDeepSeekSettings, ...(settings || {}) }; $('deepSeekEnabled').value = String(s.enabled !== false); $('deepSeekModel').value = s.model || ''; $('deepSeekTemperature').value = s.temperature; $('deepSeekMaxTokens').value = s.maxTokens; $('deepSeekTimeoutMs').value = s.timeoutMs; $('deepSeekMaxTranscriptChars').value = s.maxTranscriptChars; $('deepSeekThinkingDisabled').value = String(s.thinkingDisabled !== false); $('deepSeekFixedTerms').value = s.fixedTerms || ''; $('deepSeekSystemPrompt').value = s.systemPrompt || ''; $('deepSeekUserPrompt').value = s.userPrompt || ''; }
+    function deepSeekSettingsFromForm() { return { enabled: $('deepSeekEnabled').value === 'true', model: $('deepSeekModel').value, temperature: Number($('deepSeekTemperature').value), maxTokens: Number($('deepSeekMaxTokens').value), timeoutMs: Number($('deepSeekTimeoutMs').value), maxTranscriptChars: Number($('deepSeekMaxTranscriptChars').value), thinkingDisabled: $('deepSeekThinkingDisabled').value === 'true', fixedTerms: $('deepSeekFixedTerms').value, systemPrompt: $('deepSeekSystemPrompt').value, userPrompt: $('deepSeekUserPrompt').value }; }
+    async function loadDeepSeekSettings() { const uploadToken = token(); if (!uploadToken) { setDeepSeekSettings(defaultDeepSeekSettings); $('deepSeekStatus').textContent = '输入 token 后读取。'; return; } $('deepSeekStatus').textContent = '正在读取设置...'; try { const res = await fetch('/api/deepseek-settings', { headers: { 'X-Upload-Token': uploadToken } }); const data = await res.json(); if (!res.ok) throw new Error(data.error || 'HTTP ' + res.status); setDeepSeekSettings(data.settings); $('deepSeekStatus').textContent = '已读取 ' + fmtTime(data.time); } catch (error) { $('deepSeekStatus').textContent = error.message === 'invalid upload token' ? 'token 不正确' : error.message; } }
+    async function saveDeepSeekSettings() { const uploadToken = token(); if (!uploadToken) { $('deepSeekStatus').textContent = '先输入 token。'; return false; } $('deepSeekStatus').textContent = '正在保存设置...'; try { const res = await fetch('/api/deepseek-settings', { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Upload-Token': uploadToken }, body: JSON.stringify({ settings: deepSeekSettingsFromForm() }) }); const data = await res.json(); if (!res.ok) throw new Error(data.error || 'HTTP ' + res.status); setDeepSeekSettings(data.settings); $('deepSeekStatus').textContent = '已保存 ' + fmtTime(data.time); return true; } catch (error) { $('deepSeekStatus').textContent = error.message === 'invalid upload token' ? 'token 不正确' : error.message; return false; } }
     function kv(rows) { return rows.map(([k, v]) => '<div>' + esc(k) + '</div><div>' + (v || '-') + '</div>').join(''); }
     function ratingLabel(value) { return ({ better: '更好', worse: '更差', mixed: '有好有坏', neutral: '差不多' })[value] || value || '-'; }
-    function renderPreviewMeta(preview) { if (!preview) { $('previewMeta').innerHTML = ''; return; } $('previewMeta').innerHTML = kv([['处理帧', esc((preview.metrics?.processedFrames ?? '-') + ' / ' + (preview.metrics?.totalFrames ?? '-'))], ['摩擦命中帧', esc(preview.metrics?.detectedFrames ?? '-')], ['底噪处理帧', esc(preview.metrics?.noiseFrames ?? '-')], ['时长', fmtDuration(preview.metrics?.durationSec)], ['生成时间', fmtTime(preview.createdAt)]]); }
+    function renderPreviewMeta(preview) { if (!preview) { $('previewMeta').innerHTML = ''; return; } $('previewMeta').innerHTML = kv([['处理帧', esc((preview.metrics?.processedFrames ?? '-') + ' / ' + (preview.metrics?.totalFrames ?? '-'))], ['摩擦命中帧', esc(preview.metrics?.detectedFrames ?? '-')], ['底噪处理帧', esc(preview.metrics?.noiseFrames ?? '-')], ['底噪估计', esc(preview.metrics?.noiseFloorRms ?? '-')], ['自适应门限', esc(preview.metrics?.adaptiveNoiseRms ?? '-')], ['时长', fmtDuration(preview.metrics?.durationSec)], ['生成时间', fmtTime(preview.createdAt)]]); }
+    function renderAsrMeta(asrClean) { if (!asrClean) { $('asrMeta').innerHTML = ''; return; } $('asrMeta').innerHTML = kv([['门限处理帧', esc((asrClean.metrics?.gatedFrames ?? '-') + ' / ' + (asrClean.metrics?.totalFrames ?? '-'))], ['压缩样本', esc(asrClean.metrics?.compressedSamples ?? '-')], ['限幅样本', esc(asrClean.metrics?.limitedSamples ?? '-')], ['峰值变化', esc((asrClean.metrics?.inputPeak ?? '-') + ' → ' + (asrClean.metrics?.outputPeak ?? '-'))], ['归一化增益', esc(asrClean.metrics?.normalizeGain ?? '-')], ['时长', fmtDuration(asrClean.metrics?.durationSec)], ['生成时间', fmtTime(asrClean.createdAt)]]); }
     function renderFeedback(items) { const list = Array.isArray(items) ? items : []; $('feedbackList').innerHTML = list.length ? list.map((item) => { const metrics = item.metrics ? '处理 ' + (item.metrics.processedFrames ?? '-') + '/' + (item.metrics.totalFrames ?? '-') + '，命中 ' + (item.metrics.detectedFrames ?? '-') : ''; return '<div class="feedback-item"><strong>' + esc(ratingLabel(item.rating)) + '</strong><span class="muted"> · ' + esc(fmtTime(item.createdAt)) + '</span><div>' + esc(item.note || '-') + '</div><div class="muted">' + esc(metrics) + '</div></div>'; }).join('') : '<div class="muted">还没有听感记录。</div>'; }
-    function renderJobs() { $('listCount').textContent = jobs.length ? jobs.length + ' 条' : '-'; $('jobs').innerHTML = jobs.length ? jobs.map((job) => { const encoding = job.uploadEncoding === 'ima-adpcm' ? 'ADPCM' : 'WAV'; return '<div class="job ' + (job.id === currentId ? 'active' : '') + '" data-id="' + esc(job.id) + '"><div class="job-title"><span>' + esc(job.id) + '</span>' + statusPill(job.status) + '</div><div class="muted">' + esc(job.recordingName || '-') + ' · ' + encoding + ' · ' + fmtBytes(job.bytes) + '</div><div class="muted">' + esc(job.recordedAt || '-') + '</div></div>'; }).join('') : '<div class="muted">没有任务。</div>'; document.querySelectorAll('.job[data-id]').forEach((el) => { el.onclick = () => selectJob(el.dataset.id); }); }
-    function pauseBoth() { $('rawAudio').pause(); $('previewAudio').pause(); }
-    async function playOnly(audio, at) { pauseBoth(); if (!audio.src) return; const time = Number.isFinite(at) ? Math.max(0, at) : 0; if (Number.isFinite(audio.duration) && audio.duration > 0) audio.currentTime = Math.min(time, Math.max(0, audio.duration - 0.05)); else audio.currentTime = time; await audio.play().catch(() => {}); }
-    async function loadJobs() { const uploadToken = token(); if (!uploadToken) { $('stamp').textContent = '等待登录'; return; } $('stamp').textContent = '正在读取列表...'; $('error').textContent = ''; try { const params = new URLSearchParams({ limit: $('limit').value }); const status = $('statusFilter').value; if (status) params.set('status', status); const res = await fetch('/api/dashboard?' + params.toString(), { headers: { 'X-Upload-Token': uploadToken } }); const data = await res.json(); if (!res.ok) throw new Error(data.error || 'HTTP ' + res.status); jobs = data.jobs.jobs || []; $('stamp').textContent = '更新 ' + fmtTime(data.time); renderJobs(); if (!currentId && jobs[0]) await selectJob(jobs[0].id); } catch (error) { $('error').textContent = error.message === 'invalid upload token' ? 'token 不正确' : error.message; } }
-    function revokeAudio(audio) { if (audio.dataset.url) URL.revokeObjectURL(audio.dataset.url); audio.dataset.url = ''; audio.removeAttribute('src'); }
-    async function selectJob(id) { currentId = id; renderJobs(); $('labBody').classList.remove('hidden'); $('currentTitle').textContent = id; $('currentStatus').textContent = '正在读取...'; revokeAudio($('rawAudio')); revokeAudio($('previewAudio')); try { const res = await fetch('/api/jobs/' + encodeURIComponent(id), { headers: { 'X-Upload-Token': token() } }); const data = await res.json(); if (!res.ok) throw new Error(data.error || 'HTTP ' + res.status); renderJob(data); await loadRawAudio(); if (data.files?.preview) await loadPreviewAudio(false); } catch (error) { $('currentStatus').textContent = error.message; } }
-    function renderJob(data) { const job = data.job; const wav = data.files?.audio?.wav || {}; const encoding = job.uploadEncoding === 'ima-adpcm' ? 'ADPCM' : 'WAV'; $('currentTitle').textContent = job.id; $('currentStatus').innerHTML = statusPill(job.status); $('encoding').textContent = encoding; $('bytes').textContent = fmtBytes(job.bytes); $('duration').textContent = fmtDuration(wav.durationSec); $('ratio').textContent = job.compressionRatio ? job.compressionRatio + 'x' : '-'; $('jobMeta').textContent = (job.recordedAt || '-') + ' · ' + (job.deviceId || '-'); $('detailLink').href = '/dashboard/jobs/' + encodeURIComponent(job.id); $('detailLink').classList.remove('hidden'); $('transcript').textContent = data.transcriptText || '还没有转写文本。'; $('memo').textContent = data.memoText || '还没有 flomo memo。'; if (data.preview?.params) { setPreviewParams(data.preview.params); renderPreviewMeta(data.preview); $('previewStatus').textContent = '已读取上次试听参数。'; } else { setPreviewParams(defaultPreviewParams); renderPreviewMeta(null); $('previewStatus').textContent = '还没有试听版。'; } renderFeedback(data.previewFeedback); }
-    async function loadAudioTo(url, audio, statusEl, successText) { const res = await fetch(url, { headers: { 'X-Upload-Token': token() } }); if (!res.ok) { const data = await res.json().catch(() => ({})); throw new Error(data.error || 'HTTP ' + res.status); } const blob = await res.blob(); revokeAudio(audio); const objectUrl = URL.createObjectURL(blob); audio.dataset.url = objectUrl; audio.src = objectUrl; if (statusEl) statusEl.textContent = successText; }
-    async function loadRawAudio() { $('audioStatus').textContent = '正在加载原始录音...'; try { await loadAudioTo('/api/jobs/' + encodeURIComponent(currentId) + '/audio', $('rawAudio'), $('audioStatus'), '原始录音已加载。'); } catch (error) { $('audioStatus').textContent = error.message; } }
-    async function loadPreviewAudio(showStatus = true) { if (showStatus) $('previewStatus').textContent = '正在加载试听版...'; try { await loadAudioTo('/api/jobs/' + encodeURIComponent(currentId) + '/preview/audio?t=' + Date.now(), $('previewAudio'), $('previewStatus'), '试听版已加载。'); } catch (error) { $('previewStatus').textContent = error.message; } }
-    async function generatePreview() { if (!currentId) return; $('previewStatus').textContent = '正在生成试听版...'; try { const res = await fetch('/api/jobs/' + encodeURIComponent(currentId) + '/preview', { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Upload-Token': token() }, body: JSON.stringify({ params: previewParamsFromForm() }) }); const data = await res.json(); if (!res.ok) throw new Error(data.error || 'HTTP ' + res.status); renderPreviewMeta(data.preview); await loadPreviewAudio(false); await selectJob(currentId); } catch (error) { $('previewStatus').textContent = error.message; } }
+    function renderJobs() {
+      $('listCount').textContent = jobs.length ? jobs.length + ' 条' : '-';
+      $('jobs').innerHTML = jobs.length ? jobs.map((job) => {
+        const encoding = job.uploadEncoding === 'ima-adpcm' ? 'ADPCM' : 'WAV';
+        const reason = job.lastError || job.pendingReason || job.recordedAt || '-';
+        return '<div class="job ' + (job.id === currentId ? 'active' : '') + '" data-id="' + esc(job.id) + '">' +
+          '<div class="job-title"><span>' + esc(job.id) + '</span>' + statusPill(job.status) + '</div>' +
+          '<div class="muted">' + esc(job.recordingName || '-') + ' · ' + encoding + ' · ' + fmtBytes(job.bytes) + '</div>' +
+          '<div class="muted">' + esc(reason) + '</div></div>';
+      }).join('') : '<div class="muted">没有任务。</div>';
+      document.querySelectorAll('.job[data-id]').forEach((el) => { el.onclick = () => selectJob(el.dataset.id); });
+    }
+    function previewAudioElements() { return Object.values(previewListenModes).map((mode) => $(mode.audioId)); }
+    function previewButtons() { return Object.values(previewListenModes).map((mode) => $(mode.buttonId)); }
+    function listenAudioElements() { return [$('rawAudio'), ...previewAudioElements()]; }
+    function listenButtons() { return [$('playRawStart'), ...previewButtons()]; }
+    function pauseBoth() { [...listenAudioElements(), $('asrAudio')].forEach((audio) => audio.pause()); listenButtons().forEach((button) => button.classList.remove('playing')); activeListenAudioId = ''; }
+    function compareTime() { const active = activeListenAudioId ? $(activeListenAudioId) : null; return active ? (active.currentTime || 0) : 0; }
+    async function playOnly(audio, at, activeButton) { pauseBoth(); if (!audio.src) return; const time = Number.isFinite(at) ? Math.max(0, at) : 0; if (Number.isFinite(audio.duration) && audio.duration > 0) audio.currentTime = Math.min(time, Math.max(0, audio.duration - 0.05)); else audio.currentTime = time; await audio.play().then(() => { activeListenAudioId = audio.id; if (activeButton) activeButton.classList.add('playing'); }).catch(() => {}); }
+    function buttonForAudio(audio) { if (audio.id === 'rawAudio') return $('playRawStart'); const mode = Object.values(previewListenModes).find((item) => item.audioId === audio.id); return mode ? $(mode.buttonId) : null; }
+    listenAudioElements().forEach((audio) => ['ended', 'pause', 'error'].forEach((eventName) => audio.addEventListener(eventName, () => { if (audio.id === activeListenAudioId) activeListenAudioId = ''; const button = buttonForAudio(audio); if (button) button.classList.remove('playing'); })));
+    async function ensureRawLoaded() { if (!$('rawAudio').src && currentId) await loadRawAudio(currentId, selectionSeq); return Boolean($('rawAudio').src); }
+    async function ensurePreviewLoaded(mode = 'heavy') {
+      const info = previewListenModes[mode] || previewListenModes.heavy;
+      const audio = $(info.audioId);
+      if (audio.src) return true;
+      if (!currentId) return false;
+      await loadPreviewAudio(true, currentId, selectionSeq, mode);
+      if (audio.src) return true;
+      $('previewStatus').textContent = '正在生成' + info.label + '...';
+      await generatePreview(mode);
+      return Boolean(audio.src);
+    }
+    async function preloadPreviewMode(mode, id = currentId, seq = selectionSeq) {
+      const info = previewListenModes[mode] || previewListenModes.heavy;
+      const audio = $(info.audioId);
+      if (audio.src || !id) return true;
+      await loadPreviewAudio(false, id, seq, mode);
+      if (audio.src || seq !== selectionSeq || id !== currentId) return Boolean(audio.src);
+      await generatePreview(mode, id, seq, false);
+      return Boolean(audio.src);
+    }
+    async function preloadListenAudio(id = currentId, seq = selectionSeq) {
+      $('audioStatus').textContent = '正在预加载四档...';
+      await loadRawAudio(id, seq);
+      await Promise.allSettled(['light', 'heavy', 'strong'].map((mode) => preloadPreviewMode(mode, id, seq)));
+      if (seq === selectionSeq && id === currentId) {
+        $('audioStatus').textContent = '四档已预加载，可直接切换。';
+      }
+    }
+    async function playRawButton() {
+      if (!$('rawAudio').paused) { pauseBoth(); $('audioStatus').textContent = '已暂停。'; return; }
+      $('audioStatus').textContent = '正在准备原版...';
+      if (!await ensureRawLoaded()) return;
+      await playOnly($('rawAudio'), compareTime(), $('playRawStart'));
+      $('audioStatus').textContent = '正在播放原版。';
+    }
+    async function playPreviewButton(mode = 'heavy') {
+      const info = previewListenModes[mode] || previewListenModes.heavy;
+      const audio = $(info.audioId);
+      const button = $(info.buttonId);
+      if (!audio.paused) { pauseBoth(); $('audioStatus').textContent = '已暂停。'; return; }
+      $('audioStatus').textContent = '正在准备' + info.label + '...';
+      if (!await ensurePreviewLoaded(mode)) return;
+      await playOnly(audio, compareTime(), button);
+      $('audioStatus').textContent = '正在播放' + info.label + '。';
+    }
+    async function loadJobs() { const uploadToken = token(); if (!uploadToken) { $('stamp').textContent = '等待登录'; return; } $('stamp').textContent = '正在读取列表...'; $('error').textContent = ''; try { await loadDeepSeekSettings(); const params = new URLSearchParams({ limit: $('limit').value }); const status = $('statusFilter').value; if (status) params.set('status', status); const res = await fetch('/api/dashboard?' + params.toString(), { headers: { 'X-Upload-Token': uploadToken } }); const data = await res.json(); if (!res.ok) throw new Error(data.error || 'HTTP ' + res.status); jobs = data.jobs.jobs || []; $('stamp').textContent = '更新 ' + fmtTime(data.time); renderJobs(); if (!currentId) { const first = jobs.find((job) => job.id === initialJobId) || jobs[0]; if (first) await selectJob(first.id); } } catch (error) { $('error').textContent = error.message === 'invalid upload token' ? 'token 不正确' : error.message; } }
+    function revokeAudio(audio) { audio.pause(); if (audio.dataset.url) URL.revokeObjectURL(audio.dataset.url); audio.dataset.url = ''; audio.removeAttribute('src'); audio.load(); }
+    function clearPlayers() { activeListenAudioId = ''; listenButtons().forEach((button) => button.classList.remove('playing')); revokeAudio($('rawAudio')); previewAudioElements().forEach(revokeAudio); revokeAudio($('asrAudio')); $('audioStatus').textContent = '未加载'; $('previewStatus').textContent = '未加载'; $('asrStatus').textContent = '未加载'; }
+    async function selectJob(id) { const seq = ++selectionSeq; currentId = id; renderJobs(); $('labBody').classList.remove('hidden'); $('currentTitle').textContent = id; $('currentStatus').textContent = '正在读取...'; clearPlayers(); history.replaceState(null, '', '/dashboard?job=' + encodeURIComponent(id)); try { const res = await fetch('/api/jobs/' + encodeURIComponent(id), { headers: { 'X-Upload-Token': token() } }); const data = await res.json(); if (seq !== selectionSeq || id !== currentId) return; if (!res.ok) throw new Error(data.error || 'HTTP ' + res.status); renderJob(data); preloadListenAudio(id, seq).catch((error) => { if (seq === selectionSeq) $('audioStatus').textContent = error.message; }); if (data.files?.asrClean) await loadAsrCleanAudio(false, id, seq); } catch (error) { if (seq === selectionSeq) $('currentStatus').textContent = error.message; } }
+    function renderJob(data) {
+      const job = data.job;
+      const wav = data.files?.audio?.wav || {};
+      const encoding = job.uploadEncoding === 'ima-adpcm' ? 'ADPCM' : 'WAV';
+      const modePreset = audioModePresets[currentMode] || audioModePresets.auto;
+      const reason = job.lastError || job.pendingReason || '';
+      const asrDecision = job.asrDecision || {};
+      const finalSource = asrDecision.finalSource || job.asrSource || '-';
+      const sourceText = finalSource === 'raw'
+        ? '最终采用：原始音频 raw'
+        : finalSource === 'clean-for-asr'
+          ? '最终采用：ASR 识别版 clean-for-asr'
+          : '最终采用：' + finalSource;
+      const cleanRoleText = asrDecision.cleanRole === 'comparison'
+        ? '识别版只作试听/对比'
+        : asrDecision.cleanRole === 'manual-final'
+          ? '手动实验结果'
+          : '';
+      const autoSpeakerText = job.autoSpeakerCommand
+        ? '已按录音口令自动启用 ' + job.autoSpeakerCommand.count + ' 人分角色'
+        : '';
+      if ($('speakerCount')) {
+        $('speakerCount').value = String(job.asrSpeakerCountRequested || job.asrSpeakerCount || 0);
+      }
+      $('currentTitle').textContent = job.id;
+      $('currentStatus').innerHTML = statusPill(job.status) +
+        '<div class="muted" style="margin-top:8px;max-width:640px;white-space:normal">' + esc(sourceText + (cleanRoleText ? '；' + cleanRoleText : '')) + '</div>' +
+        (autoSpeakerText ? '<div class="muted" style="margin-top:4px;max-width:640px;white-space:normal">' + esc(autoSpeakerText) + '</div>' : '') +
+        (asrDecision.reason ? '<div class="muted" style="margin-top:4px;max-width:640px;white-space:normal">' + esc(asrDecision.reason) + '</div>' : '') +
+        (reason ? '<div class="bad" style="margin-top:8px;max-width:520px;white-space:normal;overflow-wrap:anywhere">' + esc(reason) + '</div>' : '');
+      $('encoding').textContent = encoding;
+      $('bytes').textContent = fmtBytes(job.bytes);
+      $('duration').textContent = fmtDuration(wav.durationSec);
+      $('ratio').textContent = job.compressionRatio ? job.compressionRatio + 'x' : '-';
+      $('jobMeta').textContent = (job.recordedAt || '-') + ' · ' + (job.deviceId || '-');
+      $('transcript').textContent = data.polishedTranscriptText ? ('DeepSeek 校正文：\\n' + data.polishedTranscriptText + '\\n\\n---\\n原始转写：\\n' + (data.transcriptText || '')) : (data.transcriptText || (reason ? '转写失败：' + reason : '还没有转写文本。'));
+      $('memo').textContent = data.memoText || '还没有 flomo memo。';
+      if (data.preview?.metrics?.algorithm === currentPreviewAlgorithm && data.preview?.params) {
+        setPreviewParams(data.preview.params);
+        renderPreviewMeta(data.preview);
+        $('previewStatus').textContent = '已读取 v6 试听参数。';
+      } else {
+        setPreviewParams(modePreset.preview);
+        renderPreviewMeta(null);
+        $('previewStatus').textContent = data.files?.preview ? '旧试听版已忽略，请点“生成本机试听版”。' : '还没有试听版，可直接点“生成本机试听版”。';
+      }
+      if (data.asrClean?.params) {
+        setAsrParams(data.asrClean.params);
+        renderAsrMeta(data.asrClean);
+        $('asrStatus').textContent = '已读取上次 ASR 参数。';
+      } else {
+        setAsrParams(modePreset.asr);
+        renderAsrMeta(null);
+        $('asrStatus').textContent = '还没有识别版，可直接点“生成识别版”。';
+      }
+      renderFeedback(data.previewFeedback);
+    }
+    async function loadAudioTo(url, audio, statusEl, successText, id = currentId, seq = selectionSeq) { if (audio.src && !audio.paused) { if (statusEl) statusEl.textContent = successText; return; } const res = await fetch(url, { headers: { 'X-Upload-Token': token() } }); if (!res.ok) { const data = await res.json().catch(() => ({})); throw new Error(data.error || 'HTTP ' + res.status); } const blob = await res.blob(); if (seq !== selectionSeq || id !== currentId) return; if (audio.src && !audio.paused) { if (statusEl) statusEl.textContent = successText; return; } revokeAudio(audio); const objectUrl = URL.createObjectURL(blob); audio.dataset.url = objectUrl; audio.src = objectUrl; audio.load(); if (statusEl) statusEl.textContent = successText; }
+    async function loadRawAudio(id = currentId, seq = selectionSeq) { $('audioStatus').textContent = '正在加载原始录音...'; try { await loadAudioTo('/api/jobs/' + encodeURIComponent(id) + '/audio?t=' + Date.now(), $('rawAudio'), $('audioStatus'), '原始录音已加载。', id, seq); } catch (error) { if (seq === selectionSeq) $('audioStatus').textContent = error.message; } }
+    async function loadPreviewAudio(showStatus = true, id = currentId, seq = selectionSeq, mode = 'heavy') { const info = previewListenModes[mode] || previewListenModes.heavy; if (showStatus) $('previewStatus').textContent = '正在加载' + info.label + '...'; try { await loadAudioTo('/api/jobs/' + encodeURIComponent(id) + '/preview/audio?mode=' + encodeURIComponent(mode) + '&t=' + Date.now(), $(info.audioId), $('previewStatus'), info.label + '已加载。', id, seq); } catch (error) { if (seq === selectionSeq) $('previewStatus').textContent = error.message; } }
+    async function loadAsrCleanAudio(showStatus = true, id = currentId, seq = selectionSeq) { if (showStatus) $('asrStatus').textContent = '正在加载识别版...'; try { await loadAudioTo('/api/jobs/' + encodeURIComponent(id) + '/asr-clean/audio?t=' + Date.now(), $('asrAudio'), $('asrStatus'), '识别版已加载。', id, seq); } catch (error) { if (seq === selectionSeq) $('asrStatus').textContent = error.message; } }
+    async function loadAllAudio() { if (!currentId) return; const id = currentId; const seq = selectionSeq; await Promise.allSettled([loadRawAudio(id, seq), loadPreviewAudio(true, id, seq, 'light'), loadPreviewAudio(true, id, seq, 'heavy'), loadPreviewAudio(true, id, seq, 'strong'), loadAsrCleanAudio(true, id, seq)]); }
+    async function postJob(action, asrSource = '') { if (!currentId) { $('currentStatus').textContent = '先选择一条录音。'; return; } const uploadToken = token(); if (!uploadToken) return; const params = new URLSearchParams(); if (action === 'process' && asrSource) params.set('asrSource', asrSource); if (action === 'process' && $('speakerCount')?.value) params.set('speakerCount', $('speakerCount').value); const suffix = params.toString() ? '?' + params.toString() : ''; try { const res = await fetch('/jobs/' + encodeURIComponent(currentId) + '/' + action + suffix, { method: 'POST', headers: { 'X-Upload-Token': uploadToken } }); const data = await res.json(); if (!res.ok) throw new Error(data.error || 'HTTP ' + res.status); $('currentStatus').textContent = action === 'polish' ? '已仅重跑 DeepSeek。' : '已加入完整转写队列。'; setTimeout(loadJobs, 500); } catch (error) { $('currentStatus').textContent = error.message; } }
+    async function generatePreview(mode = currentMode === 'ambient' ? 'light' : (currentMode === 'voice' ? 'strong' : 'heavy'), id = currentId, seq = selectionSeq, showStatus = true) { if (!id) return; const info = previewListenModes[mode] || previewListenModes.heavy; const params = info.preset || previewParamsFromForm(); if (showStatus) $('previewStatus').textContent = '正在生成' + info.label + '...'; try { const res = await fetch('/api/jobs/' + encodeURIComponent(id) + '/preview', { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Upload-Token': token() }, body: JSON.stringify({ mode, params }) }); const data = await res.json(); if (seq !== selectionSeq || id !== currentId) return; if (!res.ok) throw new Error(data.error || 'HTTP ' + res.status); renderPreviewMeta(data.preview); await loadPreviewAudio(false, id, seq, mode); } catch (error) { if (seq === selectionSeq) $('previewStatus').textContent = error.message; } }
+    async function generateAsrClean() { if (!currentId) return; const id = currentId; const seq = selectionSeq; $('asrStatus').textContent = '正在生成识别版...'; try { const res = await fetch('/api/jobs/' + encodeURIComponent(id) + '/asr-clean', { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Upload-Token': token() }, body: JSON.stringify({ params: asrParamsFromForm() }) }); const data = await res.json(); if (seq !== selectionSeq || id !== currentId) return; if (!res.ok) throw new Error(data.error || 'HTTP ' + res.status); renderAsrMeta(data.asrClean); await loadAsrCleanAudio(false, id, seq); } catch (error) { if (seq === selectionSeq) $('asrStatus').textContent = error.message; } }
     async function saveFeedback() { if (!currentId) return; $('feedbackStatus').textContent = '正在保存...'; try { const res = await fetch('/api/jobs/' + encodeURIComponent(currentId) + '/preview/feedback', { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Upload-Token': token() }, body: JSON.stringify({ rating: $('feedbackRating').value, note: $('feedbackNote').value }) }); const data = await res.json(); if (!res.ok) throw new Error(data.error || 'HTTP ' + res.status); $('feedbackStatus').textContent = '已保存。'; $('feedbackNote').value = ''; renderFeedback(data.feedback); } catch (error) { $('feedbackStatus').textContent = error.message; } }
     loadJobs();
   </script>
@@ -811,8 +1251,10 @@ function dashboardJobHtml() {
     .top { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 12px; }
     .bar { display: grid; grid-template-columns: minmax(220px, 1fr) auto auto auto; gap: 8px; align-items: center; }
     .panel { border: 1px solid var(--line); background: var(--panel); border-radius: 8px; padding: 12px; margin-top: 14px; }
+    .panel.compact { padding: 10px; }
     .grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; }
     .grid.two { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    .summary-grid { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 10px; }
     .label { color: var(--muted); font-size: 12px; margin-bottom: 6px; }
     .value { font-size: 18px; font-weight: 700; overflow-wrap: anywhere; }
     .muted { color: var(--muted); }
@@ -827,7 +1269,17 @@ function dashboardJobHtml() {
     .error { color: var(--bad); }
     .actions { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
     .section-title { display: flex; justify-content: space-between; gap: 10px; align-items: center; margin-bottom: 10px; }
-    .timeline { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; }
+    .audio-workbench { position: sticky; top: 94px; z-index: 1; box-shadow: 0 12px 30px rgba(0,0,0,.22); }
+    .audio-players { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; }
+    .player-card { border: 1px solid #17251d; background: #080d0a; border-radius: 8px; padding: 10px; min-width: 0; }
+    .player-head { display: flex; justify-content: space-between; gap: 8px; align-items: center; min-height: 28px; }
+    .player-title { font-weight: 700; }
+    .player-status { color: var(--muted); font-size: 12px; overflow-wrap: anywhere; }
+    .quick-actions { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+    .quick-actions button { height: 32px; padding: 0 9px; }
+    .tuning-layout { display: grid; grid-template-columns: minmax(0, 1fr) 260px; gap: 12px; align-items: start; }
+    .metrics-box { border: 1px solid #17251d; border-radius: 8px; background: #080d0a; padding: 10px; }
+    .timeline { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 8px; }
     .step { border: 1px solid var(--line); border-radius: 8px; padding: 10px; background: #0c120f; min-height: 78px; }
     .step strong { display: block; margin-bottom: 6px; }
     .kv { display: grid; grid-template-columns: 140px minmax(0, 1fr); gap: 8px 12px; font-size: 14px; }
@@ -838,10 +1290,10 @@ function dashboardJobHtml() {
     .feedback-item { border: 1px solid #17251d; border-radius: 6px; padding: 10px; background: #080d0a; }
     .feedback-item strong { color: var(--ok); }
     pre { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; font: 12px/1.5 ui-monospace, SFMono-Regular, Consolas, monospace; background: #080d0a; border: 1px solid #17251d; border-radius: 6px; padding: 10px; max-height: 420px; overflow: auto; }
-    audio { width: 100%; margin-top: 10px; }
+    audio { width: 100%; margin-top: 10px; height: 36px; }
     .hidden { display: none !important; }
-    @media (max-width: 900px) { .grid, .grid.two, .timeline { grid-template-columns: repeat(2, minmax(0, 1fr)); } .bar { grid-template-columns: 1fr auto; } }
-    @media (max-width: 560px) { .grid, .grid.two, .timeline, .kv { grid-template-columns: 1fr; } .top { align-items: flex-start; flex-direction: column; } .bar { grid-template-columns: 1fr 1fr; } #token { grid-column: 1 / -1; } }
+    @media (max-width: 900px) { .grid, .grid.two, .summary-grid, .audio-players, .tuning-layout { grid-template-columns: repeat(2, minmax(0, 1fr)); } .bar { grid-template-columns: 1fr auto; } .audio-workbench { position: static; } }
+    @media (max-width: 560px) { .grid, .grid.two, .summary-grid, .audio-players, .tuning-layout, .timeline, .kv { grid-template-columns: 1fr; } .top { align-items: flex-start; flex-direction: column; } .bar { grid-template-columns: 1fr 1fr; } #token { grid-column: 1 / -1; } }
   </style>
 </head>
 <body>
@@ -861,8 +1313,8 @@ function dashboardJobHtml() {
     </div>
   </header>
   <main>
-    <section class="panel">
-      <div class="grid">
+    <section class="panel compact">
+      <div class="summary-grid">
         <div><div class="label">状态</div><div id="status" class="value">-</div></div>
         <div><div class="label">阶段</div><div id="phase" class="value">-</div></div>
         <div><div class="label">设备</div><div id="device" class="value">-</div></div>
@@ -900,13 +1352,34 @@ function dashboardJobHtml() {
       <pre id="jobError"></pre>
     </section>
 
-    <section class="panel">
+    <section class="panel audio-workbench" id="audioWorkbench">
       <div class="section-title">
-        <h2>原始录音</h2>
-        <div class="actions"><button id="loadAudio">加载 WAV</button></div>
+        <div>
+          <h2>试听对比台</h2>
+          <div class="muted">原始录音、耳朵试听版、ASR 识别版在这里统一加载和切换。</div>
+        </div>
+        <div class="quick-actions">
+          <button id="loadAllAudio" class="primary">加载全部</button>
+          <button id="playRawNow">听原始</button>
+          <button id="playPreviewNow">听试听版</button>
+          <button id="playAsrNow">听识别版</button>
+          <button id="pauseAllAudio" class="ghost">暂停</button>
+        </div>
       </div>
-      <div id="audioStatus" class="muted">需要 token 才会读取音频。</div>
-      <audio id="audio" controls class="hidden"></audio>
+      <div class="audio-players">
+        <div class="player-card">
+          <div class="player-head"><span class="player-title">原始 WAV</span><span id="audioStatus" class="player-status">未加载</span></div>
+          <audio id="audio" controls class="hidden"></audio>
+        </div>
+        <div class="player-card">
+          <div class="player-head"><span class="player-title">人耳试听版</span><span id="previewStatus" class="player-status">未生成</span></div>
+          <audio id="previewAudio" controls class="hidden"></audio>
+        </div>
+        <div class="player-card">
+          <div class="player-head"><span class="player-title">ASR 识别版</span><span id="asrStatus" class="player-status">未生成</span></div>
+          <audio id="asrAudio" controls class="hidden"></audio>
+        </div>
+      </div>
     </section>
 
     <section class="panel">
@@ -920,29 +1393,32 @@ function dashboardJobHtml() {
     </section>
 
     <section class="panel">
-      <div class="section-title"><h2>音频实验区</h2><span class="muted">下一步</span></div>
-      <div class="grid">
-        <div><div class="label">增益</div><input id="previewGain" type="number" step="0.1" min="0.2" max="3"></div>
-        <div><div class="label">低通系数</div><input id="previewLowpass" type="number" step="1" min="1" max="255"></div>
-        <div><div class="label">高频保留</div><input id="previewHighMix" type="number" step="0.05" min="0" max="1"></div>
-        <div><div class="label">命中保持帧</div><input id="previewHold" type="number" step="1" min="0" max="20"></div>
-        <div><div class="label">RMS 上限</div><input id="previewRms" type="number" step="50" min="0" max="10000"></div>
-        <div><div class="label">Diff 下限</div><input id="previewDiff" type="number" step="10" min="0" max="5000"></div>
-        <div><div class="label">Diff/RMS 比例</div><input id="previewRatio" type="number" step="5" min="1" max="512"></div>
-        <div><div class="label">帧采样数</div><input id="previewFrame" type="number" step="64" min="64" max="2048"></div>
-        <div><div class="label">底噪 RMS 上限</div><input id="previewNoiseRms" type="number" step="25" min="0" max="5000"></div>
-        <div><div class="label">底噪保留比例</div><input id="previewNoiseMix" type="number" step="0.05" min="0" max="1"></div>
+      <div class="section-title"><h2>人耳试听版参数</h2><span class="muted">调舒服、少刮擦，不影响转写</span></div>
+      <div class="tuning-layout">
+        <div class="grid">
+          <div><div class="label">增益</div><input id="previewGain" type="number" step="0.1" min="0.2" max="3"></div>
+          <div><div class="label">低通系数</div><input id="previewLowpass" type="number" step="1" min="1" max="255"></div>
+          <div><div class="label">高频保留</div><input id="previewHighMix" type="number" step="0.05" min="0" max="1"></div>
+          <div><div class="label">命中保持帧</div><input id="previewHold" type="number" step="1" min="0" max="20"></div>
+          <div><div class="label">RMS 上限</div><input id="previewRms" type="number" step="50" min="0" max="10000"></div>
+          <div><div class="label">Diff 下限</div><input id="previewDiff" type="number" step="10" min="0" max="5000"></div>
+          <div><div class="label">Diff/RMS 比例</div><input id="previewRatio" type="number" step="5" min="1" max="512"></div>
+          <div><div class="label">帧采样数</div><input id="previewFrame" type="number" step="64" min="64" max="2048"></div>
+          <div><div class="label">底噪 RMS 上限</div><input id="previewNoiseRms" type="number" step="25" min="0" max="5000"></div>
+          <div><div class="label">底噪保留比例</div><input id="previewNoiseMix" type="number" step="0.05" min="0" max="1"></div>
+        </div>
+        <div class="metrics-box">
+          <div class="label">处理统计</div>
+          <div id="previewMeta" class="kv"></div>
+        </div>
       </div>
       <div class="statusline">
-        <button id="presetGentle">轻柔</button>
-        <button id="presetDefault">默认</button>
-        <button id="presetStrong">强力</button>
-        <button id="generatePreview">生成试听版</button>
-        <button id="loadPreview">加载试听版</button>
-        <span id="previewStatus" class="muted">先生成试听版，再和原始录音 A/B 对比。</span>
+        <button id="presetGentle">轻度清理</button>
+        <button id="presetDefault">中度清理</button>
+        <button id="presetStrong">强力清理</button>
+        <button id="generatePreview" class="primary">生成并试听</button>
+        <button id="loadPreview">只加载</button>
       </div>
-      <audio id="previewAudio" controls class="hidden"></audio>
-      <div id="previewMeta" class="kv" style="margin-top:10px"></div>
       <div class="grid two" style="margin-top:10px">
         <div>
           <div class="label">听感结论</div>
@@ -971,6 +1447,34 @@ function dashboardJobHtml() {
     </section>
 
     <section class="panel">
+      <div class="section-title"><h2>ASR 识别版参数</h2><span class="muted">给 DashScope 用，优先清楚和稳定</span></div>
+      <div class="tuning-layout">
+        <div class="grid">
+          <div><div class="label">增益</div><input id="asrGain" type="number" step="0.05" min="0.2" max="4"></div>
+          <div><div class="label">高通系数</div><input id="asrHighpass" type="number" step="0.001" min="0" max="0.999"></div>
+          <div><div class="label">预加重</div><input id="asrPreEmphasis" type="number" step="0.05" min="0" max="0.95"></div>
+          <div><div class="label">噪声门 RMS</div><input id="asrNoiseGateRms" type="number" step="20" min="0" max="5000"></div>
+          <div><div class="label">门限保留</div><input id="asrNoiseGateFloor" type="number" step="0.05" min="0" max="1"></div>
+          <div><div class="label">压缩阈值</div><input id="asrCompressorThreshold" type="number" step="100" min="500" max="24000"></div>
+          <div><div class="label">压缩比</div><input id="asrCompressorRatio" type="number" step="0.1" min="1" max="12"></div>
+          <div><div class="label">目标峰值</div><input id="asrTargetPeak" type="number" step="500" min="4000" max="32000"></div>
+          <div><div class="label">限幅</div><input id="asrLimiter" type="number" step="500" min="4000" max="32767"></div>
+          <div><div class="label">帧采样数</div><input id="asrFrameSamples" type="number" step="80" min="80" max="2048"></div>
+        </div>
+        <div class="metrics-box">
+          <div class="label">处理统计</div>
+          <div id="asrMeta" class="kv"></div>
+        </div>
+      </div>
+      <div class="statusline">
+        <button id="asrPresetDefault">ASR 默认</button>
+        <button id="generateAsrClean" class="primary">生成并试听</button>
+        <button id="loadAsrClean">只加载</button>
+        <button id="reprocessFromAsr">实验：用识别版转写</button>
+      </div>
+    </section>
+
+    <section class="panel">
       <h2>文件状态</h2>
       <div id="fileMeta" class="kv"></div>
     </section>
@@ -994,28 +1498,54 @@ function dashboardJobHtml() {
     $('save').onclick = () => { tokenInput.value = normalizeToken(tokenInput.value); localStorage.setItem('cardputerUploadToken', tokenInput.value); load(); };
     $('refresh').onclick = () => load();
     $('clear').onclick = () => { localStorage.removeItem('cardputerUploadToken'); tokenInput.value = ''; load(); tokenInput.focus(); };
-    $('loadAudio').onclick = () => loadAudio();
+    $('loadAllAudio').onclick = () => loadAllAudio();
+    $('playRawNow').onclick = () => playOnly($('audio'));
+    $('playPreviewNow').onclick = () => playOnly($('previewAudio'));
+    $('playAsrNow').onclick = () => playOnly($('asrAudio'));
+    $('pauseAllAudio').onclick = () => pauseAllAudio();
     $('reprocess').onclick = () => postJob('process');
+    $('reprocessFromAsr').onclick = () => {
+      if (confirm('识别版是实验对比路径，可能让转写变差。确认要用它覆盖最终转写吗？')) {
+        postJob('process', 'clean-for-asr');
+      }
+    };
     $('resend').onclick = () => postJob('resend');
     $('generatePreview').onclick = () => generatePreview();
     $('loadPreview').onclick = () => loadPreviewAudio();
     $('saveFeedback').onclick = () => savePreviewFeedback();
-    $('presetGentle').onclick = () => setPreviewParams({ gain: 1, lowpass: 56, highMix: 0.65, scratchRmsMax: 1100, scratchDiffMin: 220, scratchRatio: 130, holdFrames: 0, frameSamples: 256, noiseRmsMax: 650, noiseMix: 0.45 });
+    $('asrPresetDefault').onclick = () => setAsrParams(defaultAsrParams);
+    $('generateAsrClean').onclick = () => generateAsrClean();
+    $('loadAsrClean').onclick = () => loadAsrCleanAudio();
+    $('presetGentle').onclick = () => setPreviewParams({ gain: 1, rumbleHighpass: 0.975, lowpass: 52, highMix: 0.86, scratchRmsMax: 900, scratchDiffMin: 320, scratchRatio: 170, holdFrames: 0, frameSamples: 256, noiseRmsMax: 220, noiseMix: 0.92 });
     $('presetDefault').onclick = () => setPreviewParams(defaultPreviewParams);
-    $('presetStrong').onclick = () => setPreviewParams({ gain: 1, lowpass: 96, highMix: 0.28, scratchRmsMax: 1900, scratchDiffMin: 150, scratchRatio: 92, holdFrames: 2, frameSamples: 256, noiseRmsMax: 1200, noiseMix: 0.18 });
+    $('presetStrong').onclick = () => setPreviewParams({ gain: 1.08, rumbleHighpass: 0.92, lowpass: 36, highMix: 0.55, scratchRmsMax: 1800, scratchDiffMin: 190, scratchRatio: 115, holdFrames: 1, frameSamples: 256, noiseRmsMax: 900, noiseMix: 0.48 });
     const defaultPreviewParams = {
-      gain: 1,
-      lowpass: 72,
-      highMix: 0.45,
-      scratchRmsMax: 1500,
-      scratchDiffMin: 180,
-      scratchRatio: 110,
-      holdFrames: 1,
+      gain: 1.03,
+      rumbleHighpass: 0.955,
+      lowpass: 44,
+      highMix: 0.72,
+      scratchRmsMax: 1200,
+      scratchDiffMin: 260,
+      scratchRatio: 145,
+      holdFrames: 0,
       frameSamples: 256,
-      noiseRmsMax: 900,
-      noiseMix: 0.28
+      noiseRmsMax: 420,
+      noiseMix: 0.72
+    };
+    const defaultAsrParams = {
+      gain: 1.25,
+      highpass: 0.985,
+      preEmphasis: 0.18,
+      noiseGateRms: 520,
+      noiseGateFloor: 0.18,
+      compressorThreshold: 5200,
+      compressorRatio: 3.2,
+      targetPeak: 26000,
+      limiter: 30000,
+      frameSamples: 320
     };
     setPreviewParams(defaultPreviewParams);
+    setAsrParams(defaultAsrParams);
 
     function statusClass(status) {
       if (status === 'done' || status === 'uploaded' || status === 'transcribed') return 'ok';
@@ -1070,6 +1600,35 @@ function dashboardJobHtml() {
       };
     }
 
+    function setAsrParams(params) {
+      const p = { ...defaultAsrParams, ...(params || {}) };
+      $('asrGain').value = p.gain;
+      $('asrHighpass').value = p.highpass;
+      $('asrPreEmphasis').value = p.preEmphasis;
+      $('asrNoiseGateRms').value = p.noiseGateRms;
+      $('asrNoiseGateFloor').value = p.noiseGateFloor;
+      $('asrCompressorThreshold').value = p.compressorThreshold;
+      $('asrCompressorRatio').value = p.compressorRatio;
+      $('asrTargetPeak').value = p.targetPeak;
+      $('asrLimiter').value = p.limiter;
+      $('asrFrameSamples').value = p.frameSamples;
+    }
+
+    function asrParamsFromForm() {
+      return {
+        gain: Number($('asrGain').value),
+        highpass: Number($('asrHighpass').value),
+        preEmphasis: Number($('asrPreEmphasis').value),
+        noiseGateRms: Number($('asrNoiseGateRms').value),
+        noiseGateFloor: Number($('asrNoiseGateFloor').value),
+        compressorThreshold: Number($('asrCompressorThreshold').value),
+        compressorRatio: Number($('asrCompressorRatio').value),
+        targetPeak: Number($('asrTargetPeak').value),
+        limiter: Number($('asrLimiter').value),
+        frameSamples: Number($('asrFrameSamples').value)
+      };
+    }
+
     function renderPreviewMeta(preview) {
       if (!preview) {
         $('previewMeta').innerHTML = '';
@@ -1081,6 +1640,22 @@ function dashboardJobHtml() {
         ['底噪处理帧', esc(preview.metrics?.noiseFrames ?? '-')],
         ['时长', fmtDuration(preview.metrics?.durationSec)],
         ['生成时间', fmtTime(preview.createdAt)]
+      ]);
+    }
+
+    function renderAsrMeta(asrClean) {
+      if (!asrClean) {
+        $('asrMeta').innerHTML = '';
+        return;
+      }
+      $('asrMeta').innerHTML = kv([
+        ['门限处理帧', esc((asrClean.metrics?.gatedFrames ?? '-') + ' / ' + (asrClean.metrics?.totalFrames ?? '-'))],
+        ['压缩样本', esc(asrClean.metrics?.compressedSamples ?? '-')],
+        ['限幅样本', esc(asrClean.metrics?.limitedSamples ?? '-')],
+        ['峰值变化', esc((asrClean.metrics?.inputPeak ?? '-') + ' → ' + (asrClean.metrics?.outputPeak ?? '-'))],
+        ['归一化增益', esc(asrClean.metrics?.normalizeGain ?? '-')],
+        ['时长', fmtDuration(asrClean.metrics?.durationSec)],
+        ['生成时间', fmtTime(asrClean.createdAt)]
       ]);
     }
 
@@ -1111,6 +1686,15 @@ function dashboardJobHtml() {
       } else {
         renderPreviewMeta(null);
       }
+      if (data.asrClean?.params) {
+        setAsrParams(data.asrClean.params);
+        renderAsrMeta(data.asrClean);
+        $('asrStatus').textContent = '已读取上次 ASR 识别版参数。';
+      } else {
+        setAsrParams(defaultAsrParams);
+        renderAsrMeta(null);
+        $('asrStatus').textContent = '还没有 ASR 识别版。';
+      }
       renderFeedbackList(data.previewFeedback);
       $('status').innerHTML = statusPill(job.status);
       $('phase').textContent = job.phase ?? '-';
@@ -1126,7 +1710,9 @@ function dashboardJobHtml() {
       const reason = job.lastError || job.pendingReason || '';
       $('errorPanel').classList.toggle('hidden', !reason);
       $('jobError').textContent = reason || '';
-      $('transcript').textContent = data.transcriptText || '还没有转写文本。';
+      $('transcript').textContent = data.polishedTranscriptText
+        ? 'DeepSeek 校正文：\\n' + data.polishedTranscriptText + '\\n\\n---\\n原始转写：\\n' + (data.transcriptText || '')
+        : (data.transcriptText || '还没有转写文本。');
       $('memo').textContent = data.memoText || '还没有 flomo memo。';
       $('raw').textContent = JSON.stringify(job, null, 2);
       $('uploadMeta').innerHTML = kv([
@@ -1143,12 +1729,17 @@ function dashboardJobHtml() {
         ['原始 WAV', fileLine(files.audio)],
         ['试听 WAV', fileLine(files.preview)],
         ['试听参数', fileLine(files.previewMeta)],
+        ['ASR 识别 WAV', fileLine(files.asrClean)],
+        ['ASR 识别参数', fileLine(files.asrCleanMeta)],
         ['转写文本', fileLine(files.transcript)],
+        ['DeepSeek 校正文', fileLine(files.polishedTranscript)],
+        ['DeepSeek JSON', fileLine(files.deepSeek)],
         ['ASR JSON', fileLine(files.transcriptJson)],
         ['flomo memo', fileLine(files.memo)]
       ]);
       $('timeline').innerHTML = [
         step('上传', job.createdAt ? 'done' : 'waiting', fmtTime(job.createdAt), job.recordedAt || ''),
+        step('ASR 清理', files.asrClean ? 'done' : 'waiting', fmtTime(data.asrClean?.createdAt), job.asrSource || ''),
         step('转写', job.transcriptPath || job.transcriptText ? 'done' : (String(job.status || '').includes('transcribe_failed') ? 'failed' : job.status), fmtTime(job.updatedAt), job.dashScopeTaskId || ''),
         step('flomo', job.flomo?.sentAt ? 'done' : (String(job.status || '').includes('flomo_failed') ? 'failed' : 'waiting'), fmtTime(job.flomo?.sentAt), job.memo?.title || ''),
         step('最近更新', job.status || '-', fmtTime(job.updatedAt || job.createdAt), reason)
@@ -1176,13 +1767,14 @@ function dashboardJobHtml() {
       }
     }
 
-    async function postJob(action) {
+    async function postJob(action, asrSource = '') {
       const token = normalizeToken(tokenInput.value);
       if (!token) return;
       if (action === 'resend' && !confirm('确认重新发送 ' + jobId + ' 到 flomo？这会产生一条新的 memo。')) return;
       $('actionStatus').textContent = '正在执行...';
+      const suffix = action === 'process' && asrSource ? '?asrSource=' + encodeURIComponent(asrSource) : '';
       try {
-        const res = await fetch('/jobs/' + encodeURIComponent(jobId) + '/' + action, {
+        const res = await fetch('/jobs/' + encodeURIComponent(jobId) + '/' + action + suffix, {
           method: 'POST',
           headers: { 'X-Upload-Token': token }
         });
@@ -1193,6 +1785,40 @@ function dashboardJobHtml() {
       } catch (error) {
         $('actionStatus').textContent = error.message;
       }
+    }
+
+    function audioCurrentTime() {
+      return [$('audio'), $('previewAudio'), $('asrAudio')]
+        .map((audio) => audio.currentTime || 0)
+        .find((time) => time > 0) || 0;
+    }
+
+    function pauseAllAudio() {
+      for (const audio of [$('audio'), $('previewAudio'), $('asrAudio')]) {
+        audio.pause();
+      }
+    }
+
+    async function playOnly(audio) {
+      if (!audio.src) return;
+      const at = audioCurrentTime();
+      pauseAllAudio();
+      if (Number.isFinite(audio.duration) && audio.duration > 0) {
+        audio.currentTime = Math.min(at, Math.max(0, audio.duration - 0.05));
+      } else {
+        audio.currentTime = at;
+      }
+      await audio.play().catch(() => {});
+    }
+
+    async function loadAllAudio() {
+      const token = normalizeToken(tokenInput.value);
+      if (!token) return;
+      await Promise.allSettled([
+        loadAudio(),
+        loadPreviewAudio(),
+        loadAsrCleanAudio()
+      ]);
     }
 
     async function loadAudio() {
@@ -1269,6 +1895,55 @@ function dashboardJobHtml() {
       }
     }
 
+    async function generateAsrClean() {
+      const token = normalizeToken(tokenInput.value);
+      if (!token) return;
+      $('asrStatus').textContent = '正在生成 ASR 识别版...';
+      try {
+        const res = await fetch('/api/jobs/' + encodeURIComponent(jobId) + '/asr-clean', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'X-Upload-Token': token
+          },
+          body: JSON.stringify({ params: asrParamsFromForm() })
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || 'HTTP ' + res.status);
+        $('asrStatus').textContent = 'ASR 识别版已生成。';
+        renderAsrMeta(data.asrClean);
+        await loadAsrCleanAudio();
+        await load();
+      } catch (error) {
+        $('asrStatus').textContent = error.message;
+      }
+    }
+
+    async function loadAsrCleanAudio() {
+      const token = normalizeToken(tokenInput.value);
+      if (!token) return;
+      $('asrStatus').textContent = '正在读取 ASR 识别版...';
+      try {
+        const res = await fetch('/api/jobs/' + encodeURIComponent(jobId) + '/asr-clean/audio?t=' + Date.now(), {
+          headers: { 'X-Upload-Token': token }
+        });
+        if (!res.ok) {
+          const data = await res.json().catch(() => ({}));
+          throw new Error(data.error || 'HTTP ' + res.status);
+        }
+        const blob = await res.blob();
+        const audio = $('asrAudio');
+        if (audio.dataset.url) URL.revokeObjectURL(audio.dataset.url);
+        const url = URL.createObjectURL(blob);
+        audio.dataset.url = url;
+        audio.src = url;
+        audio.classList.remove('hidden');
+        $('asrStatus').textContent = 'ASR 识别版已加载，可和原始/试听版对比。';
+      } catch (error) {
+        $('asrStatus').textContent = error.message;
+      }
+    }
+
     async function savePreviewFeedback() {
       const token = normalizeToken(tokenInput.value);
       if (!token) return;
@@ -1309,6 +1984,100 @@ function publicAudioUrl(recordingName) {
   return `${PUBLIC_BASE_URL}/audio/${encodeURIComponent(recordingName)}?token=${encodeURIComponent(ASR_FILE_TOKEN)}`;
 }
 
+function publicAsrAudioUrl(id) {
+  if (!PUBLIC_BASE_URL || !ASR_FILE_TOKEN) {
+    return '';
+  }
+  return `${PUBLIC_BASE_URL}/audio/${encodeURIComponent(`${id}.clean-for-asr.wav`)}?token=${encodeURIComponent(ASR_FILE_TOKEN)}`;
+}
+
+function normalizeAsrSource(value) {
+  const source = String(value || '').trim().toLowerCase();
+  if (['raw', 'original', 'source'].includes(source)) return 'raw';
+  if (['clean', 'clean-for-asr', 'asr-clean'].includes(source)) return 'clean-for-asr';
+  return '';
+}
+
+function normalizeSpeakerCount(value) {
+  const raw = String(value ?? '').trim().toLowerCase();
+  if (!raw || raw === 'auto' || raw === 'none' || raw === '0') return 0;
+  const count = Number.parseInt(raw, 10);
+  return Number.isFinite(count) && count >= 1 && count <= 10 ? count : 0;
+}
+
+function chineseSpeakerCount(value) {
+  const text = String(value || '').toLowerCase();
+  const normalized = text
+    .replace(/兩/g, '两')
+    .replace(/\s+/g, '');
+  if (/(不分角色|不用分角色|不要分角色|单人备忘|一人备忘|一个人说话|只有我一个人)/.test(normalized)) {
+    return 0;
+  }
+  const patterns = [
+    { count: 2, re: /(两|二|2)(个)?(人|位)?(对话|访谈|采访|会议|讨论|说话人|讲话人)|双人(对话|访谈|采访|会议|讨论)|按(两|二|2)(个)?人分角色|区分(两|二|2)(个)?(说话人|讲话人)|分成(两|二|2)(个)?(人|角色)/ },
+    { count: 3, re: /(三|3)(个)?(人|位)?(对话|访谈|采访|会议|讨论|说话人|讲话人)|按(三|3)(个)?人分角色|区分(三|3)(个)?(说话人|讲话人)|分成(三|3)(个)?(人|角色)/ },
+    { count: 4, re: /(四|4)(个)?(人|位)?(对话|访谈|采访|会议|讨论|说话人|讲话人)|按(四|4)(个)?人分角色|区分(四|4)(个)?(说话人|讲话人)|分成(四|4)(个)?(人|角色)/ }
+  ];
+  for (const pattern of patterns) {
+    if (pattern.re.test(normalized)) return pattern.count;
+  }
+  return null;
+}
+
+function detectSpeakerCountCommand(text) {
+  const source = String(text || '').trim();
+  if (!source) return null;
+  const head = source.slice(0, 500);
+  const tail = source.slice(Math.max(0, source.length - 500));
+  const headCount = chineseSpeakerCount(head);
+  if (headCount !== null) {
+    return { count: headCount, position: 'head', sample: head.slice(0, 120) };
+  }
+  const tailCount = chineseSpeakerCount(tail);
+  if (tailCount !== null) {
+    return { count: tailCount, position: 'tail', sample: tail.slice(-120) };
+  }
+  return null;
+}
+
+function shouldGenerateAsrCleanComparison(asrSource, requestedAsrSource) {
+  return asrSource === 'raw' && !requestedAsrSource;
+}
+
+async function attachAsrCleanForComparison(job, reason) {
+  try {
+    const { meta: asrCleanMeta } = await writeAsrCleanForJob(job, job.asrCleanParams);
+    const latest = await readJob(job.id);
+    latest.asrCleanPath = path.relative(DATA_ROOT, asrCleanPathForId(job.id));
+    latest.asrCleanMetaPath = path.relative(DATA_ROOT, asrCleanMetaPathForId(job.id));
+    latest.asrCleanParams = asrCleanMeta.params;
+    latest.asrClean = {
+      createdAt: asrCleanMeta.createdAt,
+      params: asrCleanMeta.params,
+      metrics: asrCleanMeta.metrics
+    };
+    latest.asrDecision = {
+      finalSource: 'raw',
+      cleanRole: 'comparison',
+      reason,
+      updatedAt: new Date().toISOString()
+    };
+    await writeJob(latest);
+    return latest;
+  } catch (error) {
+    const latest = await readJob(job.id).catch(() => job);
+    latest.asrDecision = {
+      finalSource: 'raw',
+      cleanRole: 'comparison_failed',
+      reason,
+      error: error.message,
+      updatedAt: new Date().toISOString()
+    };
+    await writeJob(latest).catch(() => {});
+    return latest;
+  }
+}
+
 async function fetchJson(url, options) {
   const response = await fetch(url, options);
   const text = await response.text();
@@ -1330,19 +2099,23 @@ async function fetchJson(url, options) {
   return payload;
 }
 
-async function submitDashScopeTask(audioUrl) {
+async function submitDashScopeTask(audioUrl, options = {}) {
+  const speakerCount = normalizeSpeakerCount(options.speakerCount);
   const payload = {
-    model: 'paraformer-v2',
+    model: DASHSCOPE_MODEL,
     input: {
       file_urls: [audioUrl]
     },
     parameters: {
       channel_id: [0],
       language_hints: ['zh', 'en'],
-      disfluency_removal_enabled: true,
+      disfluency_removal_enabled: DASHSCOPE_DISFLUENCY_REMOVAL,
       timestamp_alignment_enabled: false
     }
   };
+  if (speakerCount > 1) {
+    payload.parameters.speaker_count = speakerCount;
+  }
 
   const result = await fetchJson(DASH_SCOPE_TRANSCRIPTION_URL, {
     method: 'POST',
@@ -1362,7 +2135,8 @@ async function submitDashScopeTask(audioUrl) {
 }
 
 async function waitForDashScopeTask(taskId) {
-  for (let attempt = 0; attempt < 80; attempt++) {
+  const startedAt = Date.now();
+  while (Date.now() - startedAt < DASHSCOPE_MAX_WAIT_MS) {
     const result = await fetchJson(`${DASH_SCOPE_TASK_URL}${encodeURIComponent(taskId)}`, {
       method: 'POST',
       headers: {
@@ -1383,11 +2157,13 @@ async function waitForDashScopeTask(taskId) {
       };
     }
     if (status && status !== 'PENDING' && status !== 'RUNNING') {
-      throw new Error(`DashScope task ${status}`);
+      const first = output.results?.[0];
+      const detail = first?.message || first?.code || output.message || output.code || '';
+      throw new Error(detail ? `DashScope task ${status}: ${detail}` : `DashScope task ${status}`);
     }
-    await sleep(1500);
+    await sleep(DASHSCOPE_POLL_INTERVAL_MS);
   }
-  throw new Error('DashScope task timed out');
+  throw new Error(`DashScope task timed out after ${DASHSCOPE_MAX_WAIT_MS}ms`);
 }
 
 function extractTranscriptText(transcription) {
@@ -1398,6 +2174,46 @@ function extractTranscriptText(transcription) {
     }
   }
   return texts.filter(Boolean).join('\n').trim();
+}
+
+function speakerLabelFor(value) {
+  const raw = String(value ?? '').trim();
+  if (!raw) return '说话人?';
+  const number = Number.parseInt(raw, 10);
+  if (Number.isFinite(number)) {
+    return `说话人${number + 1}`;
+  }
+  return raw.startsWith('说话人') ? raw : `说话人${raw}`;
+}
+
+function speakerIdFromSentence(sentence) {
+  return sentence?.speaker_id ?? sentence?.speakerId ?? sentence?.speaker ?? sentence?.speaker_label ?? '';
+}
+
+function extractSpeakerTranscript(transcription) {
+  const lines = [];
+  const speakerIds = new Set();
+  for (const transcript of transcription?.transcripts || []) {
+    for (const sentence of transcript?.sentences || []) {
+      const speakerId = speakerIdFromSentence(sentence);
+      const text = String(sentence?.text || '').trim();
+      if (speakerId === '' || !text) continue;
+      speakerIds.add(String(speakerId));
+      const label = speakerLabelFor(speakerId);
+      const last = lines[lines.length - 1];
+      if (last && last.speakerId === String(speakerId)) {
+        last.text = `${last.text}${last.text.endsWith(' ') ? '' : ' '}${text}`;
+      } else {
+        lines.push({ speakerId: String(speakerId), label, text });
+      }
+    }
+  }
+  const text = lines.map((line) => `${line.label}：${line.text.trim()}`).join('\n').trim();
+  return {
+    text,
+    segments: lines,
+    speakerCount: speakerIds.size
+  };
 }
 
 async function downloadTranscription(transcriptionUrl) {
@@ -1413,6 +2229,187 @@ function normalizeTranscriptText(text) {
     .replace(/(^|[。！？!?；;\n])\s*(嗯|呃|额)[，,、\s]+/g, '$1')
     .replace(/[，,、]\s*(嗯|呃|额)\s*[，,、]/g, '，')
     .trim();
+}
+
+function applyCommonTranscriptRepairs(text) {
+  return String(text || '')
+    .replace(/不需要考[得的]那么/g, '不需要考虑得那么')
+    .replace(/不需要考[得的]/g, '不需要考虑得')
+    .replace(/去当多少职人/g, '去担多少责任')
+    .replace(/担多少职人/g, '担多少责任')
+    .replace(/这个dear/gi, '这个 idea')
+    .replace(/舒适最舒适的idea/gi, '舒服的 idea')
+    .replace(/前端后段/g, '前端后端');
+}
+
+function ensureReadableParagraphs(text) {
+  const value = String(text || '').trim();
+  if (!value || value.includes('\n') || value.length < 180 || /^(说话人|Speaker|[\p{Script=Han}A-Za-z0-9_.-]{1,12})\s*[：:]/u.test(value)) {
+    return value;
+  }
+  const sentences = value.match(/[^。！？!?；;]+[。！？!?；;]?/g)?.map((item) => item.trim()).filter(Boolean) || [value];
+  if (sentences.length < 4) return value;
+  const targetParagraphs = Math.min(4, Math.max(2, Math.ceil(sentences.length / 3)));
+  const per = Math.ceil(sentences.length / targetParagraphs);
+  const paragraphs = [];
+  for (let i = 0; i < sentences.length; i += per) {
+    paragraphs.push(sentences.slice(i, i + per).join(''));
+  }
+  return paragraphs.join('\n\n');
+}
+
+function formatSpeakerDialogueText(text) {
+  const value = String(text || '').trim();
+  if (!value) return '';
+  return value
+    .replace(/([^\n])(?=(说话人\s*[\p{Script=Han}A-Za-z0-9_.-]{1,12}|Speaker\s*[\p{Script=Han}A-Za-z0-9_.-]{1,12})\s*[：:])/gu, '$1\n')
+    .replace(/([。！？!?；;])\s*(?=([\p{Script=Han}A-Za-z][\p{Script=Han}A-Za-z0-9_.-]{0,11})\s*[：:])/gu, '$1\n')
+    .split('\n')
+    .map((line) => {
+      const trimmed = line.trim();
+      return trimmed.replace(/^(说话人)\s+([\p{Script=Han}A-Za-z0-9_.-]{1,12})\s*([：:])/u, '$1$2$3');
+    })
+    .filter(Boolean)
+    .join('\n')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
+}
+
+function simplifyNamedSpeakerLabels(text) {
+  return String(text || '').split('\n').map((line) => {
+    const match = line.match(/^说话人([\p{Script=Han}A-Za-z_.-][\p{Script=Han}A-Za-z0-9_.-]{0,11})\s*([：:]\s*.*)$/u);
+    if (!match) return line;
+    const alias = match[1];
+    return isSafeSpeakerAlias(alias) ? `${alias}${match[2]}` : line;
+  }).join('\n');
+}
+
+function splitCombinedSpeakerIntros(text) {
+  const output = [];
+  for (const line of String(text || '').split('\n')) {
+    const match = line.match(/^([\p{Script=Han}A-Za-z0-9_.-]{1,12})\s*([：:])\s*我是\1[，,。 ]+我是([\p{Script=Han}A-Za-z0-9_.-]{1,12})(?:[，,。 ]+(.+))?$/u);
+    if (!match || !isSafeSpeakerAlias(match[1]) || !isSafeSpeakerAlias(match[3]) || match[1] === match[3]) {
+      output.push(line);
+      continue;
+    }
+    const first = match[1];
+    const second = match[3];
+    const rest = String(match[4] || '').trim();
+    output.push(`${first}：我是${first}。`);
+    output.push(`${second}：我是${second}。`);
+    if (rest) {
+      const addressedSecond = rest.startsWith(second);
+      output.push(`${addressedSecond ? first : second}：${rest}`);
+    }
+  }
+  return output.join('\n');
+}
+
+function parseDialogueLine(line) {
+  const match = String(line || '').trim().match(/^([\p{Script=Han}A-Za-z0-9_.-]{1,12})\s*[：:]\s*(.*)$/u);
+  if (!match || !isSafeSpeakerAlias(match[1])) return null;
+  return { label: match[1], text: match[2].trim() };
+}
+
+function otherAlias(label, aliases) {
+  return aliases.length === 2 ? aliases.find((alias) => alias !== label) || '' : '';
+}
+
+function repairNamedDialogueTurns(text) {
+  let lines = splitCombinedSpeakerIntros(simplifyNamedSpeakerLabels(formatSpeakerDialogueText(text)))
+    .split('\n')
+    .map((line) => line.trim())
+    .filter(Boolean);
+  const aliases = [...new Set(lines.map(parseDialogueLine).filter(Boolean).map((line) => line.label))].filter(isSafeSpeakerAlias);
+  if (aliases.length !== 2) return lines.join('\n');
+
+  const expanded = [];
+  for (const rawLine of lines) {
+    const line = parseDialogueLine(rawLine);
+    if (!line) {
+      expanded.push(rawLine);
+      continue;
+    }
+    const peer = otherAlias(line.label, aliases);
+    const introRest = line.text.match(new RegExp(`^我是${escapeRegExp(line.label)}[。！？!?,，、\\s]+(.+)$`, 'u'));
+    if (introRest?.[1]) {
+      const rest = introRest[1].trim();
+      expanded.push(`${line.label}：我是${line.label}。`);
+      if (rest && !/^[。！？!?,，、\s]+$/.test(rest)) {
+        expanded.push(`${rest.startsWith(line.label) ? peer : line.label}：${rest}`);
+      }
+      continue;
+    }
+    expanded.push(rawLine);
+  }
+
+  const repaired = [];
+  let pendingReplyAlias = '';
+  for (const rawLine of expanded) {
+    const line = parseDialogueLine(rawLine);
+    if (!line) {
+      repaired.push(rawLine);
+      continue;
+    }
+    const peer = otherAlias(line.label, aliases);
+    let label = line.label;
+    let content = line.text;
+    if (pendingReplyAlias && content.startsWith('我') && label !== pendingReplyAlias) {
+      label = pendingReplyAlias;
+    }
+
+    const addressMatch = content.match(/^([\p{Script=Han}A-Za-z0-9_.-]{1,12}).{0,18}([？?]|为什么|怎么|吗|呢)/u);
+    pendingReplyAlias = addressMatch && aliases.includes(addressMatch[1]) ? addressMatch[1] : '';
+
+    const closing = content.match(/^(.*?)(好吧[，,。 ]*这是.+?对话[。！!]?|好吧[，,。 ]*以上是.+?对话[。！!]?)$/u);
+    if (closing?.[1]?.trim() && closing?.[2]?.trim() && peer) {
+      repaired.push(`${label}：${closing[1].trim()}`);
+      repaired.push(`${peer}：${closing[2].trim()}`);
+    } else {
+      repaired.push(`${label}：${content}`);
+    }
+  }
+  return repaired.join('\n').trim();
+}
+
+function isSafeSpeakerAlias(value) {
+  const name = String(value || '').trim();
+  if (!name || name.length > 12) return false;
+  if (/说话人|speaker|我|你|他|她|它|我们|你们|他们|这个|那个|对话|会议|功能|测试/i.test(name)) return false;
+  return /^[\p{Script=Han}A-Za-z0-9_.-]+$/u.test(name);
+}
+
+function detectSpeakerAliases(text) {
+  const aliases = new Map();
+  const usedNames = new Set();
+  const lines = formatSpeakerDialogueText(text).split('\n');
+  for (const line of lines) {
+    const match = line.match(/^(说话人\s*\d+|Speaker\s*\d+)\s*[：:]\s*(.+)$/i);
+    if (!match) continue;
+    const speaker = match[1].replace(/\s+/g, '');
+    const content = match[2].trim();
+    const intro = content.match(/(?:^|[。！!？?，,；;\s])(?:大家好[，,。 ]*)?(?:你说)?(?:我是|我叫|我的名字叫|这里是)([\p{Script=Han}A-Za-z0-9_.-]{1,12})(?:[。！!，,；;\s]|$)/u);
+    if (!intro) continue;
+    const alias = intro[1].trim();
+    if (!isSafeSpeakerAlias(alias)) continue;
+    if (aliases.has(speaker) || usedNames.has(alias)) continue;
+    aliases.set(speaker, alias);
+    usedNames.add(alias);
+  }
+  return aliases;
+}
+
+function applySpeakerAliases(text) {
+  const formatted = formatSpeakerDialogueText(text);
+  const aliases = detectSpeakerAliases(formatted);
+  const renamed = aliases.size ? formatted.split('\n').map((line) => {
+    const match = line.match(/^(说话人\s*\d+|Speaker\s*\d+)\s*([：:]\s*.*)$/i);
+    if (!match) return line;
+    const speaker = match[1].replace(/\s+/g, '');
+    const alias = aliases.get(speaker);
+    return alias ? `${alias}${match[2]}` : line;
+  }).join('\n').trim() : formatted;
+  return repairNamedDialogueTurns(renamed).trim();
 }
 
 function escapeRegExp(value) {
@@ -1464,6 +2461,187 @@ async function applyProjectTermCorrections(text) {
 
   corrected = corrected.replace(/(^|[^A-Za-z])computer(?=上|里|录音|工具|这个|做|的|端|项目)/gi, '$1Cardputer');
   return corrected;
+}
+
+function extractJsonObject(text) {
+  const raw = String(text || '').trim();
+  if (!raw) throw new Error('empty DeepSeek response');
+  const fenced = raw.match(/```(?:json)?\s*([\s\S]*?)\s*```/i);
+  const candidate = fenced ? fenced[1].trim() : raw;
+  try {
+    return JSON.parse(candidate);
+  } catch {
+    const start = candidate.indexOf('{');
+    const end = candidate.lastIndexOf('}');
+    if (start >= 0 && end > start) {
+      return JSON.parse(candidate.slice(start, end + 1));
+    }
+    throw new Error('DeepSeek response is not valid JSON');
+  }
+}
+
+function cleanMemoList(items) {
+  if (!Array.isArray(items)) return [];
+  return [...new Set(items
+    .map((item) => String(item || '').replace(/^[-*]\s*/, '').trim())
+    .filter((item) => item.length >= 2))]
+    .slice(0, 8);
+}
+
+function isActionableTodo(item) {
+  const text = stripSentenceEnd(String(item || '').trim());
+  if (text.length < 4) return false;
+  if (!/(待办|todo|TODO|记得|提醒|下次|下一步|回头|稍后|明天|准备|安排|检查|联系|购买|发送|整理|需要(去|把|将|给|做|检查|联系|发送|整理)|要(去|把|将|给|做|检查|联系|发送|整理))/u.test(text)) {
+    return false;
+  }
+  if (/(以前|过去|现在|因为|但是|如果|一旦|可能|可以|觉得|感觉|非常|确实|不会在意|浪费|责任|成本|想法|思路|观点|结论)/u.test(text) && !/(下次|下一步|记得|提醒|待办|需要去|要去|准备|检查|联系|购买|发送|整理)/u.test(text)) {
+    return false;
+  }
+  return true;
+}
+
+function cleanTodoList(items) {
+  return cleanMemoList(items).filter(isActionableTodo).slice(0, 6);
+}
+
+function clampNumber(value, fallback, min, max) {
+  const n = Number(value);
+  return Number.isFinite(n) ? Math.max(min, Math.min(max, n)) : fallback;
+}
+
+function normalizeDeepSeekSettings(input = {}) {
+  const raw = input && typeof input === 'object' ? input : {};
+  const defaults = DEFAULT_DEEPSEEK_SETTINGS;
+  return {
+    enabled: raw.enabled !== false,
+    model: String(raw.model || defaults.model).trim() || defaults.model,
+    temperature: clampNumber(raw.temperature, defaults.temperature, 0, 2),
+    maxTokens: Math.round(clampNumber(raw.maxTokens, defaults.maxTokens, 512, 16000)),
+    timeoutMs: Math.round(clampNumber(raw.timeoutMs, defaults.timeoutMs, 5000, 180000)),
+    maxTranscriptChars: Math.round(clampNumber(raw.maxTranscriptChars, defaults.maxTranscriptChars, 1000, 100000)),
+    thinkingDisabled: raw.thinkingDisabled !== false,
+    fixedTerms: String(raw.fixedTerms ?? defaults.fixedTerms).slice(0, 4000),
+    systemPrompt: String(raw.systemPrompt || defaults.systemPrompt).slice(0, 12000),
+    userPrompt: String(raw.userPrompt || defaults.userPrompt).slice(0, 12000)
+  };
+}
+
+async function readDeepSeekSettings() {
+  try {
+    const raw = await fsp.readFile(DEEPSEEK_SETTINGS_PATH, 'utf8');
+    return normalizeDeepSeekSettings(JSON.parse(raw));
+  } catch (error) {
+    if (error.code !== 'ENOENT') {
+      console.error(`Failed to load DeepSeek settings ${DEEPSEEK_SETTINGS_PATH}: ${error.message}`);
+    }
+    return normalizeDeepSeekSettings();
+  }
+}
+
+async function writeDeepSeekSettings(settings) {
+  const normalized = normalizeDeepSeekSettings(settings);
+  await fsp.writeFile(DEEPSEEK_SETTINGS_PATH, `${JSON.stringify({
+    ...normalized,
+    updatedAt: new Date().toISOString()
+  }, null, 2)}\n`, 'utf8');
+  return normalized;
+}
+
+function normalizeDeepSeekMemo(parsed, fallbackText, job) {
+  const original = ensureReadableParagraphs(applyCommonTranscriptRepairs(applySpeakerAliases(formatSpeakerDialogueText(normalizeTranscriptText(parsed.corrected_text || parsed.original || fallbackText)))));
+  if (!original) throw new Error('DeepSeek returned empty corrected_text');
+  const sentences = splitTranscriptSentences(original);
+  const fallbackTitle = makeMemoTitle(sentences, job);
+  const fallbackSummary = makeTranscriptSummary(sentences);
+  const classified = classifyMemoSentences(sentences);
+  return {
+    title: String(parsed.title || fallbackTitle).replace(/\s+/g, ' ').slice(0, 32).trim() || fallbackTitle,
+    summary: String(parsed.summary || fallbackSummary).trim() || fallbackSummary,
+    todos: cleanTodoList(parsed.todos).length ? cleanTodoList(parsed.todos) : classified.todos,
+    ideas: cleanMemoList(parsed.ideas).length ? cleanMemoList(parsed.ideas) : classified.ideas,
+    original
+  };
+}
+
+async function polishTranscriptWithDeepSeek(text, job) {
+  if (!DEEPSEEK_API_KEY) return null;
+  const settings = await readDeepSeekSettings();
+  if (!settings.enabled) return null;
+  const source = String(text || '').trim();
+  if (!source) return null;
+
+  const isTruncated = source.length > settings.maxTranscriptChars;
+  const clipped = isTruncated
+    ? `${source.slice(0, settings.maxTranscriptChars)}\n\n（后续原始转写因长度限制未送入二次处理）`
+    : source;
+  const termPairs = await loadCustomTermPairs();
+  const termHint = termPairs.length
+    ? termPairs.slice(0, 80).map(([from, to]) => `${from} => ${to}`).join('\n')
+    : '无';
+  const payload = {
+    model: settings.model,
+    messages: [
+      {
+        role: 'system',
+        content: settings.systemPrompt
+      },
+      {
+        role: 'user',
+        content: [
+          settings.userPrompt,
+          '',
+          `录音编号：${job.id || ''}`,
+          `录音文件：${job.recordingName || ''}`,
+          `设备：${job.deviceId || ''}`,
+          '',
+          '项目词典：',
+          termHint,
+          '',
+          '固定词：',
+          settings.fixedTerms || '无',
+          '',
+          'ASR 原始文本：',
+          clipped
+        ].join('\n')
+      }
+    ],
+    temperature: settings.temperature,
+    max_tokens: settings.maxTokens,
+    response_format: { type: 'json_object' },
+    stream: false
+  };
+  if (settings.thinkingDisabled) {
+    payload.thinking = { type: 'disabled' };
+  }
+
+  const result = await fetchJson(`${DEEPSEEK_BASE_URL}/chat/completions`, {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${DEEPSEEK_API_KEY}`,
+      'Content-Type': 'application/json'
+    },
+    body: JSON.stringify(payload),
+    signal: AbortSignal.timeout(settings.timeoutMs)
+  });
+  const content = result?.choices?.[0]?.message?.content;
+  const parsed = extractJsonObject(content);
+  const memo = normalizeDeepSeekMemo(parsed, source, job);
+  return {
+    memo,
+    raw: parsed,
+    model: result?.model || settings.model,
+    settings: {
+      model: settings.model,
+      temperature: settings.temperature,
+      maxTokens: settings.maxTokens,
+      timeoutMs: settings.timeoutMs,
+      maxTranscriptChars: settings.maxTranscriptChars,
+      thinkingDisabled: settings.thinkingDisabled
+    },
+    usage: result?.usage,
+    truncated: isTruncated,
+    createdAt: new Date().toISOString()
+  };
 }
 
 function splitLongSentence(sentence, maxLength) {
@@ -1545,14 +2723,14 @@ function makeMemoTitle(sentences, job) {
 }
 
 function classifyMemoSentences(sentences) {
-  const todoPattern = /(下一步|需要|要做|待办|todo|TODO|记得|提醒|回头|之后|稍后|明天|下次|准备|安排)/;
+  const todoPattern = /(待办|todo|TODO|记得|提醒|下次|下一步|回头|稍后|明天|准备|安排|检查|联系|购买|发送|整理|需要(去|把|将|给|做|检查|联系|发送|整理)|要(去|把|将|给|做|检查|联系|发送|整理))/;
   const ideaPattern = /(想法|思路|感觉|也许|可能|可以|建议|问题是|重点|结论|方案|优化|改成|做成)/;
   const todos = [];
   const ideas = [];
 
   for (const sentence of sentences.map(stripSentenceEnd)) {
     if (sentence.length < 6) continue;
-    if (todoPattern.test(sentence)) todos.push(sentence);
+    if (todoPattern.test(sentence) && isActionableTodo(sentence)) todos.push(sentence);
     else if (ideaPattern.test(sentence)) ideas.push(sentence);
   }
 
@@ -1563,15 +2741,51 @@ function classifyMemoSentences(sentences) {
 }
 
 async function buildMemoSections(text, job) {
-  const corrected = await applyProjectTermCorrections(normalizeTranscriptText(text));
+  const corrected = ensureReadableParagraphs(applyCommonTranscriptRepairs(applySpeakerAliases(formatSpeakerDialogueText(await applyProjectTermCorrections(normalizeTranscriptText(text))))));
   if (!corrected) {
     return {
       title: job.id || '新录音',
       summary: '（转写结果为空）',
       todos: [],
       ideas: [],
-      original: '（转写结果为空）'
+      original: '（转写结果为空）',
+      provider: 'rules'
     };
+  }
+
+  if (DEEPSEEK_API_KEY) {
+    try {
+      const deepSeek = await polishTranscriptWithDeepSeek(corrected, job);
+      if (deepSeek?.memo) {
+        const deepSeekPath = transcriptDeepSeekPathForId(job.id);
+        const polishedPath = transcriptPolishedPathForId(job.id);
+        await fsp.writeFile(deepSeekPath, `${JSON.stringify({
+          id: job.id,
+          recordingName: job.recordingName,
+          model: deepSeek.model,
+          settings: deepSeek.settings,
+          usage: deepSeek.usage,
+          truncated: deepSeek.truncated,
+          createdAt: deepSeek.createdAt,
+          raw: deepSeek.raw,
+          memo: deepSeek.memo
+        }, null, 2)}\n`, 'utf8');
+        await fsp.writeFile(polishedPath, `${deepSeek.memo.original}\n`, 'utf8');
+        return {
+          ...deepSeek.memo,
+          provider: 'deepseek',
+          deepSeek: {
+            model: deepSeek.model,
+            usage: deepSeek.usage,
+            truncated: deepSeek.truncated,
+            path: path.relative(DATA_ROOT, deepSeekPath),
+            polishedPath: path.relative(DATA_ROOT, polishedPath)
+          }
+        };
+      }
+    } catch (error) {
+      console.error(`DeepSeek polish failed for ${job.id || 'unknown'}: ${error.message}`);
+    }
   }
 
   const sentences = splitTranscriptSentences(corrected);
@@ -1582,7 +2796,8 @@ async function buildMemoSections(text, job) {
     summary: makeTranscriptSummary(sentences),
     todos: classified.todos,
     ideas: classified.ideas,
-    original: paragraphs.join('\n\n')
+    original: paragraphs.join('\n\n'),
+    provider: 'rules'
   };
 }
 
@@ -1651,6 +2866,42 @@ async function sendToFlomo(job, text) {
   };
 }
 
+async function writeMemoForJob(job, text) {
+  const memoPayload = await buildFlomoContent(job, text);
+  const transcriptMemoPath = transcriptMemoPathForId(job.id);
+  await fsp.writeFile(transcriptMemoPath, `${memoPayload.content}\n`, 'utf8');
+
+  const latest = await readJob(job.id);
+  latest.phase = 4;
+  latest.transcriptMemoPath = path.relative(DATA_ROOT, transcriptMemoPath);
+  latest.memo = {
+    title: memoPayload.memo.title,
+    hasTodos: memoPayload.memo.todos.length > 0,
+    hasIdeas: memoPayload.memo.ideas.length > 0,
+    provider: memoPayload.memo.provider || 'rules'
+  };
+      if (memoPayload.memo.deepSeek) {
+        latest.deepSeek = memoPayload.memo.deepSeek;
+        latest.polishedTranscriptPath = memoPayload.memo.deepSeek.polishedPath;
+      }
+      if (job.autoSpeakerCommand) {
+        latest.autoSpeakerCommand = job.autoSpeakerCommand;
+        latest.autoSpeakerRetryDone = job.autoSpeakerRetryDone;
+        latest.asrSpeakerCountRequested = job.asrSpeakerCountRequested;
+        latest.asrSpeakerCount = job.asrSpeakerCount;
+      }
+      latest.memoUpdatedAt = new Date().toISOString();
+  delete latest.pendingReason;
+  delete latest.lastError;
+  await writeJob(latest);
+  return {
+    job: latest,
+    content: memoPayload.content,
+    memo: memoPayload.memo,
+    transcriptMemoPath
+  };
+}
+
 async function processJob(id) {
   if (processingJobs.has(id)) {
     return;
@@ -1668,21 +2919,59 @@ async function processJob(id) {
       return;
     }
 
-    const audioUrl = publicAudioUrl(job.recordingName);
+    const requestedAsrSource = normalizeAsrSource(job.asrSourceRequested);
+    const asrSource = requestedAsrSource || DEFAULT_ASR_AUDIO_SOURCE;
+    const speakerCount = normalizeSpeakerCount(job.asrSpeakerCountRequested ?? DEFAULT_ASR_SPEAKER_COUNT);
+    let audioUrl = publicAudioUrl(job.recordingName);
+    if (asrSource === 'clean-for-asr') {
+      const { meta: asrCleanMeta } = await writeAsrCleanForJob(job, job.asrCleanParams);
+      job.asrCleanPath = path.relative(DATA_ROOT, asrCleanPathForId(id));
+      job.asrCleanMetaPath = path.relative(DATA_ROOT, asrCleanMetaPathForId(id));
+      job.asrClean = {
+        createdAt: asrCleanMeta.createdAt,
+        params: asrCleanMeta.params,
+        metrics: asrCleanMeta.metrics
+      };
+      job.asrDecision = {
+        finalSource: 'clean-for-asr',
+        cleanRole: 'manual-final',
+        reason: '用户手动选择用识别版重跑转写。',
+        updatedAt: new Date().toISOString()
+      };
+      await writeJob(job);
+      audioUrl = publicAsrAudioUrl(id);
+    } else if (shouldGenerateAsrCleanComparison(asrSource, requestedAsrSource)) {
+      job = await attachAsrCleanForComparison(
+        job,
+        '自动上传默认使用原始音频转写；识别版只生成给后台试听和调试，避免降噪误伤文字。'
+      );
+    } else {
+      job.asrDecision = {
+        finalSource: 'raw',
+        cleanRole: 'manual-raw-final',
+        reason: '用户手动选择用原始音频重跑转写。',
+        updatedAt: new Date().toISOString()
+      };
+      await writeJob(job);
+    }
+
     job.status = 'transcribing';
     job.phase = 3;
     job.audioUrl = audioUrl.replace(ASR_FILE_TOKEN, '***');
+    job.asrSource = asrSource;
+    job.asrSpeakerCount = speakerCount;
     delete job.lastError;
     await writeJob(job);
 
-    const taskId = await submitDashScopeTask(audioUrl);
+    const taskId = await submitDashScopeTask(audioUrl, { speakerCount });
     job = await readJob(id);
     job.dashScopeTaskId = taskId;
     await writeJob(job);
 
     const { output, transcriptionUrl } = await waitForDashScopeTask(taskId);
     const transcription = await downloadTranscription(transcriptionUrl);
-    const text = extractTranscriptText(transcription);
+    const speakerTranscript = extractSpeakerTranscript(transcription);
+    const text = speakerTranscript.text || extractTranscriptText(transcription);
     const transcriptTextPath = path.join(TRANSCRIPT_DIR, `${id}.txt`);
     const transcriptJsonPath = path.join(TRANSCRIPT_DIR, `${id}.json`);
     await fsp.writeFile(transcriptTextPath, `${text}\n`, 'utf8');
@@ -1696,10 +2985,43 @@ async function processJob(id) {
     job.transcriptText = text;
     job.dashScope = {
       taskId,
+      model: DASHSCOPE_MODEL,
+      audioSource: asrSource,
+      speakerCount,
+      speakerDiarization: speakerTranscript.text ? {
+        speakerCount: speakerTranscript.speakerCount,
+        segmentCount: speakerTranscript.segments.length
+      } : null,
+      disfluencyRemoval: DASHSCOPE_DISFLUENCY_REMOVAL,
+      maxWaitMs: DASHSCOPE_MAX_WAIT_MS,
       usage: output.usage,
       taskMetrics: output.task_metrics
     };
     await writeJob(job);
+
+    const speakerCommand = detectSpeakerCountCommand(text);
+    if (
+      speakerCount === 0 &&
+      speakerCommand &&
+      speakerCommand.count > 1 &&
+      !job.autoSpeakerRetryDone
+    ) {
+      job.status = 'uploaded';
+      job.phase = Math.max(2, Number(job.phase || 2));
+      job.asrSpeakerCountRequested = speakerCommand.count;
+      job.autoSpeakerRetryDone = true;
+      job.autoSpeakerCommand = {
+        count: speakerCommand.count,
+        position: speakerCommand.position,
+        sample: speakerCommand.sample,
+        detectedAt: new Date().toISOString()
+      };
+      job.pendingReason = `检测到${speakerCommand.count}人对话口令，正在自动重跑分角色转写。`;
+      await writeJob(job);
+      processingJobs.delete(id);
+      scheduleProcessJob(id);
+      return;
+    }
 
     if (!FLOMO_WEBHOOK_URL) {
       job.status = 'transcribed';
@@ -1708,23 +3030,26 @@ async function processJob(id) {
       return;
     }
 
-    const flomoPayload = await sendToFlomo(job, text);
-    const transcriptMemoPath = transcriptMemoPathForId(id);
-    await fsp.writeFile(transcriptMemoPath, `${flomoPayload.content}\n`, 'utf8');
-    job = await readJob(id);
+    const memoPayload = await writeMemoForJob(job, text);
+    job = memoPayload.job;
+    const result = await fetchJson(FLOMO_WEBHOOK_URL, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({ content: memoPayload.content })
+    });
+    if (typeof result?.code === 'number' && result.code !== 0) {
+      throw new Error(result?.message || `flomo returned code ${result.code}`);
+    }
     job.status = 'done';
     job.phase = 4;
-    job.transcriptMemoPath = path.relative(DATA_ROOT, transcriptMemoPath);
-    job.memo = {
-      title: flomoPayload.memo.title,
-      hasTodos: flomoPayload.memo.todos.length > 0,
-      hasIdeas: flomoPayload.memo.ideas.length > 0
-    };
     job.flomo = {
       sentAt: new Date().toISOString(),
-      memoSlug: flomoPayload.result?.memo?.slug
+      memoSlug: result?.memo?.slug
     };
     delete job.pendingReason;
+    delete job.lastError;
     await writeJob(job);
   } catch (error) {
     const job = await readJob(id).catch(() => null);
@@ -1783,11 +3108,12 @@ async function handleUpload(req, res) {
     return;
   }
 
-  const deviceId = rawDeviceId.replace(/[^\w.-]/g, '_').slice(0, 80);
-  const { id: jobId, recordingName } = normalized;
-  const uploadPath = path.join(UPLOAD_DIR, recordingName);
-  const jobPath = path.join(JOB_DIR, `${jobId}.json`);
   const startedAt = new Date().toISOString();
+  const deviceId = rawDeviceId.replace(/[^\w.-]/g, '_').slice(0, 80);
+  const { id: jobId, recordingName, sourceRecordingName } = uploadIdentityFor(normalized, deviceId, rawRecordedAt, startedAt);
+  const uploadPath = path.join(UPLOAD_DIR, recordingName);
+  const tempUploadPath = path.join(UPLOAD_DIR, `.${recordingName}.${Date.now()}.${crypto.randomBytes(4).toString('hex')}.tmp`);
+  const jobPath = path.join(JOB_DIR, `${jobId}.json`);
   const uploadProgress = {
     id: jobId,
     deviceId,
@@ -1810,7 +3136,7 @@ async function handleUpload(req, res) {
 
   const uploadExists = fs.existsSync(uploadPath);
   const jobExists = fs.existsSync(jobPath);
-  if (jobExists) {
+  if (jobExists && uploadExists) {
     req.resume();
     updateDeviceStatus(deviceId, {
       lastStatus: 'duplicate',
@@ -1822,10 +3148,9 @@ async function handleUpload(req, res) {
     sendJson(res, 200, { ok: true, id: jobId, duplicate: true });
     return;
   }
-  if (uploadExists) {
-    await fsp.rm(uploadPath, { force: true }).catch(() => {});
+  if (uploadExists || jobExists) {
     updateDeviceStatus(deviceId, {
-      lastStatus: 'retrying_stale_upload',
+      lastStatus: uploadExists ? 'retrying_stale_upload' : 'repairing_missing_upload',
       lastRecordingName: recordingName,
       wifiRssi,
       wifiIp
@@ -1852,9 +3177,9 @@ async function handleUpload(req, res) {
         index: parseHeaderInt(req.headers['x-adpcm-initial-index']) || 0
       });
       bytes = wavBuffer.length;
-      await fsp.writeFile(uploadPath, wavBuffer, { flag: 'wx' });
+      await fsp.writeFile(tempUploadPath, wavBuffer, { flag: 'wx' });
     } else {
-      out = fs.createWriteStream(uploadPath, { flags: 'wx' });
+      out = fs.createWriteStream(tempUploadPath, { flags: 'wx' });
       req.on('data', (chunk) => {
         bytes += chunk.length;
         uploadedBytes = bytes;
@@ -1873,12 +3198,16 @@ async function handleUpload(req, res) {
       });
     }
 
+    await fsp.rm(uploadPath, { force: true }).catch(() => {});
+    await fsp.rename(tempUploadPath, uploadPath);
+
     const job = {
       id: jobId,
       status: 'uploaded',
       phase: 1,
       deviceId,
       recordingName,
+      sourceRecordingName,
       recordedAt: rawRecordedAt.slice(0, 40),
       bytes,
       uploadEncoding: isAdpcmUpload ? 'ima-adpcm' : 'wav',
@@ -1902,7 +3231,7 @@ async function handleUpload(req, res) {
     sendJson(res, 201, { ok: true, id: jobId });
   } catch (error) {
     if (out) out.destroy();
-    await fsp.rm(uploadPath, { force: true }).catch(() => {});
+    await fsp.rm(tempUploadPath, { force: true }).catch(() => {});
     updateDeviceStatus(deviceId, {
       lastStatus: error.message === 'upload too large' ? 'upload_too_large' : 'upload_failed',
       lastRecordingName: recordingName,
@@ -1956,6 +3285,7 @@ async function handleDashboardApi(req, res, url) {
           publicBaseUrl: Boolean(PUBLIC_BASE_URL),
           asrFileToken: Boolean(ASR_FILE_TOKEN),
           dashScope: Boolean(DASHSCOPE_API_KEY),
+          deepSeek: Boolean(DEEPSEEK_API_KEY),
           flomo: Boolean(FLOMO_WEBHOOK_URL)
         }
       },
@@ -1967,6 +3297,39 @@ async function handleDashboardApi(req, res, url) {
       }),
       jobs: await listJobs({ limit, status })
     });
+  } catch (error) {
+    sendJson(res, 500, { ok: false, error: error.message });
+  }
+}
+
+async function handleDeepSeekSettingsApi(req, res) {
+  if (!dashboardAuth(req, res)) return;
+
+  try {
+    if (req.method === 'GET') {
+      sendJson(res, 200, {
+        ok: true,
+        time: new Date().toISOString(),
+        configured: Boolean(DEEPSEEK_API_KEY),
+        settings: await readDeepSeekSettings(),
+        defaults: normalizeDeepSeekSettings()
+      });
+      return;
+    }
+
+    if (req.method === 'POST') {
+      const payload = await readJsonBody(req, 64 * 1024);
+      const settings = await writeDeepSeekSettings(payload.settings || payload);
+      sendJson(res, 200, {
+        ok: true,
+        time: new Date().toISOString(),
+        configured: Boolean(DEEPSEEK_API_KEY),
+        settings
+      });
+      return;
+    }
+
+    sendJson(res, 405, { ok: false, error: 'method not allowed' });
   } catch (error) {
     sendJson(res, 500, { ok: false, error: error.message });
   }
@@ -2178,6 +3541,7 @@ function normalizePreviewParams(input = {}) {
     p[key] = Number.isFinite(n) ? Math.max(min, Math.min(max, n)) : DEFAULT_PREVIEW_PARAMS[key];
   };
   number('gain', 0.2, 3);
+  number('rumbleHighpass', 0, 0.9995);
   number('lowpass', 1, 255);
   number('highMix', 0, 1);
   number('scratchRmsMax', 0, 10000);
@@ -2197,6 +3561,30 @@ function normalizePreviewParams(input = {}) {
   return p;
 }
 
+function normalizeAsrParams(input = {}) {
+  const p = { ...DEFAULT_ASR_PARAMS, ...(input || {}) };
+  const number = (key, min, max) => {
+    const n = Number(p[key]);
+    p[key] = Number.isFinite(n) ? Math.max(min, Math.min(max, n)) : DEFAULT_ASR_PARAMS[key];
+  };
+  number('gain', 0.2, 4);
+  number('highpass', 0, 0.999);
+  number('preEmphasis', 0, 0.95);
+  number('noiseGateRms', 0, 5000);
+  number('noiseGateFloor', 0, 1);
+  number('compressorThreshold', 500, 24000);
+  number('compressorRatio', 1, 12);
+  number('targetPeak', 4000, 32000);
+  number('limiter', 4000, 32767);
+  number('frameSamples', 80, 2048);
+  p.noiseGateRms = Math.round(p.noiseGateRms);
+  p.compressorThreshold = Math.round(p.compressorThreshold);
+  p.targetPeak = Math.round(p.targetPeak);
+  p.limiter = Math.round(p.limiter);
+  p.frameSamples = Math.round(p.frameSamples);
+  return p;
+}
+
 function frameStats(buffer, start, samples) {
   let sumSq = 0;
   let sumDiff = 0;
@@ -2213,27 +3601,259 @@ function frameStats(buffer, start, samples) {
   };
 }
 
-function buildPlayPreviewWav(wavBuffer, params) {
+function previewHighpassFrameStats(wavBuffer, wav, p) {
+  const statsList = [];
+  const rmsValues = [];
+  const frameBytes = p.frameSamples * 2;
+  const end = wav.dataOffset + wav.dataBytes;
+  let prevInput = 0;
+  let hpState = 0;
+
+  for (let frameStart = wav.dataOffset; frameStart < end; frameStart += frameBytes) {
+    const frameSamples = Math.floor(Math.min(frameBytes, end - frameStart) / 2);
+    let sumSq = 0;
+    let sumDiff = 0;
+    let prev = 0;
+    for (let i = 0; i < frameSamples; i++) {
+      const raw = wavBuffer.readInt16LE(frameStart + i * 2);
+      hpState = raw - prevInput + p.rumbleHighpass * hpState;
+      prevInput = raw;
+      const sample = hpState * p.gain;
+      sumSq += sample * sample;
+      if (i > 0) sumDiff += Math.abs(sample - prev);
+      prev = sample;
+    }
+    const stats = {
+      rms: Math.sqrt(sumSq / Math.max(1, frameSamples)),
+      avgDiff: frameSamples > 1 ? sumDiff / (frameSamples - 1) : 0
+    };
+    statsList.push(stats);
+    if (stats.rms > 0) rmsValues.push(stats.rms);
+  }
+
+  rmsValues.sort((a, b) => a - b);
+  const noiseFloorRms = rmsValues.length
+    ? rmsValues[Math.min(rmsValues.length - 1, Math.floor(rmsValues.length * 0.2))]
+    : 0;
+  const adaptiveNoiseRms = p.noiseRmsMax >= 400 && noiseFloorRms > 0
+    ? Math.max(p.noiseRmsMax, Math.min(5000, noiseFloorRms * 1.6 + 80))
+    : p.noiseRmsMax;
+  return { statsList, noiseFloorRms, adaptiveNoiseRms };
+}
+
+function previewModeProfile(mode) {
+  const normalized = normalizePreviewMode(mode);
+  const profiles = {
+    light: { voiceBandMix: 0.994, bodyLowpass: 224, extraLowpass: 0, finalGain: 1.02, humLowpass: 10, humMix: 0.3, machineNoiseScale: 5.0, speechHumRatio: 0.08, speechNoiseRatio: 0.28, speechHumTrackRatio: 0.05, speechBodyProtect: 1.35, spectralStrength: 0.28, spectralFloor: 0.22 },
+    heavy: { voiceBandMix: 0.988, bodyLowpass: 224, extraLowpass: 0, finalGain: 1.04, humLowpass: 14, humMix: 0.66, machineNoiseScale: 8.2, speechHumRatio: 0.04, speechNoiseRatio: 0.2, speechHumTrackRatio: 0.02, speechBodyProtect: 1.55, spectralStrength: 0.65, spectralFloor: 0.16 },
+    strong: { voiceBandMix: 0.982, bodyLowpass: 224, extraLowpass: 0, finalGain: 1.06, humLowpass: 18, humMix: 0.94, machineNoiseScale: 11.6, speechHumRatio: 0.02, speechNoiseRatio: 0.16, speechHumTrackRatio: 0.008, speechBodyProtect: 1.75, spectralStrength: 1.05, spectralFloor: 0.1 }
+  };
+  return { mode: normalized, ...profiles[normalized] };
+}
+
+function percentile(values, ratio) {
+  if (!values.length) return 0;
+  const sorted = [...values].sort((a, b) => a - b);
+  return sorted[Math.min(sorted.length - 1, Math.floor(sorted.length * ratio))];
+}
+
+function analyzeMachineNoiseReference(wavBuffer, p) {
+  if (!wavBuffer) return null;
+  try {
+    const wav = parsePcm16Wav(wavBuffer);
+    const analysis = previewHighpassFrameStats(wavBuffer, wav, p);
+    const rmsValues = analysis.statsList.map((stats) => stats.rms).filter((value) => value > 0);
+    const diffValues = analysis.statsList.map((stats) => stats.avgDiff).filter((value) => value >= 0);
+    return {
+      id: MACHINE_NOISE_REFERENCE_ID,
+      durationSec: wav.dataBytes / 2 / wav.sampleRate,
+      highpassRmsP50: percentile(rmsValues, 0.5),
+      highpassRmsP90: percentile(rmsValues, 0.9),
+      avgDiffP50: percentile(diffValues, 0.5),
+      avgDiffP90: percentile(diffValues, 0.9),
+      frameCount: analysis.statsList.length
+    };
+  } catch {
+    return null;
+  }
+}
+
+function fft(real, imag, inverse = false) {
+  const n = real.length;
+  for (let i = 1, j = 0; i < n; i++) {
+    let bit = n >> 1;
+    for (; j & bit; bit >>= 1) j ^= bit;
+    j ^= bit;
+    if (i < j) {
+      [real[i], real[j]] = [real[j], real[i]];
+      [imag[i], imag[j]] = [imag[j], imag[i]];
+    }
+  }
+  for (let len = 2; len <= n; len <<= 1) {
+    const angle = (inverse ? 2 : -2) * Math.PI / len;
+    const wLenReal = Math.cos(angle);
+    const wLenImag = Math.sin(angle);
+    for (let i = 0; i < n; i += len) {
+      let wReal = 1;
+      let wImag = 0;
+      for (let j = 0; j < len / 2; j++) {
+        const uReal = real[i + j];
+        const uImag = imag[i + j];
+        const vReal = real[i + j + len / 2] * wReal - imag[i + j + len / 2] * wImag;
+        const vImag = real[i + j + len / 2] * wImag + imag[i + j + len / 2] * wReal;
+        real[i + j] = uReal + vReal;
+        imag[i + j] = uImag + vImag;
+        real[i + j + len / 2] = uReal - vReal;
+        imag[i + j + len / 2] = uImag - vImag;
+        const nextReal = wReal * wLenReal - wImag * wLenImag;
+        wImag = wReal * wLenImag + wImag * wLenReal;
+        wReal = nextReal;
+      }
+    }
+  }
+  if (inverse) {
+    for (let i = 0; i < n; i++) {
+      real[i] /= n;
+      imag[i] /= n;
+    }
+  }
+}
+
+function hannWindow(size) {
+  const window = new Float64Array(size);
+  for (let i = 0; i < size; i++) {
+    window[i] = 0.5 - 0.5 * Math.cos(2 * Math.PI * i / (size - 1));
+  }
+  return window;
+}
+
+function highpassSamplesFromWav(wavBuffer, p) {
+  const wav = parsePcm16Wav(wavBuffer);
+  const sampleCount = wav.dataBytes / 2;
+  const samples = new Float64Array(sampleCount);
+  let prevInput = 0;
+  let hpState = 0;
+  for (let i = 0; i < sampleCount; i++) {
+    const raw = wavBuffer.readInt16LE(wav.dataOffset + i * 2);
+    hpState = raw - prevInput + p.rumbleHighpass * hpState;
+    prevInput = raw;
+    samples[i] = hpState * p.gain;
+  }
+  return samples;
+}
+
+function buildNoiseMagnitudeProfile(noiseBuffer, p, fftSize, hopSize, window) {
+  if (!noiseBuffer) return null;
+  let samples;
+  try {
+    samples = highpassSamplesFromWav(noiseBuffer, p);
+  } catch {
+    return null;
+  }
+  if (samples.length < fftSize) return null;
+  const bins = fftSize / 2 + 1;
+  const sums = new Float64Array(bins);
+  const real = new Float64Array(fftSize);
+  const imag = new Float64Array(fftSize);
+  let frames = 0;
+  for (let start = 0; start + fftSize <= samples.length; start += hopSize) {
+    real.fill(0);
+    imag.fill(0);
+    for (let i = 0; i < fftSize; i++) real[i] = samples[start + i] * window[i];
+    fft(real, imag, false);
+    for (let k = 0; k < bins; k++) sums[k] += Math.hypot(real[k], imag[k]);
+    frames++;
+  }
+  if (!frames) return null;
+  for (let k = 0; k < bins; k++) sums[k] /= frames;
+  return { magnitudes: sums, frames };
+}
+
+function applySpectralMachineNoiseReduction(inputSamples, noiseBuffer, p, profile) {
+  if (!noiseBuffer || profile.spectralStrength <= 0) return inputSamples;
+  const fftSize = 1024;
+  const hopSize = 256;
+  const window = hannWindow(fftSize);
+  const noiseProfile = buildNoiseMagnitudeProfile(noiseBuffer, p, fftSize, hopSize, window);
+  if (!noiseProfile) return inputSamples;
+  const output = new Float64Array(inputSamples.length);
+  const weights = new Float64Array(inputSamples.length);
+  const real = new Float64Array(fftSize);
+  const imag = new Float64Array(fftSize);
+  const bins = fftSize / 2 + 1;
+  for (let start = 0; start < inputSamples.length; start += hopSize) {
+    real.fill(0);
+    imag.fill(0);
+    for (let i = 0; i < fftSize; i++) {
+      const index = start + i;
+      real[i] = index < inputSamples.length ? inputSamples[index] * window[i] : 0;
+    }
+    fft(real, imag, false);
+    for (let k = 0; k < bins; k++) {
+      const mag = Math.hypot(real[k], imag[k]);
+      if (mag <= 1e-9) continue;
+      const floorMag = mag * profile.spectralFloor;
+      const nextMag = Math.max(floorMag, mag - noiseProfile.magnitudes[k] * profile.spectralStrength);
+      const scale = nextMag / mag;
+      real[k] *= scale;
+      imag[k] *= scale;
+      if (k > 0 && k < fftSize / 2) {
+        real[fftSize - k] *= scale;
+        imag[fftSize - k] *= scale;
+      }
+    }
+    fft(real, imag, true);
+    for (let i = 0; i < fftSize; i++) {
+      const index = start + i;
+      if (index >= inputSamples.length) break;
+      const w = window[i];
+      output[index] += real[i] * w;
+      weights[index] += w * w;
+    }
+  }
+  const result = new Int16Array(inputSamples.length);
+  for (let i = 0; i < inputSamples.length; i++) {
+    result[i] = clampInt16(Math.round(weights[i] > 1e-9 ? output[i] / weights[i] : inputSamples[i]));
+  }
+  return result;
+}
+
+function buildPlayPreviewWav(wavBuffer, params, mode = 'heavy', machineNoiseBuffer = null) {
   const wav = parsePcm16Wav(wavBuffer);
   const p = normalizePreviewParams(params);
+  const profile = previewModeProfile(mode);
   const output = Buffer.alloc(44 + wav.dataBytes);
   writeWavHeaderBuffer(output, wav.sampleRate, wav.dataBytes);
+  const analysis = previewHighpassFrameStats(wavBuffer, wav, p);
+  const machineNoise = analyzeMachineNoiseReference(machineNoiseBuffer, p);
+  const machineAdaptiveNoiseRms = machineNoise
+    ? Math.max(analysis.adaptiveNoiseRms, machineNoise.highpassRmsP90 * profile.machineNoiseScale)
+    : analysis.adaptiveNoiseRms;
 
   let lp = wavBuffer.readInt16LE(wav.dataOffset);
+  let prevInput = 0;
+  let hpState = 0;
+  let bodyLp = 0;
+  let humLp = 0;
   let hold = 0;
   let detectedFrames = 0;
   let noiseFrames = 0;
   let processedFrames = 0;
+  let speechProtectedFrames = 0;
   let scratchWet = 0;
   let noiseWet = 0;
+  let extraLp = 0;
   const frameBytes = p.frameSamples * 2;
   const end = wav.dataOffset + wav.dataBytes;
-  let outOffset = 44;
+  const processedSamples = new Int16Array(wav.dataBytes / 2);
+  let sampleIndex = 0;
+  let frameIndex = 0;
 
   for (let frameStart = wav.dataOffset; frameStart < end; frameStart += frameBytes) {
     const frameSamples = Math.floor(Math.min(frameBytes, end - frameStart) / 2);
-    const stats = frameStats(wavBuffer, frameStart, frameSamples);
-    const detected = stats.rms < p.scratchRmsMax &&
+    const stats = analysis.statsList[frameIndex] || frameStats(wavBuffer, frameStart, frameSamples);
+    const detected = stats.rms > 0 &&
+      stats.rms < p.scratchRmsMax &&
       stats.avgDiff > p.scratchDiffMin &&
       stats.avgDiff * 256 > stats.rms * p.scratchRatio;
     if (detected) {
@@ -2242,37 +3862,71 @@ function buildPlayPreviewWav(wavBuffer, params) {
     }
     const active = detected || hold > 0;
     if (hold > 0) hold--;
-    const likelyNoise = stats.rms > 0 && stats.rms < p.noiseRmsMax * 1.8;
-    if (likelyNoise) {
-      noiseFrames++;
-    }
+
+    const speechLike = machineNoise
+      ? stats.avgDiff > Math.max(80, machineNoise.avgDiffP90 * 2.2) || stats.rms > Math.max(machineAdaptiveNoiseRms * 0.75, machineNoise.highpassRmsP90 * 5)
+      : stats.avgDiff > 120 || stats.rms > machineAdaptiveNoiseRms * 0.75;
+    if (speechLike) speechProtectedFrames++;
+
+    const quiet = machineAdaptiveNoiseRms > 0 && stats.rms > 0 && stats.rms < machineAdaptiveNoiseRms;
+    if (quiet) noiseFrames++;
+    if (active || quiet) processedFrames++;
+
     const scratchTarget = active ? 1 : 0;
-    const frameNoiseTarget = likelyNoise ? 1 : 0.35;
-    scratchWet += (scratchTarget - scratchWet) * (scratchTarget > scratchWet ? 0.35 : 0.12);
-    noiseWet += (frameNoiseTarget - noiseWet) * (frameNoiseTarget > noiseWet ? 0.2 : 0.06);
-    if (scratchWet > 0.05 || noiseWet > 0.05) processedFrames++;
+    const quietRatio = quiet ? 1 - (stats.rms / Math.max(1, machineAdaptiveNoiseRms)) : 0;
+    const noiseTarget = Math.max(0, Math.min(1, quietRatio)) * (speechLike ? profile.speechNoiseRatio : 1);
+    const scratchStep = (scratchTarget > scratchWet ? 0.018 : 0.006);
+    const noiseStep = (noiseTarget > noiseWet ? 0.006 : 0.002);
 
     for (let i = 0; i < frameSamples; i++) {
-      let sample = clampInt16(Math.round(wavBuffer.readInt16LE(frameStart + i * 2) * p.gain));
-      const absSample = Math.abs(sample);
-      if (p.noiseRmsMax > 0 && absSample < p.noiseRmsMax * 2.5) {
-        const x = Math.min(1, absSample / Math.max(1, p.noiseRmsMax * 2.5));
-        const softGate = p.noiseMix + (1 - p.noiseMix) * x * x;
-        sample = clampInt16(Math.round(sample * softGate));
-      }
-      if (scratchWet > 0.01) {
-        lp += Math.round((sample - lp) * p.lowpass / 256);
+      const raw = wavBuffer.readInt16LE(frameStart + i * 2);
+      hpState = raw - prevInput + p.rumbleHighpass * hpState;
+      prevInput = raw;
+      let sample = clampInt16(Math.round(hpState * p.gain));
+      const humTrack = profile.humLowpass * (speechLike ? profile.speechHumTrackRatio : 1);
+      humLp += Math.round((sample - humLp) * humTrack / 256);
+      const humMix = profile.humMix * (speechLike ? profile.speechHumRatio : 1);
+      sample = clampInt16(Math.round(sample - humLp * humMix));
+      lp += Math.round((sample - lp) * p.lowpass / 256);
+
+      scratchWet += (scratchTarget - scratchWet) * scratchStep;
+      noiseWet += (noiseTarget - noiseWet) * noiseStep;
+
+      if (scratchWet > 0.001) {
         const hi = sample - lp;
         const scratchMix = 1 - scratchWet * (1 - p.highMix);
         sample = clampInt16(Math.round(lp + hi * scratchMix));
       }
-      if (noiseWet > 0.01) {
-        const noiseMix = 1 - noiseWet * (1 - Math.max(p.noiseMix, 0.55));
-        sample = clampInt16(Math.round(sample * noiseMix));
+
+      if (noiseWet > 0.001 && p.noiseMix < 1) {
+        const absSample = Math.abs(sample);
+        const bodyScale = speechLike ? profile.speechBodyProtect : 3;
+        const body = machineAdaptiveNoiseRms > 0
+          ? Math.min(1, absSample / Math.max(1, machineAdaptiveNoiseRms * bodyScale))
+          : 1;
+        const protection = body * body;
+        const attenuation = p.noiseMix + (1 - p.noiseMix) * protection;
+        const smoothAttenuation = 1 - noiseWet * (1 - attenuation);
+        sample = clampInt16(Math.round(sample * smoothAttenuation));
       }
-      output.writeInt16LE(sample, outOffset);
-      outOffset += 2;
+
+      bodyLp += Math.round((sample - bodyLp) * profile.bodyLowpass / 256);
+      sample = clampInt16(Math.round(bodyLp + (sample - bodyLp) * profile.voiceBandMix));
+      if (profile.extraLowpass > 0) {
+        extraLp += Math.round((sample - extraLp) * profile.extraLowpass / 256);
+        sample = extraLp;
+      }
+      sample = clampInt16(Math.round(sample * profile.finalGain));
+
+      processedSamples[sampleIndex++] = sample;
     }
+    frameIndex++;
+  }
+  const finalSamples = applySpectralMachineNoiseReduction(processedSamples, machineNoiseBuffer, p, profile);
+  let outOffset = 44;
+  for (let i = 0; i < finalSamples.length; i++) {
+    output.writeInt16LE(finalSamples[i], outOffset);
+    outOffset += 2;
   }
 
   return {
@@ -2282,11 +3936,177 @@ function buildPlayPreviewWav(wavBuffer, params) {
       detectedFrames,
       noiseFrames,
       processedFrames,
+      speechProtectedFrames,
       totalFrames: Math.ceil((wav.dataBytes / 2) / p.frameSamples),
       durationSec: wav.dataBytes / 2 / wav.sampleRate,
+      sampleRate: wav.sampleRate,
+      noiseFloorRms: Math.round(analysis.noiseFloorRms),
+      adaptiveNoiseRms: Math.round(analysis.adaptiveNoiseRms),
+      machineAdaptiveNoiseRms: Math.round(machineAdaptiveNoiseRms),
+      machineNoiseReferenceId: machineNoise?.id || null,
+      machineNoiseRmsP50: machineNoise ? Math.round(machineNoise.highpassRmsP50) : null,
+      machineNoiseRmsP90: machineNoise ? Math.round(machineNoise.highpassRmsP90) : null,
+      machineNoiseAvgDiffP90: machineNoise ? Math.round(machineNoise.avgDiffP90) : null,
+      analysis: 'post-highpass',
+      previewMode: profile.mode,
+      voiceBandMix: profile.voiceBandMix,
+      bodyLowpass: profile.bodyLowpass,
+      extraLowpass: profile.extraLowpass,
+      humLowpass: profile.humLowpass,
+      humMix: profile.humMix,
+      speechHumRatio: profile.speechHumRatio,
+      speechNoiseRatio: profile.speechNoiseRatio,
+      speechHumTrackRatio: profile.speechHumTrackRatio,
+      speechBodyProtect: profile.speechBodyProtect,
+      spectralStrength: profile.spectralStrength,
+      spectralFloor: profile.spectralFloor,
+      algorithm: PLAY_PREVIEW_ALGORITHM
+    }
+  };
+}
+
+function buildAsrCleanWav(wavBuffer, params) {
+  const wav = parsePcm16Wav(wavBuffer);
+  const p = normalizeAsrParams(params);
+  const sampleCount = wav.dataBytes / 2;
+  const scratch = new Int16Array(sampleCount);
+  const output = Buffer.alloc(44 + wav.dataBytes);
+  writeWavHeaderBuffer(output, wav.sampleRate, wav.dataBytes);
+
+  const frameBytes = p.frameSamples * 2;
+  const end = wav.dataOffset + wav.dataBytes;
+  const frameGains = [];
+  const frameStatsList = [];
+  const rmsValues = [];
+  let gatedFrames = 0;
+  let compressedSamples = 0;
+  let limitedSamples = 0;
+  let inputPeak = 0;
+  let processedPeak = 0;
+  let hp = 0;
+  let prevInput = 0;
+  let prevEmphasis = 0;
+  let sampleIndex = 0;
+
+  for (let frameStart = wav.dataOffset; frameStart < end; frameStart += frameBytes) {
+    const frameSamples = Math.floor(Math.min(frameBytes, end - frameStart) / 2);
+    const stats = frameStats(wavBuffer, frameStart, frameSamples);
+    frameStatsList.push(stats);
+    if (stats.rms > 0) rmsValues.push(stats.rms);
+  }
+
+  const sortedRms = [...rmsValues].sort((a, b) => a - b);
+  const noiseFloorRms = sortedRms.length
+    ? sortedRms[Math.min(sortedRms.length - 1, Math.floor(sortedRms.length * 0.2))]
+    : 0;
+  const adaptiveGateRms = p.noiseGateRms > 0
+    ? Math.max(p.noiseGateRms, Math.min(1800, noiseFloorRms * 2.25 + 80))
+    : 0;
+
+  const targetGains = frameStatsList.map((stats) => {
+    const gateGain = adaptiveGateRms > 0 && stats.rms < adaptiveGateRms
+      ? p.noiseGateFloor + (1 - p.noiseGateFloor) * Math.pow(stats.rms / Math.max(1, adaptiveGateRms), 2)
+      : 1;
+    if (gateGain < 0.999) gatedFrames++;
+    return gateGain;
+  });
+
+  let smoothedFrameGain = 1;
+  for (const target of targetGains) {
+    const coeff = target > smoothedFrameGain ? 0.78 : 0.18;
+    smoothedFrameGain += (target - smoothedFrameGain) * coeff;
+    frameGains.push(smoothedFrameGain);
+  }
+  for (let i = frameGains.length - 2; i >= 0; i--) {
+    frameGains[i] = Math.max(frameGains[i], frameGains[i + 1] * 0.96);
+  }
+
+  let frameIndex = 0;
+  let samplesInFrame = 0;
+  let sampleGate = frameGains[0] ?? 1;
+  let minGateGain = 1;
+  for (let offset = wav.dataOffset; offset < end; offset += 2) {
+    if (samplesInFrame >= p.frameSamples) {
+      frameIndex++;
+      samplesInFrame = 0;
+    }
+    const raw = wavBuffer.readInt16LE(offset);
+    inputPeak = Math.max(inputPeak, Math.abs(raw));
+    hp = raw - prevInput + p.highpass * hp;
+    prevInput = raw;
+    let sample = hp - prevEmphasis * p.preEmphasis;
+    prevEmphasis = hp;
+    const targetGate = frameGains[frameIndex] ?? 1;
+    sampleGate += (targetGate - sampleGate) * (targetGate > sampleGate ? 0.04 : 0.0015);
+    minGateGain = Math.min(minGateGain, sampleGate);
+    sample *= p.gain * sampleGate;
+
+    const sign = sample < 0 ? -1 : 1;
+    const absSample = Math.abs(sample);
+    if (absSample > p.compressorThreshold) {
+      sample = sign * (p.compressorThreshold + (absSample - p.compressorThreshold) / p.compressorRatio);
+      compressedSamples++;
+    }
+    if (Math.abs(sample) > p.limiter) {
+      sample = sign * p.limiter;
+      limitedSamples++;
+    }
+    const rounded = clampInt16(Math.round(sample));
+    processedPeak = Math.max(processedPeak, Math.abs(rounded));
+    scratch[sampleIndex++] = rounded;
+    samplesInFrame++;
+  }
+
+  const normalizeGain = processedPeak > 0 ? Math.min(8, p.targetPeak / processedPeak) : 1;
+  let outOffset = 44;
+  let outputPeak = 0;
+  for (let i = 0; i < scratch.length; i++) {
+    const sample = clampInt16(Math.round(scratch[i] * normalizeGain));
+    outputPeak = Math.max(outputPeak, Math.abs(sample));
+    output.writeInt16LE(sample, outOffset);
+    outOffset += 2;
+  }
+
+  return {
+    buffer: output,
+    params: p,
+    metrics: {
+      gatedFrames,
+      totalFrames: frameGains.length,
+      compressedSamples,
+      limitedSamples,
+      inputPeak,
+      processedPeak,
+      outputPeak,
+      normalizeGain: Number(normalizeGain.toFixed(3)),
+      noiseFloorRms: Math.round(noiseFloorRms),
+      adaptiveGateRms: Math.round(adaptiveGateRms),
+      minGateGain: Number(minGateGain.toFixed(3)),
+      durationSec: sampleCount / wav.sampleRate,
       sampleRate: wav.sampleRate
     }
   };
+}
+
+async function writeAsrCleanForJob(job, params) {
+  const sourcePath = audioPathForJob(job);
+  const source = await fsp.readFile(sourcePath);
+  const clean = buildAsrCleanWav(source, params);
+  const cleanPath = asrCleanPathForId(job.id);
+  const metaPath = asrCleanMetaPathForId(job.id);
+  const meta = {
+    id: job.id,
+    recordingName: job.recordingName,
+    kind: 'clean-for-asr',
+    params: clean.params,
+    metrics: clean.metrics,
+    sourceBytes: source.length,
+    outputBytes: clean.buffer.length,
+    createdAt: new Date().toISOString()
+  };
+  await fsp.writeFile(cleanPath, clean.buffer);
+  await fsp.writeFile(metaPath, `${JSON.stringify(meta, null, 2)}\n`, 'utf8');
+  return { clean, meta };
 }
 
 async function inspectJobFiles(job, memoPath) {
@@ -2296,13 +4116,19 @@ async function inspectJobFiles(job, memoPath) {
   const previewRelative = path.relative(DATA_ROOT, previewPathForId(job.id));
   const previewMetaRelative = path.relative(DATA_ROOT, previewMetaPathForId(job.id));
   const previewFeedbackRelative = path.relative(DATA_ROOT, previewFeedbackPathForId(job.id));
+  const asrCleanRelative = job.asrCleanPath || path.relative(DATA_ROOT, asrCleanPathForId(job.id));
+  const asrCleanMetaRelative = job.asrCleanMetaPath || path.relative(DATA_ROOT, asrCleanMetaPathForId(job.id));
   return {
     audio: audioInfo,
     preview: await statOptionalDataFile(previewRelative),
     previewMeta: await statOptionalDataFile(previewMetaRelative),
     previewFeedback: await statOptionalDataFile(previewFeedbackRelative),
+    asrClean: await statOptionalDataFile(asrCleanRelative),
+    asrCleanMeta: await statOptionalDataFile(asrCleanMetaRelative),
     transcript: await statOptionalDataFile(job.transcriptPath),
     transcriptJson: await statOptionalDataFile(job.transcriptJsonPath),
+    polishedTranscript: await statOptionalDataFile(job.polishedTranscriptPath),
+    deepSeek: await statOptionalDataFile(job.deepSeek?.path),
     memo: await statOptionalDataFile(memoPath)
   };
 }
@@ -2330,19 +4156,23 @@ async function handleJobDetailApi(req, res, pathname) {
   try {
     const job = await readJob(id);
     const transcriptText = job.transcriptText || await readOptionalDataText(job.transcriptPath);
+    const polishedTranscriptText = await readOptionalDataText(job.polishedTranscriptPath);
     const memoPath = job.transcriptMemoPath || path.relative(DATA_ROOT, transcriptMemoPathForId(id));
     const memoText = await readOptionalDataText(memoPath);
     const files = await inspectJobFiles(job, memoPath);
     const preview = await readOptionalDataJson(path.relative(DATA_ROOT, previewMetaPathForId(id)));
+    const asrClean = await readOptionalDataJson(job.asrCleanMetaPath || path.relative(DATA_ROOT, asrCleanMetaPathForId(id)));
     const previewFeedback = await readPreviewFeedback(id);
     sendJson(res, 200, {
       ok: true,
       time: new Date().toISOString(),
       job: redactJobForDashboard(job),
       transcriptText,
+      polishedTranscriptText,
       memoText,
       files,
       preview,
+      asrClean,
       previewFeedback
     });
   } catch (error) {
@@ -2398,14 +4228,17 @@ async function handleJobPreviewApi(req, res, pathname) {
 
   try {
     const payload = await readJsonBody(req);
+    const mode = normalizePreviewMode(payload.mode);
     const job = await readJob(id);
     const sourcePath = audioPathForJob(job);
     const source = await fsp.readFile(sourcePath);
-    const preview = buildPlayPreviewWav(source, payload.params);
-    const previewPath = previewPathForId(id);
-    const metaPath = previewMetaPathForId(id);
+    const machineNoise = await fsp.readFile(machineNoiseReferencePath()).catch(() => null);
+    const preview = buildPlayPreviewWav(source, payload.params, mode, machineNoise);
+    const previewPath = previewPathForId(id, mode);
+    const metaPath = previewMetaPathForId(id, mode);
     const meta = {
       id,
+      mode,
       recordingName: job.recordingName,
       kind: 'play-preview',
       params: preview.params,
@@ -2436,7 +4269,14 @@ async function handleJobPreviewAudioApi(req, res, pathname) {
   }
 
   try {
-    const previewPath = previewPathForId(id);
+    const url = new URL(req.url, `http://${req.headers.host || '127.0.0.1'}`);
+    const mode = normalizePreviewMode(url.searchParams.get('mode'));
+    const previewPath = previewPathForId(id, mode);
+    const previewMeta = await readOptionalDataJson(path.relative(DATA_ROOT, previewMetaPathForId(id, mode)));
+    if (previewMeta?.metrics?.algorithm !== PLAY_PREVIEW_ALGORITHM) {
+      sendJson(res, 409, { ok: false, error: 'old preview; regenerate play preview' });
+      return;
+    }
     const stat = await fsp.stat(previewPath);
     res.writeHead(200, {
       'Content-Type': 'audio/wav',
@@ -2447,6 +4287,66 @@ async function handleJobPreviewAudioApi(req, res, pathname) {
   } catch (error) {
     if (error.code === 'ENOENT') {
       sendJson(res, 404, { ok: false, error: 'preview not found' });
+      return;
+    }
+    sendJson(res, 500, { ok: false, error: error.message });
+  }
+}
+
+async function handleJobAsrCleanApi(req, res, pathname) {
+  if (!dashboardAuth(req, res)) return;
+
+  const id = decodeURIComponent(pathname.slice('/api/jobs/'.length, -'/asr-clean'.length));
+  if (!isValidJobId(id)) {
+    sendJson(res, 400, { ok: false, error: 'invalid job id' });
+    return;
+  }
+
+  try {
+    const payload = await readJsonBody(req);
+    let job = await readJob(id);
+    const { meta } = await writeAsrCleanForJob(job, payload.params || job.asrCleanParams);
+    job = await readJob(id);
+    job.asrCleanPath = path.relative(DATA_ROOT, asrCleanPathForId(id));
+    job.asrCleanMetaPath = path.relative(DATA_ROOT, asrCleanMetaPathForId(id));
+    job.asrCleanParams = meta.params;
+    job.asrClean = {
+      createdAt: meta.createdAt,
+      params: meta.params,
+      metrics: meta.metrics
+    };
+    await writeJob(job);
+    sendJson(res, 201, { ok: true, asrClean: meta });
+  } catch (error) {
+    if (error.code === 'ENOENT') {
+      sendJson(res, 404, { ok: false, error: 'audio or job not found' });
+      return;
+    }
+    sendJson(res, 500, { ok: false, error: error.message });
+  }
+}
+
+async function handleJobAsrCleanAudioApi(req, res, pathname) {
+  if (!dashboardAuth(req, res)) return;
+
+  const id = decodeURIComponent(pathname.slice('/api/jobs/'.length, -'/asr-clean/audio'.length));
+  if (!isValidJobId(id)) {
+    sendJson(res, 400, { ok: false, error: 'invalid job id' });
+    return;
+  }
+
+  try {
+    const cleanPath = asrCleanPathForId(id);
+    const stat = await fsp.stat(cleanPath);
+    res.writeHead(200, {
+      'Content-Type': 'audio/wav',
+      'Content-Length': stat.size,
+      'Cache-Control': 'no-store'
+    });
+    fs.createReadStream(cleanPath).pipe(res);
+  } catch (error) {
+    if (error.code === 'ENOENT') {
+      sendJson(res, 404, { ok: false, error: 'ASR clean audio not found' });
       return;
     }
     sendJson(res, 500, { ok: false, error: error.message });
@@ -2522,6 +4422,32 @@ async function handleAudio(req, res, url) {
   }
 
   const recordingName = decodeURIComponent(url.pathname.slice('/audio/'.length));
+  const asrCleanMatch = recordingName.match(/^([\w.-]+)\.clean-for-asr\.wav$/i);
+  if (asrCleanMatch) {
+    const id = asrCleanMatch[1];
+    if (!isValidJobId(id)) {
+      sendJson(res, 400, { ok: false, error: 'invalid job id' });
+      return;
+    }
+    try {
+      const cleanPath = asrCleanPathForId(id);
+      const stat = await fsp.stat(cleanPath);
+      res.writeHead(200, {
+        'Content-Type': 'audio/wav',
+        'Content-Length': stat.size,
+        'Cache-Control': 'no-store'
+      });
+      fs.createReadStream(cleanPath).pipe(res);
+    } catch (error) {
+      if (error.code === 'ENOENT') {
+        sendJson(res, 404, { ok: false, error: 'ASR clean audio not found' });
+        return;
+      }
+      sendJson(res, 500, { ok: false, error: error.message });
+    }
+    return;
+  }
+
   const normalized = normalizeRecordingName(recordingName);
   if (!normalized || normalized.recordingName !== recordingName) {
     sendJson(res, 400, { ok: false, error: 'invalid audio name' });
@@ -2546,6 +4472,35 @@ async function handleAudio(req, res, url) {
   }
 }
 
+async function handleAsrAudio(req, res, url) {
+  if (!ASR_FILE_TOKEN || !timingSafeEqualText(url.searchParams.get('token'), ASR_FILE_TOKEN)) {
+    sendJson(res, 401, { ok: false, error: 'invalid audio token' });
+    return;
+  }
+
+  const id = decodeURIComponent(url.pathname.slice('/asr-audio/'.length));
+  if (!isValidJobId(id)) {
+    sendJson(res, 400, { ok: false, error: 'invalid job id' });
+    return;
+  }
+
+  try {
+    const stat = await fsp.stat(asrCleanPathForId(id));
+    res.writeHead(200, {
+      'Content-Type': 'audio/wav',
+      'Content-Length': stat.size,
+      'Cache-Control': 'no-store'
+    });
+    fs.createReadStream(asrCleanPathForId(id)).pipe(res);
+  } catch (error) {
+    if (error.code === 'ENOENT') {
+      sendJson(res, 404, { ok: false, error: 'ASR clean audio not found' });
+      return;
+    }
+    sendJson(res, 500, { ok: false, error: error.message });
+  }
+}
+
 async function handleJobProcess(req, res, pathname) {
   if (!UPLOAD_TOKEN) {
     sendJson(res, 500, { ok: false, error: 'UPLOAD_TOKEN is not configured' });
@@ -2561,9 +4516,98 @@ async function handleJobProcess(req, res, pathname) {
     sendJson(res, 400, { ok: false, error: 'invalid job id' });
     return;
   }
-  await readJob(id);
+  const job = await readJob(id);
+  const url = new URL(req.url, 'http://localhost');
+  const requestedAsrSource = normalizeAsrSource(url.searchParams.get('asrSource') || url.searchParams.get('source'));
+  const requestedSpeakerCount = normalizeSpeakerCount(url.searchParams.get('speakerCount') || url.searchParams.get('speakers'));
+  job.status = 'uploaded';
+  job.phase = Math.max(2, Number(job.phase || 2));
+  job.reprocessRequestedAt = new Date().toISOString();
+  if (requestedAsrSource) {
+    job.asrSourceRequested = requestedAsrSource;
+  } else {
+    delete job.asrSourceRequested;
+  }
+  if (requestedSpeakerCount > 1) {
+    job.asrSpeakerCountRequested = requestedSpeakerCount;
+  } else {
+    delete job.asrSpeakerCountRequested;
+  }
+  delete job.pendingReason;
+  delete job.lastError;
+  await writeJob(job);
   scheduleProcessJob(id);
   sendJson(res, 202, { ok: true, id, status: 'queued' });
+}
+
+async function readTranscriptTextForJob(job) {
+  let text = job.transcriptText || '';
+  if (!text && job.transcriptPath) {
+    text = await fsp.readFile(path.join(DATA_ROOT, job.transcriptPath), 'utf8');
+  }
+  return String(text || '').trim();
+}
+
+async function handleJobPolish(req, res, pathname) {
+  if (!UPLOAD_TOKEN) {
+    sendJson(res, 500, { ok: false, error: 'UPLOAD_TOKEN is not configured' });
+    return;
+  }
+  if (!hasValidUploadToken(req)) {
+    sendJson(res, 401, { ok: false, error: 'invalid upload token' });
+    return;
+  }
+
+  const id = decodeURIComponent(pathname.slice('/jobs/'.length, -'/polish'.length));
+  if (!/^[\w.-]+$/.test(id)) {
+    sendJson(res, 400, { ok: false, error: 'invalid job id' });
+    return;
+  }
+
+  let job;
+  try {
+    job = await readJob(id);
+  } catch (error) {
+    if (error.code === 'ENOENT') {
+      sendJson(res, 404, { ok: false, error: 'job not found' });
+      return;
+    }
+    throw error;
+  }
+
+  const text = await readTranscriptTextForJob(job);
+  if (!text) {
+    sendJson(res, 409, { ok: false, error: 'job has no transcript text to polish' });
+    return;
+  }
+
+  job.status = 'polishing';
+  job.polishRequestedAt = new Date().toISOString();
+  delete job.pendingReason;
+  delete job.lastError;
+  await writeJob(job);
+
+  try {
+    const result = await writeMemoForJob(job, text);
+    const latest = result.job;
+    latest.status = 'transcribed';
+    latest.pendingReason = 'memo regenerated; flomo not resent';
+    await writeJob(latest);
+    sendJson(res, 200, {
+      ok: true,
+      id,
+      status: latest.status,
+      memo: latest.memo,
+      transcriptMemoPath: latest.transcriptMemoPath,
+      polishedTranscriptPath: latest.polishedTranscriptPath
+    });
+  } catch (error) {
+    const latest = await readJob(id).catch(() => job);
+    latest.status = 'polish_failed';
+    latest.lastError = error.message;
+    await writeJob(latest).catch(() => {});
+    sendJson(res, 500, { ok: false, error: error.message });
+  }
 }
 
 async function handleJobResend(req, res, pathname) {
@@ -2596,33 +4640,31 @@ async function handleJobResend(req, res, pathname) {
     }
     throw error;
   }
-  let text = job.transcriptText || '';
-  if (!text && job.transcriptPath) {
-    text = await fsp.readFile(path.join(DATA_ROOT, job.transcriptPath), 'utf8');
-  }
-  text = text.trim();
+  const text = await readTranscriptTextForJob(job);
   if (!text) {
     sendJson(res, 409, { ok: false, error: 'job has no transcript text to resend' });
     return;
   }
 
-  const flomoPayload = await sendToFlomo(job, text);
-  const transcriptMemoPath = transcriptMemoPathForId(id);
-  await fsp.writeFile(transcriptMemoPath, `${flomoPayload.content}\n`, 'utf8');
+  const memoPayload = await writeMemoForJob(job, text);
+  const flomoPayload = await fetchJson(FLOMO_WEBHOOK_URL, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json'
+    },
+    body: JSON.stringify({ content: memoPayload.content })
+  });
+  if (typeof flomoPayload?.code === 'number' && flomoPayload.code !== 0) {
+    throw new Error(flomoPayload?.message || `flomo returned code ${flomoPayload.code}`);
+  }
 
-  job = await readJob(id);
+  job = memoPayload.job;
   job.status = 'done';
   job.phase = 4;
-  job.transcriptMemoPath = path.relative(DATA_ROOT, transcriptMemoPath);
-  job.memo = {
-    title: flomoPayload.memo.title,
-    hasTodos: flomoPayload.memo.todos.length > 0,
-    hasIdeas: flomoPayload.memo.ideas.length > 0
-  };
   job.flomo = {
     ...(job.flomo || {}),
     resentAt: new Date().toISOString(),
-    memoSlug: flomoPayload.result?.memo?.slug || job.flomo?.memoSlug
+    memoSlug: flomoPayload?.memo?.slug || job.flomo?.memoSlug
   };
   delete job.pendingReason;
   delete job.lastError;
@@ -2646,19 +4688,24 @@ async function route(req, res) {
     return;
   }
   if (req.method === 'GET' && pathname === '/dashboard') {
-    sendHtml(res, 200, dashboardHtml());
-    return;
-  }
-  if (req.method === 'GET' && pathname === '/dashboard/lab') {
     sendHtml(res, 200, dashboardLabHtml());
     return;
   }
+  if (req.method === 'GET' && pathname === '/dashboard/lab') {
+    redirect(res, '/dashboard');
+    return;
+  }
   if (req.method === 'GET' && pathname.startsWith('/dashboard/jobs/')) {
-    sendHtml(res, 200, dashboardJobHtml());
+    const id = decodeURIComponent(pathname.slice('/dashboard/jobs/'.length));
+    redirect(res, isValidJobId(id) ? `/dashboard?job=${encodeURIComponent(id)}` : '/dashboard');
     return;
   }
   if (req.method === 'GET' && pathname === '/api/dashboard') {
     await handleDashboardApi(req, res, url);
+    return;
+  }
+  if ((req.method === 'GET' || req.method === 'POST') && pathname === '/api/deepseek-settings') {
+    await handleDeepSeekSettingsApi(req, res);
     return;
   }
   if (req.method === 'GET' && pathname === '/api/preview-feedback') {
@@ -2669,8 +4716,16 @@ async function route(req, res) {
     await handleJobPreviewApi(req, res, pathname);
     return;
   }
+  if (req.method === 'POST' && pathname.startsWith('/api/jobs/') && pathname.endsWith('/asr-clean')) {
+    await handleJobAsrCleanApi(req, res, pathname);
+    return;
+  }
   if (req.method === 'POST' && pathname.startsWith('/api/jobs/') && pathname.endsWith('/preview/feedback')) {
     await handleJobPreviewFeedbackApi(req, res, pathname);
+    return;
+  }
+  if (req.method === 'GET' && pathname.startsWith('/api/jobs/') && pathname.endsWith('/asr-clean/audio')) {
+    await handleJobAsrCleanAudioApi(req, res, pathname);
     return;
   }
   if (req.method === 'GET' && pathname.startsWith('/api/jobs/') && pathname.endsWith('/preview/audio')) {
@@ -2697,8 +4752,16 @@ async function route(req, res) {
     await handleAudio(req, res, url);
     return;
   }
+  if (req.method === 'GET' && pathname.startsWith('/asr-audio/')) {
+    await handleAsrAudio(req, res, url);
+    return;
+  }
   if (req.method === 'POST' && pathname.startsWith('/jobs/') && pathname.endsWith('/process')) {
     await handleJobProcess(req, res, pathname);
+    return;
+  }
+  if (req.method === 'POST' && pathname.startsWith('/jobs/') && pathname.endsWith('/polish')) {
+    await handleJobPolish(req, res, pathname);
     return;
   }
   if (req.method === 'POST' && pathname.startsWith('/jobs/') && pathname.endsWith('/resend')) {
