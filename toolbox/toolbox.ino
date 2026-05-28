@@ -2984,6 +2984,21 @@ static String readHttpBody(WiFiClient &client, int &code, uint32_t timeoutMs = 5
   return body;
 }
 
+static int readHttpStatusCodeOnly(WiFiClient &client, uint32_t timeoutMs = 5000) {
+  uint32_t start = millis();
+  while (!client.available() && client.connected() && millis() - start < timeoutMs) {
+    M5Cardputer.update();
+    if (keyUploadAbort()) return 0;
+    delay(20);
+  }
+  if (!client.available()) return 0;
+  char line[96];
+  int n = client.readBytesUntil('\n', line, sizeof(line) - 1);
+  line[n > 0 ? n : 0] = 0;
+  char *sp = strchr(line, ' ');
+  return sp ? atoi(sp + 1) : 0;
+}
+
 static uint8_t uploadCheckJobStatusMounted(const char *host, uint16_t port, const char *hostHeader, const char *uploadPath, const char *jobId) {
   char jobPath[180];
   if (!makeJobStatusPath(uploadPath, jobId, jobPath, sizeof(jobPath))) return UPSTAT_BAD_URL;
@@ -3189,8 +3204,8 @@ static bool uploadOneJobMounted() {
   client.printf("X-Upload-Token: %s\r\n", uploadCfg.token);
   client.printf("X-Device-Id: %s\r\n", uploadCfg.device);
   client.printf("X-Wifi-Rssi: %d\r\n", WiFi.RSSI());
-  String localIp = WiFi.localIP().toString();
-  client.printf("X-Wifi-IP: %s\r\n", localIp.c_str());
+  IPAddress localIp = WiFi.localIP();
+  client.printf("X-Wifi-IP: %u.%u.%u.%u\r\n", localIp[0], localIp[1], localIp[2], localIp[3]);
   if (recordedAt[0]) client.printf("X-Recorded-At: %s\r\n", recordedAt);
   client.printf("X-Recording-Name: %s\r\n\r\n", name);
   static uint8_t buf[UPLOAD_CHUNK_BYTES];
@@ -3235,8 +3250,7 @@ static bool uploadOneJobMounted() {
       }
     }
   }
-  int code = 0;
-  String responseBody = readHttpBody(client, code, 5000);
+  int code = readHttpStatusCodeOnly(client, 5000);
   client.stop();
   f.close();
   if ((code >= 200 && code < 300) || code == 409) {
