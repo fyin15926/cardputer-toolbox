@@ -22,6 +22,7 @@
 #define UPLOAD_WIFI_ENABLED 1  // 需要使用 8MB Flash + 3MB APP 分区编译
 #if UPLOAD_WIFI_ENABLED
 #include <WiFi.h>
+#include "esp_wifi.h"
 #include <time.h>
 #endif
 
@@ -2783,8 +2784,13 @@ static bool boxFormatNow(char *buf, size_t n) {
 }
 
 static void wifiPowerDown() {
-  WiFi.disconnect(true);
+  WiFi.setAutoReconnect(false);
+  WiFi.disconnect(true, true);
+  delay(60);
   WiFi.mode(WIFI_OFF);
+  esp_wifi_stop();
+  esp_wifi_deinit();
+  delay(140);
   boxClockSynced = false;
 }
 
@@ -2799,10 +2805,13 @@ static void pauseUploadForMedia() {
 
 static bool tryWifiProfile(const char *ssid, const char *password) {
   if (!ssid || !ssid[0]) return false;
-  WiFi.disconnect(false);
+  WiFi.persistent(false);
+  WiFi.setAutoReconnect(false);
+  WiFi.disconnect(true, true);
   delay(120);
   WiFi.mode(WIFI_STA);
   WiFi.setSleep(false);
+  WiFi.setAutoReconnect(false);
   WiFi.begin(ssid, password ? password : "");
   uint32_t start = millis();
   while (WiFi.status() != WL_CONNECTED && millis() - start < 4500) {
@@ -2861,6 +2870,7 @@ static bool ensureWifiConnected() {
     return false;
   }
   WiFi.setSleep(false);
+  WiFi.setAutoReconnect(false);
   boxSyncClockIfNeeded();
   return true;
 }
@@ -5516,8 +5526,8 @@ static uint8_t uploadChatWavMounted(const char *path, char *reply, size_t replyL
   client.printf("X-Upload-Token: %s\r\n", uploadCfg.token);
   client.printf("X-Device-Id: %s\r\n", uploadCfg.device);
   client.printf("X-Wifi-Rssi: %d\r\n", WiFi.RSSI());
-  String localIp = WiFi.localIP().toString();
-  client.printf("X-Wifi-IP: %s\r\n", localIp.c_str());
+  IPAddress localIp = WiFi.localIP();
+  client.printf("X-Wifi-IP: %u.%u.%u.%u\r\n", localIp[0], localIp[1], localIp[2], localIp[3]);
   if (recordedAt[0]) client.printf("X-Recorded-At: %s\r\n", recordedAt);
   client.print("X-Recording-Name: CHAT_LAST.wav\r\n\r\n");
 
@@ -6653,6 +6663,11 @@ void setup() {
   M5Cardputer.Display.setRotation(SCREEN_ROT);
   applyBrightness();
   M5Cardputer.Display.setTextWrap(false);   // 关闭自动换行: 过长文字右侧截断, 不会换行掉出屏幕
+#if UPLOAD_WIFI_ENABLED
+  WiFi.persistent(false);
+  WiFi.setAutoReconnect(false);
+  WiFi.mode(WIFI_OFF);
+#endif
   {                          // internal_spk=false 跳过扬声器配置, 手动补上 Adv 扬声器引脚
     auto sc = M5Cardputer.Speaker.config();
     sc.pin_bck = 41; sc.pin_ws = 43; sc.pin_data_out = 42;
