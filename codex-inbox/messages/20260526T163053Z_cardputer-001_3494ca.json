@@ -1,0 +1,27 @@
+﻿{
+    "id":  "20260526T163053Z_cardputer-001_3494ca",
+    "time":  "2026-05-26T16:30:59.166Z",
+    "deviceId":  "cardputer-001",
+    "text":  "你告诉我你是谁？",
+    "intent":  "chat",
+    "requiresConfirmation":  false,
+    "reason":  "plain chat message",
+    "source":  "cardputer-chat",
+    "createdAt":  "2026-05-26T16:30:59.0410981Z",
+    "job":  {
+                "id":  "20260526T163053Z_cardputer-001_3494ca",
+                "status":  "done",
+                "deviceId":  "cardputer-001",
+                "recordingName":  "20260526T163053Z_cardputer-001_3494ca.wav",
+                "userText":  "你告诉我你是谁？",
+                "replyText":  "我是小机子，也叫大聪明，运行在Cardputer里的逻辑伙伴。",
+                "replyMode":  "chat-reply",
+                "command":  null,
+                "pendingReason":  "",
+                "lastError":  "",
+                "createdAt":  "2026-05-26T16:30:59.166Z",
+                "updatedAt":  "2026-05-26T16:30:59.166Z",
+                "bytes":  120320,
+                "audioPath":  "chat-stream-audio/20260526T163053Z_cardputer-001_3494ca.wav"
+            }
+}

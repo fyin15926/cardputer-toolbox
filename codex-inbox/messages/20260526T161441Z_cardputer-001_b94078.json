@@ -1,0 +1,27 @@
+﻿{
+    "id":  "20260526T161441Z_cardputer-001_b94078",
+    "time":  "2026-05-26T16:14:44.841Z",
+    "deviceId":  "cardputer-001",
+    "text":  "跟我说说",
+    "intent":  "chat",
+    "requiresConfirmation":  false,
+    "reason":  "plain chat message",
+    "source":  "cardputer-chat",
+    "createdAt":  "2026-05-26T16:14:44.0063281Z",
+    "job":  {
+                "id":  "20260526T161441Z_cardputer-001_b94078",
+                "status":  "done",
+                "deviceId":  "cardputer-001",
+                "recordingName":  "20260526T161441Z_cardputer-001_b94078.wav",
+                "userText":  "跟我说说",
+                "replyText":  "我听到了：跟我说说",
+                "replyMode":  "rules",
+                "command":  null,
+                "pendingReason":  "",
+                "lastError":  "",
+                "createdAt":  "2026-05-26T16:14:44.841Z",
+                "updatedAt":  "2026-05-26T16:14:44.841Z",
+                "bytes":  94720,
+                "audioPath":  "chat-stream-audio/20260526T161441Z_cardputer-001_b94078.wav"
+            }
+}

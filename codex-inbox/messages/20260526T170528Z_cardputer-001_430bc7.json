@@ -1,0 +1,27 @@
+﻿{
+    "id":  "20260526T170528Z_cardputer-001_430bc7",
+    "time":  "2026-05-26T17:05:34.501Z",
+    "deviceId":  "cardputer-001",
+    "text":  "给我念首",
+    "intent":  "chat",
+    "requiresConfirmation":  false,
+    "reason":  "plain chat message",
+    "source":  "cardputer-chat",
+    "createdAt":  "2026-05-26T17:05:34.2684566Z",
+    "job":  {
+                "id":  "20260526T170528Z_cardputer-001_430bc7",
+                "status":  "done",
+                "deviceId":  "cardputer-001",
+                "recordingName":  "20260526T170528Z_cardputer-001_430bc7.wav",
+                "userText":  "给我念首",
+                "replyText":  "念什么？说完整，比如诗名或文章名。",
+                "replyMode":  "chat-reply",
+                "command":  null,
+                "pendingReason":  "",
+                "lastError":  "",
+                "createdAt":  "2026-05-26T17:05:34.501Z",
+                "updatedAt":  "2026-05-26T17:05:34.501Z",
+                "bytes":  123392,
+                "audioPath":  "chat-stream-audio/20260526T170528Z_cardputer-001_430bc7.wav"
+            }
+}

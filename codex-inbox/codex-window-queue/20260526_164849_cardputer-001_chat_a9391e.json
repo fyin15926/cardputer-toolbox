@@ -1,0 +1,10 @@
+﻿{
+    "id":  "20260526_164849_cardputer-001_chat_a9391e",
+    "time":  "2026-05-26T08:48:29.620Z",
+    "intent":  "command",
+    "mode":  "Queue",
+    "status":  "queued",
+    "text":  "Fug code between fug code x继续做这个项目。",
+    "promptPath":  "codex-inbox/codex-window-prompt.txt",
+    "createdAt":  "2026-05-26T08:48:30.4062964Z"
+}

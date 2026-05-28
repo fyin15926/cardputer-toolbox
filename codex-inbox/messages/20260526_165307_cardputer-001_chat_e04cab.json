@@ -1,0 +1,27 @@
+﻿{
+    "id":  "20260526_165307_cardputer-001_chat_e04cab",
+    "time":  "2026-05-26T08:52:46.190Z",
+    "deviceId":  "cardputer-001",
+    "text":  "发送给Cox继续做这个项目。",
+    "intent":  "command",
+    "requiresConfirmation":  true,
+    "reason":  "matched command-like wording",
+    "source":  "cardputer-chat",
+    "createdAt":  "2026-05-26T08:52:45.7141770Z",
+    "job":  {
+                "id":  "20260526_165307_cardputer-001_chat_e04cab",
+                "status":  "done",
+                "deviceId":  "cardputer-001",
+                "recordingName":  "20260526_165307_cardputer-001_chat_e04cab.wav",
+                "userText":  "发送给Cox继续做这个项目。",
+                "replyText":  "我听到了：发送给Cox继续做这个项目。",
+                "replyMode":  "asr-only",
+                "command":  null,
+                "pendingReason":  "",
+                "lastError":  "",
+                "createdAt":  "2026-05-26T08:52:42.559Z",
+                "updatedAt":  "2026-05-26T08:52:46.190Z",
+                "bytes":  155180,
+                "audioPath":  "chat-audio/20260526_165307_cardputer-001_chat_e04cab.wav"
+            }
+}

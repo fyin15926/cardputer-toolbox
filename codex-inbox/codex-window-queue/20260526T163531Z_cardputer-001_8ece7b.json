@@ -1,0 +1,10 @@
+﻿{
+    "id":  "20260526T163531Z_cardputer-001_8ece7b",
+    "time":  "2026-05-26T16:35:36.980Z",
+    "intent":  "chat",
+    "mode":  "Queue",
+    "status":  "queued",
+    "text":  "台湾是哪个？",
+    "promptPath":  "codex-inbox/codex-window-prompt.txt",
+    "createdAt":  "2026-05-26T16:35:36.8299371Z"
+}

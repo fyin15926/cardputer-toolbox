@@ -1,0 +1,27 @@
+﻿{
+    "id":  "20260526T163402Z_cardputer-001_fbbe4c",
+    "time":  "2026-05-26T16:34:11.143Z",
+    "deviceId":  "cardputer-001",
+    "text":  "你用的哪家的大模型？",
+    "intent":  "chat",
+    "requiresConfirmation":  false,
+    "reason":  "plain chat message",
+    "source":  "cardputer-chat",
+    "createdAt":  "2026-05-26T16:34:10.4294503Z",
+    "job":  {
+                "id":  "20260526T163402Z_cardputer-001_fbbe4c",
+                "status":  "done",
+                "deviceId":  "cardputer-001",
+                "recordingName":  "20260526T163402Z_cardputer-001_fbbe4c.wav",
+                "userText":  "你用的哪家的大模型？",
+                "replyText":  "我听到了：你用的哪家的大模型？",
+                "replyMode":  "rules",
+                "command":  null,
+                "pendingReason":  "",
+                "lastError":  "",
+                "createdAt":  "2026-05-26T16:34:11.143Z",
+                "updatedAt":  "2026-05-26T16:34:11.143Z",
+                "bytes":  172544,
+                "audioPath":  "chat-stream-audio/20260526T163402Z_cardputer-001_fbbe4c.wav"
+            }
+}

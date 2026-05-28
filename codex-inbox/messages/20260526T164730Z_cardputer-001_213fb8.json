@@ -1,0 +1,27 @@
+﻿{
+    "id":  "20260526T164730Z_cardputer-001_213fb8",
+    "time":  "2026-05-26T16:47:44.552Z",
+    "deviceId":  "cardputer-001",
+    "text":  "好傻这问题。算了，你随",
+    "intent":  "chat",
+    "requiresConfirmation":  false,
+    "reason":  "plain chat message",
+    "source":  "cardputer-chat",
+    "createdAt":  "2026-05-26T16:47:43.5757116Z",
+    "job":  {
+                "id":  "20260526T164730Z_cardputer-001_213fb8",
+                "status":  "done",
+                "deviceId":  "cardputer-001",
+                "recordingName":  "20260526T164730Z_cardputer-001_213fb8.wav",
+                "userText":  "好傻这问题。算了，你随",
+                "replyText":  "明白，不讨论傻问题。有正经事找我随时说。",
+                "replyMode":  "chat-reply",
+                "command":  null,
+                "pendingReason":  "",
+                "lastError":  "",
+                "createdAt":  "2026-05-26T16:47:44.552Z",
+                "updatedAt":  "2026-05-26T16:47:44.552Z",
+                "bytes":  403968,
+                "audioPath":  "chat-stream-audio/20260526T164730Z_cardputer-001_213fb8.wav"
+            }
+}

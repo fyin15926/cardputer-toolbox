@@ -1,0 +1,10 @@
+﻿{
+    "id":  "20260526T165720Z_cardputer-001_71c722",
+    "time":  "2026-05-26T16:57:28.931Z",
+    "intent":  "chat",
+    "mode":  "Queue",
+    "status":  "queued",
+    "text":  "没有挣情事你就",
+    "promptPath":  "codex-inbox/codex-window-prompt.txt",
+    "createdAt":  "2026-05-26T16:57:29.2983340Z"
+}

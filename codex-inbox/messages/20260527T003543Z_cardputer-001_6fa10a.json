@@ -1,0 +1,27 @@
+﻿{
+    "id":  "20260527T003543Z_cardputer-001_6fa10a",
+    "time":  "2026-05-27T00:36:04.325Z",
+    "deviceId":  "cardputer-001",
+    "text":  "爱的人喜欢，为什国外的人喜欢什？",
+    "intent":  "chat",
+    "requiresConfirmation":  false,
+    "reason":  "plain chat message",
+    "source":  "cardputer-chat",
+    "createdAt":  "2026-05-27T00:36:04.7237432Z",
+    "job":  {
+                "id":  "20260527T003543Z_cardputer-001_6fa10a",
+                "status":  "done",
+                "deviceId":  "cardputer-001",
+                "recordingName":  "20260527T003543Z_cardputer-001_6fa10a.wav",
+                "userText":  "爱的人喜欢，为什国外的人喜欢什？",
+                "replyText":  "听不太清楚，能再说一遍吗？是想问爱的人喜欢什么，还是国外的人喜欢什么？",
+                "replyMode":  "chat-reply",
+                "command":  null,
+                "pendingReason":  "",
+                "lastError":  "",
+                "createdAt":  "2026-05-27T00:36:04.325Z",
+                "updatedAt":  "2026-05-27T00:36:04.325Z",
+                "bytes":  118272,
+                "audioPath":  "chat-stream-audio/20260527T003543Z_cardputer-001_6fa10a.wav"
+            }
+}

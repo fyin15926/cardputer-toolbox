@@ -1,0 +1,27 @@
+﻿{
+    "id":  "20260526T164650Z_cardputer-001_3ab1a0",
+    "time":  "2026-05-26T16:47:02.869Z",
+    "deviceId":  "cardputer-001",
+    "text":  "孙悟空跟异形打架谁会赢？",
+    "intent":  "chat",
+    "requiresConfirmation":  false,
+    "reason":  "plain chat message",
+    "source":  "cardputer-chat",
+    "createdAt":  "2026-05-26T16:47:02.4514390Z",
+    "job":  {
+                "id":  "20260526T164650Z_cardputer-001_3ab1a0",
+                "status":  "done",
+                "deviceId":  "cardputer-001",
+                "recordingName":  "20260526T164650Z_cardputer-001_3ab1a0.wav",
+                "userText":  "孙悟空跟异形打架谁会赢？",
+                "replyText":  "孙悟空有金刚不坏、七十二变和筋斗云，异形只是物理攻击强。逻辑上孙悟空赢面大。",
+                "replyMode":  "chat-reply",
+                "command":  null,
+                "pendingReason":  "",
+                "lastError":  "",
+                "createdAt":  "2026-05-26T16:47:02.869Z",
+                "updatedAt":  "2026-05-26T16:47:02.869Z",
+                "bytes":  314880,
+                "audioPath":  "chat-stream-audio/20260526T164650Z_cardputer-001_3ab1a0.wav"
+            }
+}

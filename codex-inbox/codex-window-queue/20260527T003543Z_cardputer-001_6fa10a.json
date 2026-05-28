@@ -1,0 +1,10 @@
+﻿{
+    "id":  "20260527T003543Z_cardputer-001_6fa10a",
+    "time":  "2026-05-27T00:36:04.325Z",
+    "intent":  "chat",
+    "mode":  "Queue",
+    "status":  "queued",
+    "text":  "爱的人喜欢，为什国外的人喜欢什？",
+    "promptPath":  "codex-inbox/codex-window-prompt.txt",
+    "createdAt":  "2026-05-27T00:36:06.1212687Z"
+}

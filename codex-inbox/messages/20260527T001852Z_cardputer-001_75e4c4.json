@@ -1,0 +1,27 @@
+﻿{
+    "id":  "20260527T001852Z_cardputer-001_75e4c4",
+    "time":  "2026-05-27T00:18:55.903Z",
+    "deviceId":  "cardputer-001",
+    "text":  "给我讲个",
+    "intent":  "chat",
+    "requiresConfirmation":  false,
+    "reason":  "plain chat message",
+    "source":  "cardputer-chat",
+    "createdAt":  "2026-05-27T00:18:56.6615295Z",
+    "job":  {
+                "id":  "20260527T001852Z_cardputer-001_75e4c4",
+                "status":  "done",
+                "deviceId":  "cardputer-001",
+                "recordingName":  "20260527T001852Z_cardputer-001_75e4c4.wav",
+                "userText":  "给我讲个",
+                "replyText":  "想听故事、笑话还是其他？请说清楚。",
+                "replyMode":  "chat-reply",
+                "command":  null,
+                "pendingReason":  "",
+                "lastError":  "",
+                "createdAt":  "2026-05-27T00:18:55.903Z",
+                "updatedAt":  "2026-05-27T00:18:55.903Z",
+                "bytes":  70144,
+                "audioPath":  "chat-stream-audio/20260527T001852Z_cardputer-001_75e4c4.wav"
+            }
+}

@@ -1,0 +1,27 @@
+﻿{
+    "id":  "20260526T170541Z_cardputer-001_25541f",
+    "time":  "2026-05-26T17:05:52.089Z",
+    "deviceId":  "cardputer-001",
+    "text":  "随便想一个比较长",
+    "intent":  "chat",
+    "requiresConfirmation":  false,
+    "reason":  "plain chat message",
+    "source":  "cardputer-chat",
+    "createdAt":  "2026-05-26T17:05:51.7429572Z",
+    "job":  {
+                "id":  "20260526T170541Z_cardputer-001_25541f",
+                "status":  "done",
+                "deviceId":  "cardputer-001",
+                "recordingName":  "20260526T170541Z_cardputer-001_25541f.wav",
+                "userText":  "随便想一个比较长",
+                "replyText":  "是要我念一首长诗，还是创作一首长诗？请明确主题。",
+                "replyMode":  "chat-reply",
+                "command":  null,
+                "pendingReason":  "",
+                "lastError":  "",
+                "createdAt":  "2026-05-26T17:05:52.089Z",
+                "updatedAt":  "2026-05-26T17:05:52.089Z",
+                "bytes":  140288,
+                "audioPath":  "chat-stream-audio/20260526T170541Z_cardputer-001_25541f.wav"
+            }
+}

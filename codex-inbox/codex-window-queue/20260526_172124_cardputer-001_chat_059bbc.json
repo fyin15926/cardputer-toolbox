@@ -1,0 +1,10 @@
+﻿{
+    "id":  "20260526_172124_cardputer-001_chat_059bbc",
+    "time":  "2026-05-26T09:20:59.615Z",
+    "intent":  "chat",
+    "mode":  "Queue",
+    "status":  "queued",
+    "text":  "你能不能直接回复我？",
+    "promptPath":  "codex-inbox/codex-window-prompt.txt",
+    "createdAt":  "2026-05-26T09:21:01.0264467Z"
+}

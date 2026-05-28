@@ -1,0 +1,27 @@
+﻿{
+    "id":  "20260526_164849_cardputer-001_chat_a9391e",
+    "time":  "2026-05-26T08:48:29.620Z",
+    "deviceId":  "cardputer-001",
+    "text":  "Fug code between fug code x继续做这个项目。",
+    "intent":  "command",
+    "requiresConfirmation":  true,
+    "reason":  "matched command-like wording",
+    "source":  "cardputer-chat",
+    "createdAt":  "2026-05-26T08:48:29.4489969Z",
+    "job":  {
+                "id":  "20260526_164849_cardputer-001_chat_a9391e",
+                "status":  "done",
+                "deviceId":  "cardputer-001",
+                "recordingName":  "20260526_164849_cardputer-001_chat_a9391e.wav",
+                "userText":  "Fug code between fug code x继续做这个项目。",
+                "replyText":  "我听到了：Fug code between fug code x继续做这个项目。",
+                "replyMode":  "asr-only",
+                "command":  null,
+                "pendingReason":  "",
+                "lastError":  "",
+                "createdAt":  "2026-05-26T08:48:24.722Z",
+                "updatedAt":  "2026-05-26T08:48:29.620Z",
+                "bytes":  247340,
+                "audioPath":  "chat-audio/20260526_164849_cardputer-001_chat_a9391e.wav"
+            }
+}

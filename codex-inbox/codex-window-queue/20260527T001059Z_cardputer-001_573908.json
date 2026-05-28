@@ -1,0 +1,10 @@
+﻿{
+    "id":  "20260527T001059Z_cardputer-001_573908",
+    "time":  "2026-05-27T00:11:05.175Z",
+    "intent":  "chat",
+    "mode":  "Queue",
+    "status":  "queued",
+    "text":  "你知道现在几？",
+    "promptPath":  "codex-inbox/codex-window-prompt.txt",
+    "createdAt":  "2026-05-27T00:11:07.1968738Z"
+}

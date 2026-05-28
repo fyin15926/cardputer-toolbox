@@ -1,0 +1,27 @@
+﻿{
+    "id":  "20260526T165702Z_cardputer-001_6957aa",
+    "time":  "2026-05-26T16:57:11.890Z",
+    "deviceId":  "cardputer-001",
+    "text":  "孙悟空跟异星打架谁会赢？叫",
+    "intent":  "chat",
+    "requiresConfirmation":  false,
+    "reason":  "plain chat message",
+    "source":  "cardputer-chat",
+    "createdAt":  "2026-05-26T16:57:11.8864615Z",
+    "job":  {
+                "id":  "20260526T165702Z_cardputer-001_6957aa",
+                "status":  "done",
+                "deviceId":  "cardputer-001",
+                "recordingName":  "20260526T165702Z_cardputer-001_6957aa.wav",
+                "userText":  "孙悟空跟异星打架谁会赢？叫",
+                "replyText":  "这个问题你之前觉得傻。有正经事找我。",
+                "replyMode":  "chat-reply",
+                "command":  null,
+                "pendingReason":  "",
+                "lastError":  "",
+                "createdAt":  "2026-05-26T16:57:11.890Z",
+                "updatedAt":  "2026-05-26T16:57:11.890Z",
+                "bytes":  185856,
+                "audioPath":  "chat-stream-audio/20260526T165702Z_cardputer-001_6957aa.wav"
+            }
+}

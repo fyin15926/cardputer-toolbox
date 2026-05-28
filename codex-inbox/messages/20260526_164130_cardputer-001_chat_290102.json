@@ -1,0 +1,27 @@
+﻿{
+    "id":  "20260526_164130_cardputer-001_chat_290102",
+    "time":  "2026-05-26T08:41:13.964Z",
+    "deviceId":  "cardputer-001",
+    "text":  "如果你收到的话，就在电脑的窗口上跟我确认一下。",
+    "intent":  "chat",
+    "requiresConfirmation":  false,
+    "reason":  "plain chat message",
+    "source":  "cardputer-chat",
+    "createdAt":  "2026-05-26T08:41:13.3049282Z",
+    "job":  {
+                "id":  "20260526_164130_cardputer-001_chat_290102",
+                "status":  "done",
+                "deviceId":  "cardputer-001",
+                "recordingName":  "20260526_164130_cardputer-001_chat_290102.wav",
+                "userText":  "如果你收到的话，就在电脑的窗口上跟我确认一下。",
+                "replyText":  "我听到了：如果你收到的话，就在电脑的窗口上跟我确认一下。",
+                "replyMode":  "asr-only",
+                "command":  null,
+                "pendingReason":  "",
+                "lastError":  "",
+                "createdAt":  "2026-05-26T08:41:08.796Z",
+                "updatedAt":  "2026-05-26T08:41:13.964Z",
+                "bytes":  302124,
+                "audioPath":  "chat-audio/20260526_164130_cardputer-001_chat_290102.wav"
+            }
+}

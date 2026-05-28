@@ -1,0 +1,27 @@
+﻿{
+    "id":  "20260526T165720Z_cardputer-001_71c722",
+    "time":  "2026-05-26T16:57:28.931Z",
+    "deviceId":  "cardputer-001",
+    "text":  "没有挣情事你就",
+    "intent":  "chat",
+    "requiresConfirmation":  false,
+    "reason":  "plain chat message",
+    "source":  "cardputer-chat",
+    "createdAt":  "2026-05-26T16:57:29.2720864Z",
+    "job":  {
+                "id":  "20260526T165720Z_cardputer-001_71c722",
+                "status":  "done",
+                "deviceId":  "cardputer-001",
+                "recordingName":  "20260526T165720Z_cardputer-001_71c722.wav",
+                "userText":  "没有挣情事你就",
+                "replyText":  "听不清，你说的是“没有正经事”然后？",
+                "replyMode":  "chat-reply",
+                "command":  null,
+                "pendingReason":  "",
+                "lastError":  "",
+                "createdAt":  "2026-05-26T16:57:28.931Z",
+                "updatedAt":  "2026-05-26T16:57:28.931Z",
+                "bytes":  175616,
+                "audioPath":  "chat-stream-audio/20260526T165720Z_cardputer-001_71c722.wav"
+            }
+}

@@ -1,0 +1,10 @@
+﻿{
+    "id":  "20260526T170541Z_cardputer-001_25541f",
+    "time":  "2026-05-26T17:05:52.089Z",
+    "intent":  "chat",
+    "mode":  "Queue",
+    "status":  "queued",
+    "text":  "随便想一个比较长",
+    "promptPath":  "codex-inbox/codex-window-prompt.txt",
+    "createdAt":  "2026-05-26T17:05:52.3125983Z"
+}

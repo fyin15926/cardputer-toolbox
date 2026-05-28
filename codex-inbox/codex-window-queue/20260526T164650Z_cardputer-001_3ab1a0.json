@@ -1,0 +1,10 @@
+﻿{
+    "id":  "20260526T164650Z_cardputer-001_3ab1a0",
+    "time":  "2026-05-26T16:47:02.869Z",
+    "intent":  "chat",
+    "mode":  "Queue",
+    "status":  "queued",
+    "text":  "孙悟空跟异形打架谁会赢？",
+    "promptPath":  "codex-inbox/codex-window-prompt.txt",
+    "createdAt":  "2026-05-26T16:47:03.7247659Z"
+}

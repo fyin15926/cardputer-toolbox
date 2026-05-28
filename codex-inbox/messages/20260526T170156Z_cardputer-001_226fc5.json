@@ -1,0 +1,27 @@
+﻿{
+    "id":  "20260526T170156Z_cardputer-001_226fc5",
+    "time":  "2026-05-26T17:02:07.965Z",
+    "deviceId":  "cardputer-001",
+    "text":  "Names有一给我念一篇",
+    "intent":  "chat",
+    "requiresConfirmation":  false,
+    "reason":  "plain chat message",
+    "source":  "cardputer-chat",
+    "createdAt":  "2026-05-26T17:02:07.8162391Z",
+    "job":  {
+                "id":  "20260526T170156Z_cardputer-001_226fc5",
+                "status":  "done",
+                "deviceId":  "cardputer-001",
+                "recordingName":  "20260526T170156Z_cardputer-001_226fc5.wav",
+                "userText":  "Names有一给我念一篇",
+                "replyText":  "已收到。需要结论、解释，还是执行动作？",
+                "replyMode":  "rules",
+                "command":  null,
+                "pendingReason":  "",
+                "lastError":  "",
+                "createdAt":  "2026-05-26T17:02:07.965Z",
+                "updatedAt":  "2026-05-26T17:02:07.965Z",
+                "bytes":  125440,
+                "audioPath":  "chat-stream-audio/20260526T170156Z_cardputer-001_226fc5.wav"
+            }
+}

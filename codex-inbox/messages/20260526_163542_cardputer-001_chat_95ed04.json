@@ -1,0 +1,27 @@
+﻿{
+    "id":  "20260526_163542_cardputer-001_chat_95ed04",
+    "time":  "2026-05-26T08:35:27.721Z",
+    "deviceId":  "cardputer-001",
+    "text":  "你现在能搜到吗？如果你能搜到的话，就在电脑上那个对话框里告诉我。",
+    "intent":  "chat",
+    "requiresConfirmation":  false,
+    "reason":  "plain chat message",
+    "source":  "cardputer-chat",
+    "createdAt":  "2026-05-26T08:35:28.8411897Z",
+    "job":  {
+                "id":  "20260526_163542_cardputer-001_chat_95ed04",
+                "status":  "done",
+                "deviceId":  "cardputer-001",
+                "recordingName":  "20260526_163542_cardputer-001_chat_95ed04.wav",
+                "userText":  "你现在能搜到吗？如果你能搜到的话，就在电脑上那个对话框里告诉我。",
+                "replyText":  "我听到了：你现在能搜到吗？如果你能搜到的话，就在电脑上那个对话框里告诉我。",
+                "replyMode":  "asr-only",
+                "command":  null,
+                "pendingReason":  "",
+                "lastError":  "",
+                "createdAt":  "2026-05-26T08:35:22.247Z",
+                "updatedAt":  "2026-05-26T08:35:27.721Z",
+                "bytes":  311852,
+                "audioPath":  "chat-audio/20260526_163542_cardputer-001_chat_95ed04.wav"
+            }
+}

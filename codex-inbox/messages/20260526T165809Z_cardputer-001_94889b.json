@@ -1,0 +1,27 @@
+﻿{
+    "id":  "20260526T165809Z_cardputer-001_94889b",
+    "time":  "2026-05-26T16:58:14.105Z",
+    "deviceId":  "cardputer-001",
+    "text":  "给我念一首古诗。",
+    "intent":  "chat",
+    "requiresConfirmation":  false,
+    "reason":  "plain chat message",
+    "source":  "cardputer-chat",
+    "createdAt":  "2026-05-26T16:58:14.9885489Z",
+    "job":  {
+                "id":  "20260526T165809Z_cardputer-001_94889b",
+                "status":  "done",
+                "deviceId":  "cardputer-001",
+                "recordingName":  "20260526T165809Z_cardputer-001_94889b.wav",
+                "userText":  "给我念一首古诗。",
+                "replyText":  "《静夜思》床前明月光，疑是地上霜。举头望明月，低头思故乡。",
+                "replyMode":  "chat-reply",
+                "command":  null,
+                "pendingReason":  "",
+                "lastError":  "",
+                "createdAt":  "2026-05-26T16:58:14.105Z",
+                "updatedAt":  "2026-05-26T16:58:14.105Z",
+                "bytes":  114688,
+                "audioPath":  "chat-stream-audio/20260526T165809Z_cardputer-001_94889b.wav"
+            }
+}

@@ -1,0 +1,27 @@
+﻿{
+    "id":  "20260527T003050Z_cardputer-001_98446e",
+    "time":  "2026-05-27T00:30:57.838Z",
+    "deviceId":  "cardputer-001",
+    "text":  "123",
+    "intent":  "chat",
+    "requiresConfirmation":  false,
+    "reason":  "plain chat message",
+    "source":  "cardputer-chat",
+    "createdAt":  "2026-05-27T00:30:59.6959851Z",
+    "job":  {
+                "id":  "20260527T003050Z_cardputer-001_98446e",
+                "status":  "done",
+                "deviceId":  "cardputer-001",
+                "recordingName":  "20260527T003050Z_cardputer-001_98446e.wav",
+                "userText":  "123",
+                "replyText":  "数字“123”不完整。请说明意图：编号、数量还是其他？",
+                "replyMode":  "chat-reply",
+                "command":  null,
+                "pendingReason":  "",
+                "lastError":  "",
+                "createdAt":  "2026-05-27T00:30:57.838Z",
+                "updatedAt":  "2026-05-27T00:30:57.838Z",
+                "bytes":  76800,
+                "audioPath":  "chat-stream-audio/20260527T003050Z_cardputer-001_98446e.wav"
+            }
+}

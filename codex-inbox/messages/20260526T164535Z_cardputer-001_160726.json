@@ -1,0 +1,27 @@
+﻿{
+    "id":  "20260526T164535Z_cardputer-001_160726",
+    "time":  "2026-05-26T16:45:41.234Z",
+    "deviceId":  "cardputer-001",
+    "text":  "三句话介绍一下你",
+    "intent":  "chat",
+    "requiresConfirmation":  false,
+    "reason":  "plain chat message",
+    "source":  "cardputer-chat",
+    "createdAt":  "2026-05-26T16:45:42.3143587Z",
+    "job":  {
+                "id":  "20260526T164535Z_cardputer-001_160726",
+                "status":  "done",
+                "deviceId":  "cardputer-001",
+                "recordingName":  "20260526T164535Z_cardputer-001_160726.wav",
+                "userText":  "三句话介绍一下你",
+                "replyText":  "我是小机子，外号大聪明。运行在Cardputer上的人工智能助手。冷静理性，能帮你推理和记录。",
+                "replyMode":  "chat-reply",
+                "command":  null,
+                "pendingReason":  "",
+                "lastError":  "",
+                "createdAt":  "2026-05-26T16:45:41.234Z",
+                "updatedAt":  "2026-05-26T16:45:41.234Z",
+                "bytes":  124416,
+                "audioPath":  "chat-stream-audio/20260526T164535Z_cardputer-001_160726.wav"
+            }
+}

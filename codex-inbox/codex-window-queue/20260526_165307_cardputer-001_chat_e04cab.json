@@ -1,0 +1,10 @@
+﻿{
+    "id":  "20260526_165307_cardputer-001_chat_e04cab",
+    "time":  "2026-05-26T08:52:46.190Z",
+    "intent":  "command",
+    "mode":  "Paste",
+    "status":  "pasted_to_codex_window",
+    "text":  "发送给Cox继续做这个项目。",
+    "promptPath":  "codex-inbox/codex-window-prompt.txt",
+    "createdAt":  "2026-05-26T08:56:20.4082736Z"
+}

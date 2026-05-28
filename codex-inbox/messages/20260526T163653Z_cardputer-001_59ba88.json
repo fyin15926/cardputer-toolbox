@@ -1,0 +1,27 @@
+﻿{
+    "id":  "20260526T163653Z_cardputer-001_59ba88",
+    "time":  "2026-05-26T16:36:59.886Z",
+    "deviceId":  "cardputer-001",
+    "text":  "你哪家的到的声。",
+    "intent":  "chat",
+    "requiresConfirmation":  false,
+    "reason":  "plain chat message",
+    "source":  "cardputer-chat",
+    "createdAt":  "2026-05-26T16:36:58.9805463Z",
+    "job":  {
+                "id":  "20260526T163653Z_cardputer-001_59ba88",
+                "status":  "done",
+                "deviceId":  "cardputer-001",
+                "recordingName":  "20260526T163653Z_cardputer-001_59ba88.wav",
+                "userText":  "你哪家的到的声。",
+                "replyText":  "你是问模型来源吗？请再说一遍。",
+                "replyMode":  "chat-reply",
+                "command":  null,
+                "pendingReason":  "",
+                "lastError":  "",
+                "createdAt":  "2026-05-26T16:36:59.886Z",
+                "updatedAt":  "2026-05-26T16:36:59.886Z",
+                "bytes":  107008,
+                "audioPath":  "chat-stream-audio/20260526T163653Z_cardputer-001_59ba88.wav"
+            }
+}

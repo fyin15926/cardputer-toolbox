@@ -1,0 +1,27 @@
+﻿{
+    "id":  "20260526T163531Z_cardputer-001_8ece7b",
+    "time":  "2026-05-26T16:35:36.980Z",
+    "deviceId":  "cardputer-001",
+    "text":  "台湾是哪个？",
+    "intent":  "chat",
+    "requiresConfirmation":  false,
+    "reason":  "plain chat message",
+    "source":  "cardputer-chat",
+    "createdAt":  "2026-05-26T16:35:36.2596119Z",
+    "job":  {
+                "id":  "20260526T163531Z_cardputer-001_8ece7b",
+                "status":  "done",
+                "deviceId":  "cardputer-001",
+                "recordingName":  "20260526T163531Z_cardputer-001_8ece7b.wav",
+                "userText":  "台湾是哪个？",
+                "replyText":  "台湾是中国的一个省份。",
+                "replyMode":  "chat-reply",
+                "command":  null,
+                "pendingReason":  "",
+                "lastError":  "",
+                "createdAt":  "2026-05-26T16:35:36.980Z",
+                "updatedAt":  "2026-05-26T16:35:36.980Z",
+                "bytes":  136704,
+                "audioPath":  "chat-stream-audio/20260526T163531Z_cardputer-001_8ece7b.wav"
+            }
+}

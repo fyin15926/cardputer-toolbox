@@ -1,0 +1,27 @@
+﻿{
+    "id":  "20260527T003921Z_cardputer-001_50c8d6",
+    "time":  "2026-05-27T00:39:29.261Z",
+    "deviceId":  "cardputer-001",
+    "text":  "给我讲一个",
+    "intent":  "chat",
+    "requiresConfirmation":  false,
+    "reason":  "plain chat message",
+    "source":  "cardputer-chat",
+    "createdAt":  "2026-05-27T00:39:30.2266419Z",
+    "job":  {
+                "id":  "20260527T003921Z_cardputer-001_50c8d6",
+                "status":  "done",
+                "deviceId":  "cardputer-001",
+                "recordingName":  "20260527T003921Z_cardputer-001_50c8d6.wav",
+                "userText":  "给我讲一个",
+                "replyText":  "讲什么主题呢？童话、科幻、还是日常小故事？请补充。",
+                "replyMode":  "chat-reply",
+                "command":  null,
+                "pendingReason":  "",
+                "lastError":  "",
+                "createdAt":  "2026-05-27T00:39:29.261Z",
+                "updatedAt":  "2026-05-27T00:39:29.261Z",
+                "bytes":  88064,
+                "audioPath":  "chat-stream-audio/20260527T003921Z_cardputer-001_50c8d6.wav"
+            }
+}

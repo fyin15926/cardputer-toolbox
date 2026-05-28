@@ -1,0 +1,27 @@
+﻿{
+    "id":  "20260526_162806_cardputer-001_chat_c38e75",
+    "time":  "2026-05-26T08:27:54.060Z",
+    "deviceId":  "cardputer-001",
+    "text":  "帮我读取小机器的最新消息。",
+    "intent":  "command",
+    "requiresConfirmation":  true,
+    "reason":  "matched command-like wording",
+    "source":  "cardputer-chat",
+    "createdAt":  "2026-05-26T08:30:27.3563679Z",
+    "job":  {
+                "id":  "20260526_162806_cardputer-001_chat_c38e75",
+                "status":  "done",
+                "deviceId":  "cardputer-001",
+                "recordingName":  "20260526_162806_cardputer-001_chat_c38e75.wav",
+                "userText":  "帮我读取小机器的最新消息。",
+                "replyText":  "我听到了：帮我读取小机器的最新消息。",
+                "replyMode":  "asr-only",
+                "command":  null,
+                "pendingReason":  "",
+                "lastError":  "",
+                "createdAt":  "2026-05-26T08:27:49.297Z",
+                "updatedAt":  "2026-05-26T08:27:54.060Z",
+                "bytes":  243244,
+                "audioPath":  "chat-audio/20260526_162806_cardputer-001_chat_c38e75.wav"
+            }
+}

@@ -1,0 +1,27 @@
+﻿{
+    "id":  "20260526_172124_cardputer-001_chat_059bbc",
+    "time":  "2026-05-26T09:20:59.615Z",
+    "deviceId":  "cardputer-001",
+    "text":  "你能不能直接回复我？",
+    "intent":  "chat",
+    "requiresConfirmation":  false,
+    "reason":  "plain chat message",
+    "source":  "cardputer-chat",
+    "createdAt":  "2026-05-26T09:21:00.7510406Z",
+    "job":  {
+                "id":  "20260526_172124_cardputer-001_chat_059bbc",
+                "status":  "done",
+                "deviceId":  "cardputer-001",
+                "recordingName":  "20260526_172124_cardputer-001_chat_059bbc.wav",
+                "userText":  "你能不能直接回复我？",
+                "replyText":  "我现在直接回复你了，有什么可以帮你？",
+                "replyMode":  "chat-reply",
+                "command":  null,
+                "pendingReason":  "",
+                "lastError":  "",
+                "createdAt":  "2026-05-26T09:20:53.433Z",
+                "updatedAt":  "2026-05-26T09:20:59.615Z",
+                "bytes":  159276,
+                "audioPath":  "chat-audio/20260526_172124_cardputer-001_chat_059bbc.wav"
+            }
+}

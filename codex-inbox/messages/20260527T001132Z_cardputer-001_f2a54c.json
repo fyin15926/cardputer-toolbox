@@ -1,0 +1,27 @@
+﻿{
+    "id":  "20260527T001132Z_cardputer-001_f2a54c",
+    "time":  "2026-05-27T00:11:40.192Z",
+    "deviceId":  "cardputer-001",
+    "text":  "今天太原多少度？",
+    "intent":  "chat",
+    "requiresConfirmation":  false,
+    "reason":  "plain chat message",
+    "source":  "cardputer-chat",
+    "createdAt":  "2026-05-27T00:11:42.1307031Z",
+    "job":  {
+                "id":  "20260527T001132Z_cardputer-001_f2a54c",
+                "status":  "done",
+                "deviceId":  "cardputer-001",
+                "recordingName":  "20260527T001132Z_cardputer-001_f2a54c.wav",
+                "userText":  "今天太原多少度？",
+                "replyText":  "抱歉，我没有联网获取天气数据的功能，无法知道太原今天的温度。",
+                "replyMode":  "chat-reply",
+                "command":  null,
+                "pendingReason":  "",
+                "lastError":  "",
+                "createdAt":  "2026-05-27T00:11:40.192Z",
+                "updatedAt":  "2026-05-27T00:11:40.192Z",
+                "bytes":  197120,
+                "audioPath":  "chat-stream-audio/20260527T001132Z_cardputer-001_f2a54c.wav"
+            }
+}

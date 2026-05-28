@@ -7,7 +7,7 @@
  *
  * 录音应用交互:
  *   录制中: 空格=暂停/继续; 回车=结束(存盘并进入列表); Esc=存盘并息屏; 长按Del 1.2秒=取消并删除本条; W/S=音量
- *   录音列表: 左/右切 REC/KEY/IMP; ;/. 上下选; 回车=播放; Esc=息屏; 长按Del=删除; Ctrl+键=绑定快捷; Ctrl+Enter=标重要; Alt=降噪
+ *   录音列表: 左/右切 REC/KEY/IMP; ;/. 上下选; 回车=播放; Esc=息屏; 长按Del=删除; Tab+键=绑定快捷; Tab+Enter=标重要; Alt=降噪
  *   回放: 播放完自动回列表; 回车=暂停/继续; 退格=回列表; ;/.=上一条/下一条; Esc=息屏; +/- (= 与 - 键)=音量; 长按Del 1.2秒=删除当前录音; 空格=去录音
  *   绑定的播放键=最高优先级, 任意界面(录音中除外)即按即播, 且播放中按别的键可覆盖切换
  *
@@ -35,6 +35,8 @@
 #define COL_DIM   0x0320   // 暗绿
 #define COL_RED   0xF800   // 录音红点
 #define COL_WHITE 0xFFFF   // 播放头白线
+#define COL_GRAY  0x7BEF
+#define COL_DARK_GRAY 0x2104
 
 // ---------- 全屏 UI 布局常量 ----------
 // 屏幕 240×135; 不再绘制右侧标签栏, 所有界面使用全宽内容区
@@ -49,14 +51,14 @@ static const int A_CY   = (WAVE_TOP + WAVE_CY) / 2;        // A线/轨道线中�
 static const int A_HALF = (WAVE_CY - WAVE_TOP) / 2 - 2;    // A线最大半幅
 static const int B_CY   = (WAVE_CY + WAVE_BOT) / 2;        // B线/监听线中轴
 static const int B_HALF = (WAVE_BOT - WAVE_CY) / 2 - 2;    // B线最大半幅
-static const uint8_t REC_B_SMOOTH = 3;   // 录音 B线平滑: 越大越稳, 越小越灵敏
+static const uint8_t REC_B_SMOOTH = 2;   // 录音 B线平滑: 越大越稳, 越小越灵敏
 static const uint8_t PB_B_SMOOTH  = REC_B_SMOOTH;   // 播放 B线跟录音页一致
 static const uint8_t B_DECAY      = 5;   // 无新音频时回中线速度: 越小回落越快
-static const int32_t A_RMS_FULL   = 24000; // A线满格阈值: 越大越不敏感
+static const int32_t A_RMS_FULL   = 18000; // A线满格阈值: 越大越不敏感
 
 // ---------- 录音参数 ----------
-static const uint8_t REC_B_GAIN   = 3;
-static const uint8_t PB_B_GAIN    = 7;
+static const uint8_t REC_B_GAIN   = 5;
+static const uint8_t PB_B_GAIN    = 3;
 static const uint8_t PB_B_SMOOTH_FAST = 2;
 
 #define FONT_CN_16(g) do { (g).setTextSize(1); (g).setFont(&fonts::efontCN_16); } while (0)
@@ -81,8 +83,8 @@ static const uint32_t SHORTCUT_RETRIM_TAIL_PAD = REC_RATE / 40;  // 25ms
 static const uint32_t SHORTCUT_FADE_SAMPLES = REC_RATE / 125; // 8ms 淡入淡出
 static const size_t   REC_N    = 256;    // 每缓冲样本数 (~16ms, 小=波形更流畅)
 static const size_t   PB_N     = 256;    // 播放缓冲样本数 (~16ms, B线更贴近录音页)
-static const uint32_t REC_UI_FRAME_MS = 16;  // ~60fps wave-region refresh after mic buffer is re-queued.
-static const uint32_t PB_UI_FRAME_MS  = 16;  // ~60fps visual refresh; playback reuses latest PCM block between reads.
+static const uint32_t REC_UI_FRAME_MS = 40;  // Keep UI below audio/SD priority; 25fps is enough for the small waveform.
+static const uint32_t PB_UI_FRAME_MS  = 40;  // Lower display traffic avoids playback stutter and visible flicker.
 static const uint32_t REC_AUTO_SEGMENT_MS = 30UL * 60UL * 1000UL;
 static const uint8_t  REC_WRITE_BATCH = 4;
 static const uint8_t  REC_REARM_SETTLE_BUFFERS = 6;
@@ -98,8 +100,10 @@ int playVol = 200;                       // 回放音量(+/- 可调, 0..255)
 static const int VOL_LEVELS = 10;
 static const uint8_t BRIGHT_LEVELS = 5;
 static const uint8_t BRIGHT_VALUES[BRIGHT_LEVELS] = {25, 55, 90, 125, 170};
-static uint8_t brightLevel = 3;
+static uint8_t brightLevel = 2;
 static uint32_t lastUploadTickMs = 0;
+static uint32_t lastUploadPendingPollMs = 0;
+static const uint32_t UPLOAD_PENDING_POLL_MS = 60000;
 static int g_batteryShown = -1;
 static int g_batteryCandidate = -1;
 static uint8_t g_batteryCandidateHits = 0;
@@ -117,11 +121,15 @@ static uint32_t g_batteryLastSampleMs = 0;
 #define UPSTAT_ABORTED  9
 #define UPSTAT_SYNC_OFF 10
 #define UPSTAT_UPLOADING 11
+#define UPSTAT_PROCESSING 12
+#define UPSTAT_MODEL_ERR 13
+#define UPSTAT_JOB_ERR 14
 static uint8_t g_uploadStatus = UPSTAT_IDLE;
 static bool g_uploadPausedForInput = false;
 static bool g_uploadCancelRequested = false;
 static int g_uploadActiveRec = 0;
 static bool g_uploadActiveAnnounced = false;
+static bool g_mediaBusy = false;
 
 // SD 引脚(运行时由 M5Unified 按机型给出, 失败则回退到 Adv 已知值)
 int sdSCLK = 40, sdMISO = 39, sdMOSI = 14, sdCS = 12;
@@ -129,6 +137,9 @@ int sdSCLK = 40, sdMISO = 39, sdMOSI = 14, sdCS = 12;
 static const char *REC_DIR = "/REC";
 static const char *SHORTCUT_DIR = "/SHORTCUT";
 static const char *IMPORTANT_DIR = "/IMPORTANT";
+static const char *CHAT_DIR = "/CHAT";
+static const char *CHAT_LAST_PATH = "/CHAT/CHAT_LAST.wav";
+static const char *CHAT_REPLY_PATH = "/CHAT/CHAT_REPLY.wav";
 static const char *HOTKEY_PATH = "/SHORTCUT/keys.txt";
 static const char *OLD_IMPORTANT_HOTKEY_PATH = "/IMPORTANT/keys.txt";
 static const char *OLD_HOTKEY_PATH = "/REC/keys.txt";
@@ -137,14 +148,20 @@ static const char *REC_ORDER_PATH = "/REC/.order";
 static const char *UPLOAD_DIR = "/UPLOAD";
 static const char *UPLOAD_QUEUE_PATH = "/UPLOAD/queue.txt";
 static const char *UPLOAD_DONE_PATH = "/UPLOAD/done.txt";
+static const char *UPLOAD_PENDING_PATH = "/UPLOAD/pending.txt";
+static const char *UPLOAD_MODEL_ERR_PATH = "/UPLOAD/model_err.txt";
+static const char *UPLOAD_JOB_ERR_PATH = "/UPLOAD/job_err.txt";
 static const char *UPLOAD_CONFIG_PATH = "/UPLOAD/net.txt";
 static const char *UPLOAD_RECORDED_AT_PATH = "/UPLOAD/recorded_at.txt";
+static const char *REC_VOLUME_PATH = "/REC/volume.txt";
 static const size_t UPLOAD_CHUNK_BYTES = 4096;
 static const uint32_t UPLOAD_ADPCM_THRESHOLD_BYTES = 3UL * 1024UL * 1024UL;
 static const int MAX_REC = 9999;
+static int8_t recVolumeDelta[MAX_REC];
+static bool recVolumeDirty = false;
 static const uint16_t FRICTION_NOW_SEC = 60;
 static const uint16_t FRICTION_IDLE_MAX_SEC = 20 * 60;
-static const uint32_t AUTO_SLEEP_MS = 90000;
+static const uint32_t AUTO_SLEEP_MS = 45000;
 
 enum RecKind : uint8_t { REC_NORMAL = 0, REC_SHORTCUT = 1, REC_IMPORTANT = 2 };
 
@@ -191,6 +208,7 @@ static bool speakerOutputReady = false;
 #define APP_LAUNCHER   3
 #define APP_POMODORO   4
 #define APP_WIFI       5
+#define APP_CHAT       6
 
 static uint8_t wakeApp = APP_REC_LIST;
 
@@ -253,6 +271,7 @@ int g_listReturnRec = 0;     // 播放页返回列表时应重新选中的录音
 int g_carryDeleteRec = 0;
 uint32_t g_carryDeleteStart = 0;
 uint8_t g_listMode = REC_NORMAL;  // 0普通 / 1快捷 / 2重要
+static int g_listModeSelectedRec[3] = {0, 0, 0};
 static int nextRecHint = 0;  // 下一个录音编号缓存, 避免每次从 REC_0001 顺序探测
 static const uint32_t DELETE_HOLD_MS = 1200;
 static const uint32_t DELETE_HINT_MS = 280;  // 短按 Del 不显示删除提示, 长按后才出现
@@ -298,6 +317,7 @@ static char pressedBindKey() {
 static char dispKey(char k) { return (k >= 'a' && k <= 'z') ? (k - 32) : k; }  // 显示用(字母转大写)
 static bool keyCtrl()  { return M5Cardputer.Keyboard.keysState().ctrl; }
 static bool keyAlt()   { return M5Cardputer.Keyboard.keysState().alt; }
+static bool keyGo()    { return M5Cardputer.BtnA.isPressed(); }
 static bool keySpace() { return M5Cardputer.Keyboard.isKeyPressed(' '); }
 static bool keyEsc()   { return M5Cardputer.Keyboard.isKeyPressed('`'); }  // Cardputer 物理 Esc 键映射为左上角 `
 static bool keyDel()   { return M5Cardputer.Keyboard.keysState().del; }
@@ -308,14 +328,15 @@ static bool keyDown()  { return M5Cardputer.Keyboard.isKeyPressed('.'); }
 static bool keyLeft()  { return M5Cardputer.Keyboard.isKeyPressed(','); }
 static bool keyRight() { return M5Cardputer.Keyboard.isKeyPressed('/'); }
 static bool keyUpload() { return M5Cardputer.Keyboard.isKeyPressed('\\') || M5Cardputer.Keyboard.isKeyPressed('|'); }
-static bool keyVolUp() { return M5Cardputer.Keyboard.isKeyPressed('=') || M5Cardputer.Keyboard.isKeyPressed('+'); }
-static bool keyVolDn() { return M5Cardputer.Keyboard.isKeyPressed('-') || M5Cardputer.Keyboard.isKeyPressed('_'); }
-static bool keyBrightUp() { return M5Cardputer.Keyboard.isKeyPressed(']') || M5Cardputer.Keyboard.isKeyPressed('}'); }
-static bool keyBrightDn() { return M5Cardputer.Keyboard.isKeyPressed('[') || M5Cardputer.Keyboard.isKeyPressed('{'); }
+static bool keyChat() { return M5Cardputer.Keyboard.isKeyPressed('c') || M5Cardputer.Keyboard.isKeyPressed('C'); }
+static bool keyVolUp() { return !keyTab() && (M5Cardputer.Keyboard.isKeyPressed('=') || M5Cardputer.Keyboard.isKeyPressed('+')); }
+static bool keyVolDn() { return !keyTab() && (M5Cardputer.Keyboard.isKeyPressed('-') || M5Cardputer.Keyboard.isKeyPressed('_')); }
+static bool keyBrightUp() { return !keyTab() && (M5Cardputer.Keyboard.isKeyPressed(']') || M5Cardputer.Keyboard.isKeyPressed('}')); }
+static bool keyBrightDn() { return !keyTab() && (M5Cardputer.Keyboard.isKeyPressed('[') || M5Cardputer.Keyboard.isKeyPressed('{')); }
 static bool keyUploadAbort() {
   if (!M5Cardputer.Keyboard.isPressed()) return false;
   g_uploadPausedForInput = true;
-  if (keyCtrl() && keyUpload()) g_uploadCancelRequested = true;
+  if (keyTab() && keyUpload()) g_uploadCancelRequested = true;
   return true;
 }
 
@@ -332,7 +353,11 @@ static bool wakeAppFromPressedKeys(uint8_t &app) {
     app = APP_POMODORO;
     return true;
   }
-  if (keyAlt()) {
+  if (keyChat()) {
+    app = APP_CHAT;
+    return true;
+  }
+  if (keyGo()) {
     app = APP_LAUNCHER;
     return true;
   }
@@ -346,6 +371,25 @@ static void adjustPlayVolume(int delta) {
   level = max(0, min(VOL_LEVELS, level));
   playVol = (level * 255 + VOL_LEVELS / 2) / VOL_LEVELS;
   if (speakerOutputReady) M5Cardputer.Speaker.setVolume(playVol);
+}
+
+static int globalVolumeLevel() {
+  int level = (playVol * VOL_LEVELS + 127) / 255;
+  return max(0, min(VOL_LEVELS, level));
+}
+
+static int volumeFromLevel(int level) {
+  level = max(0, min(VOL_LEVELS, level));
+  return (level * 255 + VOL_LEVELS / 2) / VOL_LEVELS;
+}
+
+static int effectiveVolumeLevelForRec(int recNum) {
+  int delta = (recNum > 0 && recNum <= MAX_REC) ? recVolumeDelta[recNum - 1] : 0;
+  return max(0, min(VOL_LEVELS, globalVolumeLevel() + delta));
+}
+
+static void applyPlaybackVolumeForRec(int recNum) {
+  if (speakerOutputReady) M5Cardputer.Speaker.setVolume(volumeFromLevel(effectiveVolumeLevelForRec(recNum)));
 }
 
 static void applyBrightness() {
@@ -559,6 +603,9 @@ static void dsegLine(M5Canvas &g, int x1, int y1, int x2, int y2, uint16_t col) 
     (g).fillRect((x) + 2, (y) + 10, 2, 2, (col)); \
   } else if (_c == '_') { \
     dsegLine((g), (x) + 1, (y) + 15, (x) + 7, (y) + 15, (col)); \
+  } else if (_c == '+') { \
+    dsegLine((g), (x) + 1, (y) + 8, (x) + 7, (y) + 8, (col)); \
+    dsegLine((g), (x) + 4, (y) + 4, (x) + 4, (y) + 12, (col)); \
   } else if (_c == '%' || _c == '/') { \
     (g).fillRect((x) + 1, (y) + 2, 2, 2, (col)); \
     (g).fillRect((x) + 6, (y) + 12, 2, 2, (col)); \
@@ -585,6 +632,7 @@ static int dseg14CharWidth(char c) {
   if (c == ' ') return 5;
   if (c == ':') return 7;
   if (c == '_') return 11;
+  if (c == '+') return 10;
   if (c == '%' || c == '/') return 8;
   return 12;
 }
@@ -615,7 +663,7 @@ static void drawDseg14Text(M5Canvas &g, int x, int y, const char *text, uint16_t
 
 static int filteredBatteryLevel() {
   uint32_t now = millis();
-  if (g_batteryShown >= 0 && now - g_batteryLastSampleMs < 4000) return g_batteryShown;
+  if (g_batteryShown >= 0 && now - g_batteryLastSampleMs < 2000) return g_batteryShown;
   g_batteryLastSampleMs = now;
   int raw = M5.Power.getBatteryLevel();
   raw = max(0, min(100, raw));
@@ -626,11 +674,16 @@ static int filteredBatteryLevel() {
     return g_batteryShown;
   }
   int diff = raw - g_batteryShown;
+  if (diff > 0) {
+    g_batteryCandidate = raw;
+    g_batteryCandidateHits = 0;
+    g_batteryShown += min(diff, 3);
+    return g_batteryShown;
+  }
   if (abs(diff) <= 3) {
     g_batteryCandidate = raw;
     g_batteryCandidateHits = 0;
-    if (diff > 0) g_batteryShown++;
-    else if (diff < 0) g_batteryShown--;
+    if (diff < 0) g_batteryShown--;
     return g_batteryShown;
   }
   if (abs(diff) <= 12) {
@@ -652,7 +705,7 @@ static int filteredBatteryLevel() {
 #define DRAW_STATUS_BATTERY(g) do { \
   int bat = filteredBatteryLevel(); \
   uint16_t col = (bat <= 20) ? COL_RED : COL_GREEN; \
-  (g).fillRect(CONTENT_W - 46, 0, 46, 18, COL_BG); \
+  (g).fillRect(CONTENT_W - 62, 0, 62, 18, COL_BG); \
   (g).setTextColor(col, COL_BG); \
   char _bat[8]; snprintf(_bat, sizeof(_bat), "%d%%", bat); \
   drawDseg14Text((g), CONTENT_W - dseg14TextWidth(_bat) - 4, 1, _bat, col); \
@@ -664,6 +717,23 @@ static void drawStatusBattery(m5gfx::M5GFX &g) {
 
 static void drawStatusBattery(M5Canvas &g) {
   DRAW_STATUS_BATTERY(g);
+}
+
+#define DRAW_STATUS_BATTERY_COLOR(g, okCol) do { \
+  int bat = filteredBatteryLevel(); \
+  uint16_t col = (bat <= 20) ? COL_RED : (okCol); \
+  (g).fillRect(CONTENT_W - 62, 0, 62, 18, COL_BG); \
+  (g).setTextColor(col, COL_BG); \
+  char _bat[8]; snprintf(_bat, sizeof(_bat), "%d%%", bat); \
+  drawDseg14Text((g), CONTENT_W - dseg14TextWidth(_bat) - 4, 1, _bat, col); \
+} while (0)
+
+static void drawStatusBatteryColor(m5gfx::M5GFX &g, uint16_t okCol) {
+  DRAW_STATUS_BATTERY_COLOR(g, okCol);
+}
+
+static void drawStatusBatteryColor(M5Canvas &g, uint16_t okCol) {
+  DRAW_STATUS_BATTERY_COLOR(g, okCol);
 }
 
 static void drawBattery() {
@@ -743,13 +813,13 @@ static void drawStatusTabs(M5Canvas &g, uint8_t mode, int count) {
 }
 
 // 底栏提示(小字, 上方一条分隔线)
-static void drawFooter(const char *hint) {
+static void drawFooter(const char *hint, uint16_t col = COL_DIM) {
   auto &d = M5Cardputer.Display;
   int y = d.height() - 15;
-  d.drawFastHLine(0, y - 3, d.width(), COL_DIM);
+  d.drawFastHLine(0, y - 3, d.width(), col);
   d.fillRect(0, y, d.width(), 15, COL_BG);
   FONT_CN_12(d);
-  d.setTextColor(COL_DIM, COL_BG);
+  d.setTextColor(col, COL_BG);
   d.setCursor(6, y);
   d.print(hint);
 }
@@ -955,9 +1025,10 @@ static char hotkeyOf(int idx) {  // 该录音编号是否已绑定某键, 返回
   return 0;
 }
 
-// 当前是否按下了一个"已绑定的播放键"(非 Ctrl): 返回对应录音编号, 否则 -1
+// 当前是否按下了一个"已绑定的播放键"(非 Ctrl/Tab): 返回对应录音编号, 否则 -1
 static int pressedHotkeyRec() {
-  if (keyCtrl()) return -1;          // Ctrl+键 是"绑定", 不是"播放"
+  if (keyCtrl() || keyTab()) return -1;
+  if (keyEnter() || keyDel() || keySpace() || keyUpload()) return -1;
   char bk = pressedBindKey();
   if (!bk) return -1;
   return findHotkey(bk);             // >0 已绑定; -1 未绑定
@@ -972,6 +1043,9 @@ static uint8_t frictionDoneBits[(MAX_REC + 8) / 8];
 static uint8_t frictionPendingBits[(MAX_REC + 8) / 8];
 static uint8_t uploadQueuedBits[(MAX_REC + 8) / 8];
 static uint8_t uploadDoneBits[(MAX_REC + 8) / 8];
+static uint8_t uploadPendingBits[(MAX_REC + 8) / 8];
+static uint8_t uploadModelErrBits[(MAX_REC + 8) / 8];
+static uint8_t uploadJobErrBits[(MAX_REC + 8) / 8];
 static uint16_t recDurationSec[MAX_REC];
 
 static void clearImportantBits() {
@@ -999,8 +1073,14 @@ static void setFrictionDone(int recNum, bool on) { setBit(frictionDoneBits, recN
 static void setFrictionPending(int recNum, bool on) { setBit(frictionPendingBits, recNum, on); }
 static bool uploadQueued(int recNum) { return bitIsSet(uploadQueuedBits, recNum); }
 static bool uploadDone(int recNum) { return bitIsSet(uploadDoneBits, recNum); }
+static bool uploadPending(int recNum) { return bitIsSet(uploadPendingBits, recNum); }
+static bool uploadModelErr(int recNum) { return bitIsSet(uploadModelErrBits, recNum); }
+static bool uploadJobErr(int recNum) { return bitIsSet(uploadJobErrBits, recNum); }
 static void setUploadQueued(int recNum, bool on) { setBit(uploadQueuedBits, recNum, on); }
 static void setUploadDone(int recNum, bool on) { setBit(uploadDoneBits, recNum, on); }
+static void setUploadPending(int recNum, bool on) { setBit(uploadPendingBits, recNum, on); }
+static void setUploadModelErr(int recNum, bool on) { setBit(uploadModelErrBits, recNum, on); }
+static void setUploadJobErr(int recNum, bool on) { setBit(uploadJobErrBits, recNum, on); }
 
 static void loadUploadBitFile(const char *path, uint8_t *bits) {
   File f = SD.open(path, FILE_READ);
@@ -1018,8 +1098,59 @@ static void loadUploadBitFile(const char *path, uint8_t *bits) {
 static void loadUploadStateMounted() {
   memset(uploadQueuedBits, 0, sizeof(uploadQueuedBits));
   memset(uploadDoneBits, 0, sizeof(uploadDoneBits));
+  memset(uploadPendingBits, 0, sizeof(uploadPendingBits));
+  memset(uploadModelErrBits, 0, sizeof(uploadModelErrBits));
+  memset(uploadJobErrBits, 0, sizeof(uploadJobErrBits));
   loadUploadBitFile(UPLOAD_QUEUE_PATH, uploadQueuedBits);
   loadUploadBitFile(UPLOAD_DONE_PATH, uploadDoneBits);
+  loadUploadBitFile(UPLOAD_PENDING_PATH, uploadPendingBits);
+  loadUploadBitFile(UPLOAD_MODEL_ERR_PATH, uploadModelErrBits);
+  loadUploadBitFile(UPLOAD_JOB_ERR_PATH, uploadJobErrBits);
+}
+
+static void loadRecVolumeStateMounted() {
+  memset(recVolumeDelta, 0, sizeof(recVolumeDelta));
+  recVolumeDirty = false;
+  File f = SD.open(REC_VOLUME_PATH, FILE_READ);
+  if (!f) return;
+  char line[32];
+  while (f.available()) {
+    int n = f.readBytesUntil('\n', line, sizeof(line) - 1);
+    line[n] = 0;
+    int recNum = 0;
+    int delta = 0;
+    if (sscanf(line, "%d %d", &recNum, &delta) == 2 && recNum > 0 && recNum <= MAX_REC) {
+      recVolumeDelta[recNum - 1] = (int8_t)max(-VOL_LEVELS, min(VOL_LEVELS, delta));
+    }
+  }
+  f.close();
+}
+
+static bool saveRecVolumeStateMounted() {
+  if (!SD.exists(REC_DIR)) SD.mkdir(REC_DIR);
+  const char *tmp = "/REC/volume.tmp";
+  SD.remove(tmp);
+  File f = SD.open(tmp, FILE_WRITE);
+  if (!f) return false;
+  for (int i = 0; i < MAX_REC; i++) {
+    int8_t delta = recVolumeDelta[i];
+    if (delta != 0) f.printf("%d %d\n", i + 1, (int)delta);
+  }
+  f.close();
+  SD.remove(REC_VOLUME_PATH);
+  bool ok = SD.rename(tmp, REC_VOLUME_PATH);
+  if (!ok) SD.remove(tmp);
+  if (ok) recVolumeDirty = false;
+  return ok;
+}
+
+static int adjustRecVolumeDelta(int recNum, int delta) {
+  if (recNum <= 0 || recNum > MAX_REC) return 0;
+  int next = recVolumeDelta[recNum - 1] + (delta > 0 ? 1 : -1);
+  next = max(-VOL_LEVELS, min(VOL_LEVELS, next));
+  recVolumeDelta[recNum - 1] = (int8_t)next;
+  recVolumeDirty = true;
+  return next;
 }
 
 static uint16_t durationFromFileSize(uint32_t fileSize) {
@@ -1044,6 +1175,14 @@ static uint32_t playableWavDataBytes(File &f) {
   uint32_t fileData = total - 44;
   if (dataSize == 0 || dataSize > fileData) return 0;
   return dataSize & ~1UL;
+}
+
+static uint32_t wavSampleRate(File &f) {
+  uint8_t hb[4];
+  if (!f.seek(24) || f.read(hb, sizeof(hb)) != (int)sizeof(hb)) return REC_RATE;
+  uint32_t rate = (uint32_t)hb[0] | ((uint32_t)hb[1] << 8) | ((uint32_t)hb[2] << 16) | ((uint32_t)hb[3] << 24);
+  if (rate < 8000 || rate > 48000) return REC_RATE;
+  return rate;
 }
 
 static void setRecDuration(int recNum, uint32_t fileSize) {
@@ -1295,6 +1434,7 @@ static void scanRecordings(bool compactNext = false) {
   scanRecordingDir(IMPORTANT_DIR, REC_IMPORTANT, maxIdx);
   applyRecordingOrderMounted();
   loadUploadStateMounted();
+  loadRecVolumeStateMounted();
   nextRecHint = lowestAvailableRecordingIndex();
   writeNextIndexCache(nextRecHint);
   SD.end();
@@ -1847,6 +1987,19 @@ static void drawPlaybackWaveCanvas(M5Canvas &cv, uint32_t played, uint32_t dataS
   cv.drawFastVLine(headX, 0, WAVE_CY - WAVE_TOP, COL_WHITE);
 }
 
+static void drawPlaybackWaveDirect(m5gfx::M5GFX &g, uint32_t played, uint32_t dataSize, int16_t *liveWave, size_t liveN) {
+  if (liveWave && liveN > 0) updateLiveWaveVisual(playbackLiveWave, liveWave, liveN, B_HALF, PB_B_SMOOTH_FAST, B_DECAY, PB_B_GAIN);
+  g.fillRect(0, WAVE_TOP, CONTENT_W, WAVE_H, COL_BG);
+  g.drawFastHLine(0, A_CY, CONTENT_W, 0x0440);
+  drawTrackBars(g);
+  g.drawFastHLine(0, B_CY, CONTENT_W, 0x0440);
+  drawLiveWaveVisual(g, playbackLiveWave, B_CY);
+
+  int headX = dataSize ? (int)((uint64_t)played * CONTENT_W / dataSize) : 0;
+  if (headX >= CONTENT_W) headX = CONTENT_W - 1;
+  g.drawFastVLine(headX, WAVE_TOP, WAVE_CY - WAVE_TOP, COL_WHITE);
+}
+
 static void drawPlaybackChrome(m5gfx::M5GFX &g, uint32_t played, uint32_t dataSize, uint32_t deleteHeldMs = 0) {
   uint32_t cur  = (played / 2) / REC_RATE;
   uint32_t tot  = (dataSize / 2) / REC_RATE;
@@ -1877,10 +2030,12 @@ static bool enqueueUploadMounted(int recNum, uint8_t kind);
 static bool uploadCancelMounted(int recNum = 0);
 static uint8_t validateUploadConfigMounted();
 static const char *uploadStatusLabel(uint8_t status);
+static bool extractJsonStringValue(const String &json, const char *key, char *out, size_t n);
 
 // ---------- 回放界面: 播放完自动回列表, 回车暂停/继续, 退格回列表, ;/.切换, +/- 音量, 长按Del删除, 空格去录音 ----------
 // 返回 R_BACK(返回上一层), R_LIST(回列表), R_RECORD(去录音) 或 R_DELETE(删除当前录音)
 int playbackScreen(const char *path, int recNum, int prevRec, int nextRec) {
+  pauseUploadForMedia();
   auto &d = M5Cardputer.Display;
   if (!sdMount()) { showMsg("播放", "SD 读取失败", COL_RED); return R_LIST; }
   File f = SD.open(path, FILE_READ);
@@ -1889,6 +2044,7 @@ int playbackScreen(const char *path, int recNum, int prevRec, int nextRec) {
   if (total <= 44) { f.close(); SD.end(); showMsg("播放", "文件为空", COL_RED); return R_LIST; }
   uint32_t dataSize = playableWavDataBytes(f);
   if (dataSize == 0) { f.close(); SD.end(); showMsg("播放", "文件无效", COL_RED); return R_LIST; }
+  bool isHotkeyPlayback = hotkeyOf(recNum) != 0;
   f.seek(44);
   memset(waveBars, 0, sizeof(waveBars));
   memset(waveBarCounts, 0, sizeof(waveBarCounts));
@@ -1901,6 +2057,8 @@ int playbackScreen(const char *path, int recNum, int prevRec, int nextRec) {
   bool useBottomSprite = useWaveSprite && bottomCv.createSprite(CONTENT_W, CHROME_H) != nullptr;
   M5Canvas cv(&d);
   bool useSprite = !useWaveSprite && cv.createSprite(CONTENT_W, d.height()) != nullptr;
+  const uint32_t pbFrameMs = (useWaveSprite || useSprite) ? PB_UI_FRAME_MS : 90;
+  g_mediaBusy = true;
 
   // 静态部分(画一次): 顶栏
   auto drawStatic = [&]() {
@@ -1968,7 +2126,15 @@ int playbackScreen(const char *path, int recNum, int prevRec, int nextRec) {
       drawPlaybackCanvas(cv, played, dataSize, liveWave, liveN, paused, deleteHeldMs());
       cv.pushSprite(0, 0);
     } else {
-      drawPlaybackCanvas(d, played, dataSize, liveWave, liveN, paused, deleteHeldMs());
+      drawPlaybackWaveDirect(d, played, dataSize, liveWave, liveN);
+      uint32_t held = deleteHeldMs();
+      uint32_t chromeSec = (played / 2) / REC_RATE;
+      uint32_t heldBucket = held / 60;
+      if (chromeSec != lastPbChromeSec || heldBucket != lastPbChromeHeldBucket) {
+        drawPlaybackChrome(d, played, dataSize, held);
+        lastPbChromeSec = chromeSec;
+        lastPbChromeHeldBucket = heldBucket;
+      }
     }
   };
 
@@ -1986,6 +2152,7 @@ int playbackScreen(const char *path, int recNum, int prevRec, int nextRec) {
   drawProgress(0);
   lastProgressDraw = millis();
   speakerOn();
+  applyPlaybackVolumeForRec(recNum);
   bool ignoreKeysUntilRelease = M5Cardputer.Keyboard.isPressed();
 
   while (!stop) {
@@ -1994,6 +2161,13 @@ int playbackScreen(const char *path, int recNum, int prevRec, int nextRec) {
       if (!M5Cardputer.Keyboard.isPressed()) ignoreKeysUntilRelease = false;
     } else {
       if (keyDel()) {
+        if (isHotkeyPlayback) {
+          drawPlaybackAction(cv, "STOP", COL_DIM);
+          ret = R_LIST;
+          stop = true;
+          waitRelease();
+          break;
+        }
         if (delHoldStart == 0) { delHoldStart = millis(); lastDelDraw = 0; }
         uint32_t held = millis() - delHoldStart;
         if (held >= DELETE_HOLD_MS) { ret = R_DELETE; stop = true; }
@@ -2020,19 +2194,12 @@ int playbackScreen(const char *path, int recNum, int prevRec, int nextRec) {
         else if (keySpace()) { drawPlaybackAction(cv, "REC", COL_RED); ret = R_RECORD; stop = true; }   // 空格=去录音
         else if (keyUp() && prevRec > 0) { drawPlaybackAction(cv, "PREV", COL_GREEN); g_nextPlay = prevRec; ret = R_PLAY; stop = true; }
         else if (keyDown() && nextRec > 0) { drawPlaybackAction(cv, "NEXT", COL_GREEN); g_nextPlay = nextRec; ret = R_PLAY; stop = true; }
-        else if (keyCtrl() && keyUpload()) {
-          bool cancelled = uploadCancelMounted(recNum);
-          g_uploadStatus = cancelled ? UPSTAT_ABORTED : UPSTAT_IDLE;
-          drawActionToast(cancelled ? "ABORT" : "NO WT", cancelled ? COL_GREEN : COL_DIM);
+        else if (keyTab() && keyUpload()) {
+          drawPlaybackAction(cv, "LIST", COL_DIM);
           waitRelease();
         }
         else if (keyUpload()) {
-          bool queued = enqueueUploadMounted(recNum, recKindOf(recNum));
-          uint8_t status = queued ? validateUploadConfigMounted() : UPSTAT_NO_SD;
-          if (status == UPSTAT_IDLE) status = UPSTAT_QUEUED;
-          g_uploadStatus = status;
-          if (status == UPSTAT_QUEUED) lastUploadTickMs = millis();
-          drawActionToast(uploadStatusLabel(status), (status == UPSTAT_QUEUED || status == UPSTAT_DONE) ? COL_GREEN : COL_RED);
+          drawPlaybackAction(cv, "LIST", COL_DIM);
           waitRelease();
         }
         else if (keyEnter()) {
@@ -2044,14 +2211,28 @@ int playbackScreen(const char *path, int recNum, int prevRec, int nextRec) {
           waitRelease();
         }
         else if (keyVolUp()) {
-          adjustPlayVolume(25);
-          if (useSprite) drawCanvasVolumeToast(cv, COL_GREEN);
-          else drawVolumeToast(COL_GREEN);
+          if (keyAlt()) {
+            adjustRecVolumeDelta(recNum, 1);
+            applyPlaybackVolumeForRec(recNum);
+            drawPlaybackAction(cv, "V+", COL_GREEN);
+          } else {
+            adjustPlayVolume(25);
+            applyPlaybackVolumeForRec(recNum);
+            if (useSprite) drawCanvasVolumeToast(cv, COL_GREEN);
+            else drawVolumeToast(COL_GREEN);
+          }
         }
         else if (keyVolDn()) {
-          adjustPlayVolume(-25);
-          if (useSprite) drawCanvasVolumeToast(cv, COL_GREEN);
-          else drawVolumeToast(COL_GREEN);
+          if (keyAlt()) {
+            adjustRecVolumeDelta(recNum, -1);
+            applyPlaybackVolumeForRec(recNum);
+            drawPlaybackAction(cv, "V-", COL_GREEN);
+          } else {
+            adjustPlayVolume(-25);
+            applyPlaybackVolumeForRec(recNum);
+            if (useSprite) drawCanvasVolumeToast(cv, COL_GREEN);
+            else drawVolumeToast(COL_GREEN);
+          }
         }
         else if (keyBrightUp()) {
           adjustBrightness(1);
@@ -2106,9 +2287,10 @@ int playbackScreen(const char *path, int recNum, int prevRec, int nextRec) {
       delay(8); continue;
     }
     if (M5Cardputer.Speaker.isPlaying(0) >= 2) {
-      previewPlaybackWaveStep(f, dataSize, previewBar, 1);
-      if (millis() - lastPreviewDraw > PB_UI_FRAME_MS) {
-        lastPreviewDraw = millis();
+      uint32_t now = millis();
+      if (now - lastPreviewDraw > pbFrameMs) {
+        lastPreviewDraw = now;
+        previewPlaybackWaveStep(f, dataSize, previewBar, 1);
         drawProgress(played);
         lastProgressDraw = lastPreviewDraw;
       }
@@ -2134,7 +2316,7 @@ int playbackScreen(const char *path, int recNum, int prevRec, int nextRec) {
     pi ^= 1;
     played += got;
     uint32_t now = millis();
-    if (now - lastProgressDraw >= PB_UI_FRAME_MS) {
+    if (now - lastProgressDraw >= pbFrameMs) {
       lastProgressDraw = now;
       drawProgress(played, liveWave, liveN);
     }
@@ -2144,7 +2326,9 @@ int playbackScreen(const char *path, int recNum, int prevRec, int nextRec) {
   if (useSprite) cv.deleteSprite();
   M5Cardputer.Speaker.stop();
   f.close();
+  if (recVolumeDirty) saveRecVolumeStateMounted();
   SD.end();
+  g_mediaBusy = false;
   return ret;
 }
 
@@ -2315,10 +2499,53 @@ static bool uploadRemoveDoneMounted(int recNum) {
   return removed && committed;
 }
 
+static bool uploadRemoveLineByRecMounted(const char *path, int recNum, uint8_t *bits = nullptr) {
+  if (recNum <= 0) return false;
+  File in = SD.open(path, FILE_READ);
+  if (!in) return false;
+  const char *tmp = "/UPLOAD/state.tmp";
+  SD.remove(tmp);
+  File out = SD.open(tmp, FILE_WRITE);
+  if (!out) {
+    in.close();
+    SD.remove(tmp);
+    return false;
+  }
+  bool removed = false;
+  char line[128];
+  while (in.available()) {
+    int n = in.readBytesUntil('\n', line, sizeof(line) - 1);
+    line[n] = 0;
+    char trimmed[128];
+    snprintf(trimmed, sizeof(trimmed), "%s", line);
+    strTrim(trimmed);
+    if (!trimmed[0]) continue;
+    if (atoi(trimmed) == recNum) {
+      removed = true;
+      continue;
+    }
+    out.printf("%s\n", trimmed);
+  }
+  in.close();
+  out.close();
+  SD.remove(path);
+  bool committed = SD.rename(tmp, path);
+  if (!committed) SD.remove(tmp);
+  if (removed && committed && bits) setBit(bits, recNum, false);
+  return removed && committed;
+}
+
+static void uploadClearNonDoneStateMounted(int recNum) {
+  uploadRemoveLineByRecMounted(UPLOAD_PENDING_PATH, recNum, uploadPendingBits);
+  uploadRemoveLineByRecMounted(UPLOAD_MODEL_ERR_PATH, recNum, uploadModelErrBits);
+  uploadRemoveLineByRecMounted(UPLOAD_JOB_ERR_PATH, recNum, uploadJobErrBits);
+}
+
 static bool enqueueUploadMounted(int recNum, uint8_t kind) {
   if (recNum <= 0) return false;
   if (!SD.exists(UPLOAD_DIR)) SD.mkdir(UPLOAD_DIR);
   if (uploadLineHasRec(UPLOAD_DONE_PATH, recNum) && !uploadRemoveDoneMounted(recNum)) return false;
+  uploadClearNonDoneStateMounted(recNum);
   if (uploadLineHasRec(UPLOAD_QUEUE_PATH, recNum)) {
     setUploadQueued(recNum, true);
     return true;
@@ -2438,6 +2665,7 @@ static bool uploadCancelMounted(int recNum) {
 
 static void uploadMarkDone(int recNum) {
   if (!SD.exists(UPLOAD_DIR)) SD.mkdir(UPLOAD_DIR);
+  uploadClearNonDoneStateMounted(recNum);
   if (!uploadLineHasRec(UPLOAD_DONE_PATH, recNum)) {
     File f = SD.open(UPLOAD_DONE_PATH, FILE_APPEND);
     if (!f) return;
@@ -2448,12 +2676,51 @@ static void uploadMarkDone(int recNum) {
   setUploadQueued(recNum, false);
 }
 
+static void uploadMarkPending(int recNum, const char *jobId) {
+  if (recNum <= 0 || !jobId || !jobId[0]) return;
+  if (!SD.exists(UPLOAD_DIR)) SD.mkdir(UPLOAD_DIR);
+  uploadRemoveLineByRecMounted(UPLOAD_PENDING_PATH, recNum, uploadPendingBits);
+  uploadRemoveLineByRecMounted(UPLOAD_MODEL_ERR_PATH, recNum, uploadModelErrBits);
+  uploadRemoveLineByRecMounted(UPLOAD_JOB_ERR_PATH, recNum, uploadJobErrBits);
+  File f = SD.open(UPLOAD_PENDING_PATH, FILE_APPEND);
+  if (!f) return;
+  f.printf("%d %s\n", recNum, jobId);
+  f.close();
+  setUploadPending(recNum, true);
+  setUploadDone(recNum, false);
+  setUploadQueued(recNum, false);
+}
+
+static void uploadMarkError(int recNum, bool modelError) {
+  if (recNum <= 0) return;
+  if (!SD.exists(UPLOAD_DIR)) SD.mkdir(UPLOAD_DIR);
+  uploadRemoveLineByRecMounted(UPLOAD_PENDING_PATH, recNum, uploadPendingBits);
+  const char *path = modelError ? UPLOAD_MODEL_ERR_PATH : UPLOAD_JOB_ERR_PATH;
+  uint8_t *bits = modelError ? uploadModelErrBits : uploadJobErrBits;
+  uploadRemoveLineByRecMounted(path, recNum, bits);
+  File f = SD.open(path, FILE_APPEND);
+  if (!f) return;
+  f.printf("%d\n", recNum);
+  f.close();
+  setBit(bits, recNum, true);
+  setUploadDone(recNum, false);
+  setUploadQueued(recNum, false);
+}
+
 static void uploadForgetRecordMounted(int recNum) {
   if (recNum <= 0) return;
   uploadRemoveQueuedMounted(recNum);
   uploadRemoveDoneMounted(recNum);
+  uploadClearNonDoneStateMounted(recNum);
   setUploadQueued(recNum, false);
   setUploadDone(recNum, false);
+  setUploadPending(recNum, false);
+  setUploadModelErr(recNum, false);
+  setUploadJobErr(recNum, false);
+  if (recNum > 0 && recNum <= MAX_REC) {
+    recVolumeDelta[recNum - 1] = 0;
+    recVolumeDirty = true;
+  }
 }
 
 static bool saveUploadConfigMounted() {
@@ -2519,6 +2786,15 @@ static void wifiPowerDown() {
   WiFi.disconnect(true);
   WiFi.mode(WIFI_OFF);
   boxClockSynced = false;
+}
+
+static void pauseUploadForMedia() {
+  g_uploadActiveAnnounced = false;
+  g_uploadActiveRec = 0;
+  if (g_uploadStatus == UPSTAT_UPLOADING) g_uploadStatus = UPSTAT_QUEUED;
+#if UPLOAD_WIFI_ENABLED
+  wifiPowerDown();
+#endif
 }
 
 static bool tryWifiProfile(const char *ssid, const char *password) {
@@ -2649,6 +2925,169 @@ static uint8_t imaAdpcmEncodeNibble(int16_t sample, int16_t &predictor, uint8_t 
 
 static int16_t readLe16(const uint8_t *p) {
   return (int16_t)((uint16_t)p[0] | ((uint16_t)p[1] << 8));
+}
+
+static bool makeJobStatusPath(const char *uploadPath, const char *jobId, char *out, size_t n) {
+  if (!uploadPath || !jobId || !jobId[0] || !out || n == 0) return false;
+  const char *suffix = "/upload";
+  size_t len = strlen(uploadPath);
+  size_t suffixLen = strlen(suffix);
+  out[0] = 0;
+  if (len >= suffixLen && strcmp(uploadPath + len - suffixLen, suffix) == 0) {
+    size_t baseLen = len - suffixLen;
+    if (baseLen + strlen("/jobs/") + strlen(jobId) >= n) return false;
+    memcpy(out, uploadPath, baseLen);
+    out[baseLen] = 0;
+    strlcat(out, "/jobs/", n);
+    strlcat(out, jobId, n);
+    return true;
+  }
+  if (strlen("/jobs/") + strlen(jobId) >= n) return false;
+  strlcpy(out, "/jobs/", n);
+  strlcat(out, jobId, n);
+  return true;
+}
+
+static String readHttpBody(WiFiClient &client, int &code, uint32_t timeoutMs = 5000, bool abortOnKey = true) {
+  code = 0;
+  int contentLength = -1;
+  String body;
+  uint32_t start = millis();
+  while (!client.available() && client.connected() && millis() - start < timeoutMs) {
+    M5Cardputer.update();
+    if (abortOnKey && keyUploadAbort()) return body;
+    delay(20);
+  }
+  if (client.available()) {
+    String status = client.readStringUntil('\n');
+    int sp = status.indexOf(' ');
+    if (sp >= 0) code = status.substring(sp + 1).toInt();
+    while (client.connected() || client.available()) {
+      String line = client.readStringUntil('\n');
+      if (line == "\r" || line.length() == 0) break;
+      String lower = line;
+      lower.toLowerCase();
+      if (lower.startsWith("content-length:")) contentLength = lower.substring(15).toInt();
+    }
+    start = millis();
+    while ((client.connected() || client.available()) && millis() - start < timeoutMs) {
+      while (client.available()) {
+        char c = (char)client.read();
+        if (body.length() < 768) body += c;
+        if (contentLength > 0 && body.length() >= (unsigned)contentLength) return body;
+      }
+      M5Cardputer.update();
+      if (abortOnKey && keyUploadAbort()) return body;
+      delay(5);
+    }
+  }
+  return body;
+}
+
+static uint8_t uploadCheckJobStatusMounted(const char *host, uint16_t port, const char *hostHeader, const char *uploadPath, const char *jobId) {
+  char jobPath[180];
+  if (!makeJobStatusPath(uploadPath, jobId, jobPath, sizeof(jobPath))) return UPSTAT_BAD_URL;
+  WiFiClient client;
+  client.setTimeout(5000);
+  if (!client.connect(host, port, 3000)) return UPSTAT_HTTP_ERR;
+  client.setNoDelay(true);
+  client.printf("GET %s HTTP/1.1\r\n", jobPath);
+  client.printf("Host: %s\r\n", hostHeader);
+  client.print("Connection: close\r\n\r\n");
+  int code = 0;
+  String body = readHttpBody(client, code, 6000, false);
+  client.stop();
+  if (code < 200 || code >= 300) return UPSTAT_HTTP_ERR;
+  char status[32];
+  if (!extractJsonStringValue(body, "status", status, sizeof(status))) return UPSTAT_PROCESSING;
+  if (strcmp(status, "done") == 0 || strcmp(status, "sent_to_flomo") == 0) return UPSTAT_DONE;
+  if (strstr(status, "deepseek_failed") || strstr(status, "chat_reply_failed")) return UPSTAT_MODEL_ERR;
+  if (strstr(status, "failed")) return UPSTAT_JOB_ERR;
+  return UPSTAT_PROCESSING;
+}
+
+static bool uploadReadFirstPending(int &recNum, char *jobId, size_t jobIdLen) {
+  recNum = 0;
+  if (jobId && jobIdLen) jobId[0] = 0;
+  File f = SD.open(UPLOAD_PENDING_PATH, FILE_READ);
+  if (!f) return false;
+  char line[140];
+  while (f.available()) {
+    int n = f.readBytesUntil('\n', line, sizeof(line) - 1);
+    line[n] = 0;
+    strTrim(line);
+    if (!line[0]) continue;
+    char id[96] = {0};
+    if (sscanf(line, "%d %95s", &recNum, id) == 2 && recNum > 0 && id[0]) {
+      if (jobId && jobIdLen) strlcpy(jobId, id, jobIdLen);
+      f.close();
+      return true;
+    }
+  }
+  f.close();
+  return false;
+}
+
+static bool uploadReadPendingJobForRec(int wantedRec, char *jobId, size_t jobIdLen) {
+  if (jobId && jobIdLen) jobId[0] = 0;
+  if (wantedRec <= 0) return false;
+  File f = SD.open(UPLOAD_PENDING_PATH, FILE_READ);
+  if (!f) return false;
+  char line[140];
+  while (f.available()) {
+    int n = f.readBytesUntil('\n', line, sizeof(line) - 1);
+    line[n] = 0;
+    strTrim(line);
+    if (!line[0]) continue;
+    int recNum = 0;
+    char id[96] = {0};
+    if (sscanf(line, "%d %95s", &recNum, id) == 2 && recNum == wantedRec && id[0]) {
+      if (jobId && jobIdLen) strlcpy(jobId, id, jobIdLen);
+      f.close();
+      return true;
+    }
+  }
+  f.close();
+  return false;
+}
+
+static bool uploadPollPendingRecMounted(int recNum, const char *jobId, bool allowConnect) {
+  if (recNum <= 0 || !jobId || !jobId[0]) return false;
+  if (!loadUploadConfig()) { g_uploadStatus = UPSTAT_NO_CFG; return false; }
+  if (!uploadCfg.syncEnabled) { wifiPowerDown(); g_uploadStatus = UPSTAT_SYNC_OFF; return false; }
+  if (!allowConnect && WiFi.status() != WL_CONNECTED) return false;
+  if (!ensureWifiConnected()) {
+    g_uploadStatus = g_uploadPausedForInput ? UPSTAT_PROCESSING : UPSTAT_WIFI_ERR;
+    return false;
+  }
+  char host[65], urlPath[96], hostHeader[72];
+  uint16_t port = 80;
+  if (!parseHttpUrl(uploadCfg.url, host, sizeof(host), port, urlPath, sizeof(urlPath))) {
+    g_uploadStatus = UPSTAT_BAD_URL;
+    wifiPowerDown();
+    return false;
+  }
+  if (port == 80) snprintf(hostHeader, sizeof(hostHeader), "%s", host);
+  else snprintf(hostHeader, sizeof(hostHeader), "%s:%u", host, (unsigned)port);
+  uint8_t status = uploadCheckJobStatusMounted(host, port, hostHeader, urlPath, jobId);
+  g_uploadStatus = status;
+  if (status == UPSTAT_DONE) {
+    uploadMarkDone(recNum);
+    uploadRemoveLineByRecMounted(UPLOAD_PENDING_PATH, recNum, uploadPendingBits);
+    return true;
+  }
+  if (status == UPSTAT_MODEL_ERR || status == UPSTAT_JOB_ERR) {
+    uploadMarkError(recNum, status == UPSTAT_MODEL_ERR);
+    return true;
+  }
+  return false;
+}
+
+static bool uploadPollPendingMounted(bool allowConnect) {
+  int recNum = 0;
+  char jobId[96];
+  if (!uploadReadFirstPending(recNum, jobId, sizeof(jobId))) return false;
+  return uploadPollPendingRecMounted(recNum, jobId, allowConnect);
 }
 
 static uint8_t validateUploadConfigMounted() {
@@ -2796,18 +3235,8 @@ static bool uploadOneJobMounted() {
       }
     }
   }
-  uint32_t start = millis();
-  while (!client.available() && client.connected() && millis() - start < 4000) {
-    M5Cardputer.update();
-    if (keyUploadAbort()) return abortUploadNow();
-    delay(20);
-  }
   int code = 0;
-  if (client.available()) {
-    String status = client.readStringUntil('\n');
-    int sp = status.indexOf(' ');
-    if (sp >= 0) code = status.substring(sp + 1).toInt();
-  }
+  String responseBody = readHttpBody(client, code, 5000);
   client.stop();
   f.close();
   if ((code >= 200 && code < 300) || code == 409) {
@@ -2841,7 +3270,7 @@ static const char *uploadStatusLabel(uint8_t status) {
   switch (status) {
     case UPSTAT_UPLOADING: return "GO";
     case UPSTAT_QUEUED: return "WT";
-    case UPSTAT_DONE: return "OK";
+    case UPSTAT_DONE: return "OKK";
     case UPSTAT_NO_CFG: return "NO CFG";
     case UPSTAT_BAD_URL: return "BAD URL";
     case UPSTAT_WIFI_ERR: return "WIFI ERR";
@@ -2850,6 +3279,9 @@ static const char *uploadStatusLabel(uint8_t status) {
     case UPSTAT_NO_FILE: return "NO FILE";
     case UPSTAT_ABORTED: return "ABORT";
     case UPSTAT_SYNC_OFF: return "SYNC OFF";
+    case UPSTAT_PROCESSING: return "OKK";
+    case UPSTAT_MODEL_ERR: return "OKK";
+    case UPSTAT_JOB_ERR: return "OKK";
     default: return "WT";
   }
 }
@@ -2881,6 +3313,7 @@ static bool systemIdleTick() {
 #if !UPLOAD_WIFI_ENABLED
   return false;
 #endif
+  if (g_mediaBusy) return false;
   if (M5Cardputer.Keyboard.isPressed()) {
     if (g_uploadActiveAnnounced) {
       g_uploadActiveAnnounced = false;
@@ -3213,6 +3646,15 @@ static void drawRecWaveCanvas(M5Canvas &cv, int16_t *wave) {
   drawLiveWaveVisual(cv, recLiveWave, B_CY - WAVE_TOP);
 }
 
+static void drawRecWaveDirect(m5gfx::M5GFX &g, int16_t *wave) {
+  updateLiveWaveVisual(recLiveWave, wave, REC_N, B_HALF, REC_B_SMOOTH, B_DECAY);
+  g.fillRect(0, WAVE_TOP, CONTENT_W, WAVE_H, COL_BG);
+  g.drawFastHLine(0, A_CY, CONTENT_W, 0x0440);
+  drawTrackBars(g);
+  g.drawFastHLine(0, B_CY, CONTENT_W, 0x0440);
+  drawLiveWaveVisual(g, recLiveWave, B_CY);
+}
+
 static void drawRecChrome(m5gfx::M5GFX &g, uint32_t elapsedMs, bool blink, bool ready = false, bool paused = false, uint32_t deleteHeldMs = 0) {
   if (ready || paused) {
     const char *status = ready ? "READY" : "PAUSE";
@@ -3234,6 +3676,8 @@ static void drawRecChrome(m5gfx::M5GFX &g, uint32_t elapsedMs, bool blink, bool 
 
 // 录制. 开机自动进入; 调用此函数后创建文件并开始写入
 int recordingScreen() {
+  pauseUploadForMedia();
+  g_mediaBusy = true;
   auto &d = M5Cardputer.Display;
   g_afterRecord = R_LIST;
   g_uploadAfterRecord = false;
@@ -3248,6 +3692,7 @@ int recordingScreen() {
   M5Canvas bottomCv(&d);
   bool useBottomSprite = useWaveSprite && bottomCv.createSprite(CONTENT_W, CHROME_H) != nullptr;
   bool useSprite = !useWaveSprite && cv.createSprite(CONTENT_W, d.height()) != nullptr;
+  const uint32_t recFrameMs = (useWaveSprite || useSprite) ? REC_UI_FRAME_MS : 90;
   uint32_t lastRecChromeSec = 0xFFFFFFFFUL;
   bool lastRecChromeBlink = false;
   uint32_t lastRecChromeHeldBucket = 0xFFFFFFFFUL;
@@ -3264,7 +3709,11 @@ int recordingScreen() {
   };
   auto drawRecChromePartial = [&](uint32_t elapsedMs, bool blink, bool ready = false, bool pausedFrame = false, uint32_t deleteHeldMs = 0, bool forceTop = false, bool forceBottom = false) {
     if (!useWaveSprite) {
-      drawRecFrame(elapsedMs, blink, nullptr, ready, pausedFrame, deleteHeldMs);
+      if (useSprite) {
+        drawRecFrame(elapsedMs, blink, nullptr, ready, pausedFrame, deleteHeldMs);
+      } else {
+        drawRecChrome(d, elapsedMs, blink, ready, pausedFrame, deleteHeldMs);
+      }
       return;
     }
     uint32_t sec = elapsedMs / 1000;
@@ -3302,7 +3751,19 @@ int recordingScreen() {
   };
   auto drawRecRealtime = [&](uint32_t elapsedMs, bool blink, int16_t *wave, uint32_t deleteHeldMs = 0) {
     if (!useWaveSprite) {
-      drawRecFrame(elapsedMs, blink, wave, false, false, deleteHeldMs);
+      if (useSprite) {
+        drawRecFrame(elapsedMs, blink, wave, false, false, deleteHeldMs);
+      } else {
+        drawRecWaveDirect(d, wave);
+        uint32_t sec = elapsedMs / 1000;
+        uint32_t heldBucket = deleteHeldMs / 60;
+        if (sec != lastRecChromeSec || blink != lastRecChromeBlink || heldBucket != lastRecChromeHeldBucket) {
+          drawRecChrome(d, elapsedMs, blink, false, false, deleteHeldMs);
+          lastRecChromeSec = sec;
+          lastRecChromeBlink = blink;
+          lastRecChromeHeldBucket = heldBucket;
+        }
+      }
       return;
     }
     drawRecWaveCanvas(waveCv, wave);
@@ -3333,6 +3794,7 @@ int recordingScreen() {
     if (useBottomSprite) bottomCv.deleteSprite();
     if (useWaveSprite) waveCv.deleteSprite();
     if (useSprite) cv.deleteSprite();
+    g_mediaBusy = false;
   };
   drawRecFrame(0, false, nullptr, true);
 
@@ -3475,7 +3937,7 @@ int recordingScreen() {
           }
         }
       } else if (M5Cardputer.Keyboard.isChange() && M5Cardputer.Keyboard.isPressed()) {
-        if (keyTab()) {
+        if (keyTab() && !keyUpload()) {
           recScreenOff = true;
           delHoldStart = 0;
           lastDelDraw = 0;
@@ -3497,7 +3959,7 @@ int recordingScreen() {
           waitRelease();
         }
         else if (keyEsc()) { g_afterRecord = R_BACK; stop = true; break; }
-        else if (keyCtrl() && keyUpload()) {
+        else if (keyTab() && keyUpload()) {
           bool cancelled = uploadCancelMounted();
           g_uploadStatus = cancelled ? UPSTAT_ABORTED : UPSTAT_IDLE;
           drawRecToast(cancelled ? "ABORT" : "NO WT", cancelled ? COL_GREEN : COL_DIM);
@@ -3547,7 +4009,7 @@ int recordingScreen() {
     b ^= 1;
     if (recWriteSamples >= REC_WRITE_BATCH * REC_N) flushRecWrite();
     uint32_t now = millis();
-    if (now - lastDraw >= REC_UI_FRAME_MS) {
+    if (now - lastDraw >= recFrameMs) {
       lastDraw = now;
       bool blink = ((now / 400) % 2) == 0;
       uint32_t elapsed = activeElapsed();
@@ -3583,7 +4045,7 @@ int recordingScreen() {
   return lastSavedIdx;
 }
 
-// ---------- 录音列表: ;/.选, 回车放, Ctrl+键绑定, Alt降噪, 空格录音, Esc退出, 长按Del删除 ----------
+// ---------- 录音列表: ;/.选, 回车放, Tab+键绑定, Alt降噪, 空格录音, Esc退出, 长按Del删除 ----------
 // 返回 R_BACK(退出列表并息屏) 或 R_RECORD(去录音)
 static void deleteRecording(int recNum) {
   if (!sdMount()) return;
@@ -3595,6 +4057,7 @@ static void deleteRecording(int recNum) {
   recordingPathKind(recNum, REC_IMPORTANT, p, sizeof(p));
   SD.remove(p);
   uploadForgetRecordMounted(recNum);
+  if (recVolumeDirty) saveRecVolumeStateMounted();
   removeRecordingOrderMounted(recNum);
   SD.end();
   setShortcutRec(recNum, false);
@@ -3635,6 +4098,10 @@ static int deleteUnmarkedRecordings() {
     dir.close();
   }
   SD.end();
+  if (recVolumeDirty && sdMount()) {
+    saveRecVolumeStateMounted();
+    SD.end();
+  }
   scanRecordings(true);
   return deleted;
 }
@@ -3727,6 +4194,32 @@ static int nextVisibleIndex(int idx, uint8_t mode) {
   return idx;
 }
 
+static void rememberListSelection(uint8_t mode, int sel) {
+  if (mode > REC_IMPORTANT || sel < 0 || sel >= recCount) return;
+  int recNum = recList[sel];
+  if (recVisibleInMode(recNum, mode)) g_listModeSelectedRec[mode] = recNum;
+}
+
+static int rememberedListIndex(uint8_t mode) {
+  if (mode > REC_IMPORTANT) return -1;
+  int recNum = g_listModeSelectedRec[mode];
+  int idx = recListIndexOf(recNum);
+  if (idx >= 0 && recVisibleInMode(recNum, mode)) return idx;
+  g_listModeSelectedRec[mode] = 0;
+  return -1;
+}
+
+static int selectIndexForMode(uint8_t mode, int fallbackSel) {
+  int remembered = rememberedListIndex(mode);
+  if (remembered >= 0) return remembered;
+  return nearestVisibleIndex(fallbackSel, mode);
+}
+
+static void selectRecordedInNormalList(int recNum) {
+  g_listMode = REC_NORMAL;
+  if (recNum > 0 && recNum <= MAX_REC) g_listModeSelectedRec[REC_NORMAL] = recNum;
+}
+
 int listScreen(int selectIdx) {
   auto &d = M5Cardputer.Display;
   if (recCount <= 0 || (selectIdx > 0 && recListIndexOf(selectIdx) < 0)) scanRecordings();
@@ -3760,11 +4253,13 @@ int listScreen(int selectIdx) {
   }
 
   int sel = recCount - 1;   // 默认选最新录音(列表末尾)
+  sel = selectIndexForMode(g_listMode, recCount - 1);
   if (selectIdx > 0) {
     for (int i = 0; i < recCount; i++) {
       if (recList[i] == selectIdx) {
         sel = i;
         g_listMode = recKindOf(selectIdx);
+        rememberListSelection(g_listMode, sel);
         break;
       }
     }
@@ -3775,6 +4270,7 @@ int listScreen(int selectIdx) {
     if (carryIdx >= 0) {
       sel = carryIdx;
       g_listMode = recKindOf(g_carryDeleteRec);
+      rememberListSelection(g_listMode, sel);
     } else {
       g_carryDeleteRec = 0;
       g_carryDeleteStart = 0;
@@ -3799,6 +4295,7 @@ int listScreen(int selectIdx) {
       int visibleTotal = countVisible(g_listMode);
       if (visibleTotal == 0) sel = -1;
       if (visibleTotal > 0 && (sel < 0 || !recVisibleInMode(recList[sel], g_listMode))) sel = nearestVisibleIndex(sel, g_listMode);
+      rememberListSelection(g_listMode, sel);
       int selectedOrdinal = 0;
       if (sel >= 0) {
         for (int i = 0; i < sel; i++) if (recVisibleInMode(recList[i], g_listMode)) selectedOrdinal++;
@@ -3845,9 +4342,11 @@ int listScreen(int selectIdx) {
           drawDseg14Text(d, tagX, y, "IMP", on ? COL_GREEN : COL_DIM);
         }
         if (uploadDone(recList[i])) {
-          drawDseg14Text(d, uploadX, y, "OK", on ? COL_GREEN : COL_DIM);
+          drawDseg14Text(d, uploadX, y, "OKK", on ? COL_GREEN : COL_DIM);
         } else if (g_uploadActiveRec == recList[i]) {
           drawDseg14Text(d, uploadX, y, "GO", on ? COL_GREEN : COL_DIM);
+        } else if (uploadPending(recList[i]) || uploadModelErr(recList[i]) || uploadJobErr(recList[i])) {
+          drawDseg14Text(d, uploadX, y, "OKK", on ? COL_GREEN : COL_DIM);
         } else if (uploadQueued(recList[i])) {
           drawDseg14Text(d, uploadX, y, "WT", on ? COL_GREEN : COL_DIM);
         }
@@ -3887,7 +4386,7 @@ int listScreen(int selectIdx) {
         g_carryDeleteStart = 0;
       }
     }
-    if (keyDel() && !keyCtrl() && sel >= 0) {
+    if (keyDel() && !keyTab() && sel >= 0) {
       if (delHoldStart == 0) delHoldStart = millis();
       uint32_t held = millis() - delHoldStart;
       if (held >= DELETE_HOLD_MS) {
@@ -3898,6 +4397,8 @@ int listScreen(int selectIdx) {
         g_carryDeleteStart = 0;
         if (recCount == 0) return R_BACK;
         if (sel >= recCount) sel = recCount - 1;
+        sel = nearestVisibleIndex(sel, g_listMode);
+        rememberListSelection(g_listMode, sel);
         delHoldStart = 0;
         lastDelDraw = 0;
         redraw = true;
@@ -3919,7 +4420,9 @@ int listScreen(int selectIdx) {
       lastInputMs = millis();
       int hk = pressedHotkeyRec();
       if (hk > 0) {                                     // 绑定键=最高优先级, 交给外层播放页
+        rememberListSelection(g_listMode, sel);
         g_listMode = REC_SHORTCUT;
+        g_listModeSelectedRec[REC_SHORTCUT] = hk;
         g_nextPlay = hk;
         return R_PLAY;
       }
@@ -3927,15 +4430,16 @@ int listScreen(int selectIdx) {
       else if (keyVolDn()) { adjustPlayVolume(-25); drawVolumeToast(COL_GREEN); waitRelease(); }
       else if (keyBrightUp()) { adjustBrightness(1); drawBrightnessToast(COL_GREEN); waitRelease(); }
       else if (keyBrightDn()) { adjustBrightness(-1); drawBrightnessToast(COL_GREEN); waitRelease(); }
-      else if (keyCtrl() && keyDel()) {
+      else if (keyTab() && keyDel()) {
         if (confirmDeleteUnmarked()) {
           int deleted = deleteUnmarkedRecordings();
           sel = recCount - 1;
           g_listMode = REC_NORMAL;
+          rememberListSelection(g_listMode, sel);
         }
         redraw = true; waitRelease();
       }
-      else if (keyCtrl() && sel >= 0) {                             // Ctrl+键 = 绑定快捷键(字母/数字)
+      else if (keyTab() && sel >= 0 && !keyUpload()) {
         if (keyAlt()) {
           int recNum = recList[sel];
           cleanFrictionForRec(recNum, false);
@@ -3944,7 +4448,10 @@ int listScreen(int selectIdx) {
         }
         if (keyEnter()) {
           bool ok = markRecordingImportant(recList[sel]);
-          if (ok) g_listMode = REC_IMPORTANT;
+          if (ok) {
+            g_listMode = REC_IMPORTANT;
+            rememberListSelection(g_listMode, sel);
+          }
           redraw = true; waitRelease();
           continue;
         }
@@ -3952,11 +4459,14 @@ int listScreen(int selectIdx) {
         if (bk) {
           bool ok = markRecordingShortcut(recList[sel]);
           if (ok) setHotkey(bk, recList[sel]);
-          if (ok) g_listMode = REC_SHORTCUT;
+          if (ok) {
+            g_listMode = REC_SHORTCUT;
+            rememberListSelection(g_listMode, sel);
+          }
           redraw = true; waitRelease();
         }
       }
-      else if (keyCtrl() && keyUpload()) {
+      else if (keyTab() && keyUpload()) {
         uint8_t status = UPSTAT_IDLE;
         bool cancelled = false;
         if (sdMount()) {
@@ -3975,12 +4485,20 @@ int listScreen(int selectIdx) {
       else if (keyUpload() && sel >= 0) {
         uint8_t status = UPSTAT_NO_SD;
         if (sdMount()) {
-          bool queued = enqueueUploadMounted(recList[sel], recKindOf(recList[sel]));
-          status = queued ? validateUploadConfigMounted() : UPSTAT_NO_SD;
-          if (status == UPSTAT_IDLE) {
-            status = UPSTAT_QUEUED;
-            g_uploadStatus = status;
-            lastUploadTickMs = millis();
+          int recNum = recList[sel];
+          if (uploadDone(recNum)) {
+            status = UPSTAT_DONE;
+          } else if (uploadPending(recNum) || uploadModelErr(recNum) || uploadJobErr(recNum)) {
+            uploadMarkDone(recNum);
+            status = UPSTAT_DONE;
+          } else {
+            bool queued = enqueueUploadMounted(recNum, recKindOf(recNum));
+            status = queued ? validateUploadConfigMounted() : UPSTAT_NO_SD;
+            if (status == UPSTAT_IDLE) {
+              status = UPSTAT_QUEUED;
+              g_uploadStatus = status;
+              lastUploadTickMs = millis();
+            }
           }
           SD.end();
         }
@@ -3991,11 +4509,13 @@ int listScreen(int selectIdx) {
       }
       else if (keySpace()) { return R_RECORD; }         // 空格=去录音
       else if (keyEsc())   { return R_BACK; }           // Esc=退出列表并息屏
-      else if (keyLeft())  { g_listMode = (g_listMode + 2) % 3; sel = nearestVisibleIndex(sel, g_listMode); redraw = true; waitRelease(); }
-      else if (keyRight()) { g_listMode = (g_listMode + 1) % 3; sel = nearestVisibleIndex(sel, g_listMode); redraw = true; waitRelease(); }
-      else if (keyUp())    { if (sel >= 0) sel = prevVisibleIndex(sel, g_listMode); redraw = true; }
-      else if (keyDown())  { if (sel >= 0) sel = nextVisibleIndex(sel, g_listMode); redraw = true; }
+      else if (keyEsc())   { return R_BACK; }
+      else if (keyLeft())  { rememberListSelection(g_listMode, sel); g_listMode = (g_listMode + 2) % 3; sel = selectIndexForMode(g_listMode, sel); redraw = true; waitRelease(); }
+      else if (keyRight()) { rememberListSelection(g_listMode, sel); g_listMode = (g_listMode + 1) % 3; sel = selectIndexForMode(g_listMode, sel); redraw = true; waitRelease(); }
+      else if (keyUp())    { if (sel >= 0) { sel = prevVisibleIndex(sel, g_listMode); rememberListSelection(g_listMode, sel); } redraw = true; }
+      else if (keyDown())  { if (sel >= 0) { sel = nextVisibleIndex(sel, g_listMode); rememberListSelection(g_listMode, sel); } redraw = true; }
       else if (keyEnter() && sel >= 0) {
+        rememberListSelection(g_listMode, sel);
         g_nextPlay = recList[sel];
         return R_PLAY;
       }
@@ -4029,7 +4549,11 @@ void listFlow(int sel) {
           if (g_afterRecord == R_LIST) continue;
           return;
         }
-        if (g_afterRecord == R_LIST) { sel = recorded; continue; }
+        if (g_afterRecord == R_LIST) {
+          selectRecordedInNormalList(recorded);
+          sel = recorded;
+          continue;
+        }
         afterRecordingFlow(recorded);
         return;
       }
@@ -4047,7 +4571,11 @@ void listFlow(int sel) {
         if (g_afterRecord == R_LIST) continue;
         return;
       }
-      if (g_afterRecord == R_LIST) { sel = n; continue; }
+      if (g_afterRecord == R_LIST) {
+        selectRecordedInNormalList(n);
+        sel = n;
+        continue;
+      }
       afterRecordingFlow(n);
       return;
     }
@@ -4056,13 +4584,13 @@ void listFlow(int sel) {
 }
 
 static void drawWifiField(M5Canvas &cv, int y, const char *label, const char *value, bool selected, bool secret) {
-  if (selected) cv.fillRect(0, y - 1, CONTENT_W, 18, 0x0320);
+  if (selected) cv.fillRect(0, y - 1, CONTENT_W, 18, COL_DARK_GRAY);
   FONT_CN_16(cv);
-  cv.setTextColor(selected ? COL_GREEN : COL_DIM, selected ? 0x0320 : COL_BG);
+  cv.setTextColor(selected ? COL_WHITE : COL_GRAY, selected ? COL_DARK_GRAY : COL_BG);
   cv.setCursor(8, y);
   cv.print(label);
   FONT_ASCII(cv);
-  cv.setTextColor(selected ? COL_GREEN : COL_WHITE, selected ? 0x0320 : COL_BG);
+  cv.setTextColor(COL_WHITE, selected ? COL_DARK_GRAY : COL_BG);
   cv.setCursor(76, y + 1);
   char shown[23];
   size_t len = strlen(value);
@@ -4073,13 +4601,13 @@ static void drawWifiField(M5Canvas &cv, int y, const char *label, const char *va
 }
 
 static void drawWifiField(m5gfx::M5GFX &g, int y, const char *label, const char *value, bool selected, bool secret) {
-  if (selected) g.fillRect(0, y - 1, CONTENT_W, 18, 0x0320);
+  if (selected) g.fillRect(0, y - 1, CONTENT_W, 18, COL_DARK_GRAY);
   FONT_CN_16(g);
-  g.setTextColor(selected ? COL_GREEN : COL_DIM, selected ? 0x0320 : COL_BG);
+  g.setTextColor(selected ? COL_WHITE : COL_GRAY, selected ? COL_DARK_GRAY : COL_BG);
   g.setCursor(8, y);
   g.print(label);
   FONT_ASCII(g);
-  g.setTextColor(selected ? COL_GREEN : COL_WHITE, selected ? 0x0320 : COL_BG);
+  g.setTextColor(COL_WHITE, selected ? COL_DARK_GRAY : COL_BG);
   g.setCursor(76, y + 1);
   char shown[23];
   size_t len = strlen(value);
@@ -4146,29 +4674,33 @@ static uint8_t wifiSettingsScreen() {
     const char *syncText = uploadCfg.syncEnabled ? "ON" : "OFF";
     if (useSprite) {
       cv.fillScreen(COL_BG);
-      drawStatusBase(cv);
-      drawStatusTitle(cv, "Wi-Fi");
+      cv.fillRect(0, 0, CONTENT_W, 21, COL_BG);
+      drawStatusBatteryColor(cv, COL_WHITE);
+      drawDseg14Text(cv, 4, 1, "Wi-Fi", COL_WHITE);
+      cv.drawFastHLine(0, 20, CONTENT_W, COL_WHITE);
       drawWifiField(cv, 22, "SYNC", syncText, sel == 0, false);
       drawWifiField(cv, 41, "HOME", uploadCfg.ssid, sel == 1, false);
       drawWifiField(cv, 60, "HPW", uploadCfg.password, sel == 2, true);
       drawWifiField(cv, 79, "PHONE", uploadCfg.ssid2, sel == 3, false);
       drawWifiField(cv, 98, "PPW", uploadCfg.password2, sel == 4, true);
       FONT_ASCII(cv);
-      cv.setTextColor(COL_DIM, COL_BG);
+      cv.setTextColor(COL_GRAY, COL_BG);
       cv.setCursor(6, 122);
       cv.print("Enter save/test  Esc back");
       cv.pushSprite(0, 0);
     } else {
       d.fillScreen(COL_BG);
-      drawStatusBase(d);
-      drawStatusTitle(d, "Wi-Fi");
+      d.fillRect(0, 0, CONTENT_W, 21, COL_BG);
+      drawStatusBatteryColor(d, COL_WHITE);
+      drawDseg14Text(d, 4, 1, "Wi-Fi", COL_WHITE);
+      d.drawFastHLine(0, 20, CONTENT_W, COL_WHITE);
       drawWifiField(d, 22, "SYNC", syncText, sel == 0, false);
       drawWifiField(d, 41, "HOME", uploadCfg.ssid, sel == 1, false);
       drawWifiField(d, 60, "HPW", uploadCfg.password, sel == 2, true);
       drawWifiField(d, 79, "PHONE", uploadCfg.ssid2, sel == 3, false);
       drawWifiField(d, 98, "PPW", uploadCfg.password2, sel == 4, true);
       FONT_ASCII(d);
-      d.setTextColor(COL_DIM, COL_BG);
+      d.setTextColor(COL_GRAY, COL_BG);
       d.setCursor(6, 122);
       d.print("Enter save/test  Esc back");
     }
@@ -4225,19 +4757,19 @@ static uint8_t wifiSettingsScreen() {
           saved = saveUploadConfigMounted();
           SD.end();
         }
-        drawWifiToast(saved ? "SAVED" : "NO SD", saved ? COL_GREEN : COL_RED);
+        drawWifiToast(saved ? "SAVED" : "NO SD", saved ? COL_WHITE : COL_RED);
         waitRelease();
 #if UPLOAD_WIFI_ENABLED
         if (saved && !uploadCfg.syncEnabled) {
           wifiPowerDown();
-          drawWifiToast("SYNC OFF", COL_DIM);
+          drawWifiToast("SYNC OFF", COL_GRAY);
           delay(700);
         } else if (saved && (uploadCfg.ssid[0] || uploadCfg.ssid2[0])) {
           wifiPowerDown();
           delay(120);
-          drawWifiToast("WIFI...", COL_GREEN);
+          drawWifiToast("WIFI...", COL_WHITE);
           bool ok = ensureWifiConnected();
-          drawWifiToast(ok ? "WIFI OK" : "WIFI ERR", ok ? COL_GREEN : COL_RED);
+          drawWifiToast(ok ? "WIFI OK" : "WIFI ERR", ok ? COL_WHITE : COL_RED);
           delay(900);
         }
 #endif
@@ -4263,10 +4795,14 @@ static uint8_t wifiSettingsScreen() {
 }
 
 static uint8_t launcherScreen() {
+  static const uint16_t LAUNCHER_COL = COL_WHITE;
+  static const uint16_t LAUNCHER_DIM = COL_GRAY;
+  static const uint16_t LAUNCHER_BG_ON = COL_DARK_GRAY;
   struct LauncherEntry { const char *key; const char *name; uint8_t app; };
   static const LauncherEntry apps[] = {
     {"SPC", "录音", APP_REC_RECORD},
     {"ENT", "列表", APP_REC_LIST},
+    {"C",   "CHAT", APP_CHAT},
     {"F",   "番茄钟", APP_POMODORO},
     {"W",   "Wi-Fi", APP_WIFI},
   };
@@ -4281,24 +4817,31 @@ static uint8_t launcherScreen() {
     if (redraw) {
       auto &d = M5Cardputer.Display;
       d.fillScreen(COL_BG);
-      drawHeader("工具箱");
+      d.fillRect(0, 0, d.width(), 22, COL_BG);
+      d.fillRect(2, 5, 3, 13, LAUNCHER_COL);
+      FONT_CN_16(d);
+      d.setTextColor(LAUNCHER_COL, COL_BG);
+      d.setCursor(8, 3);
+      d.print("工具箱");
+      drawStatusBatteryColor(d, LAUNCHER_COL);
+      d.drawFastHLine(0, 21, d.width(), LAUNCHER_COL);
       FONT_ASCII(d);
       for (int i = 0; i < appCount; i++) {
-        int y = 30 + i * 24;
+        int y = 27 + i * 20;
         bool on = (i == sel);
-        if (on) d.fillRect(0, y - 3, CONTENT_W, 20, 0x0320);
-        d.setTextColor(on ? COL_GREEN : COL_DIM, on ? 0x0320 : COL_BG);
+        if (on) d.fillRect(0, y - 2, CONTENT_W, 18, LAUNCHER_BG_ON);
+        d.setTextColor(on ? LAUNCHER_COL : LAUNCHER_DIM, on ? LAUNCHER_BG_ON : COL_BG);
         d.setCursor(6, y);
         d.print(on ? ">" : " ");
         d.setCursor(24, y);
         d.print(apps[i].key);
         FONT_CN_16(d);
-        d.setTextColor(on ? COL_GREEN : COL_DIM, on ? 0x0320 : COL_BG);
-        d.setCursor(76, y - 1);
+        d.setTextColor(on ? LAUNCHER_COL : LAUNCHER_DIM, on ? LAUNCHER_BG_ON : COL_BG);
+        d.setCursor(76, y - 2);
         d.print(apps[i].name);
         FONT_ASCII(d);
       }
-      drawFooter(";/.选择  回车进入  Esc息屏");
+      drawFooter(";/.选择  回车进入  Esc息屏", LAUNCHER_DIM);
       redraw = false;
     }
 
@@ -4311,6 +4854,10 @@ static uint8_t launcherScreen() {
         waitRelease();
         return APP_POMODORO;
       }
+      if (keyChat()) {
+        waitRelease();
+        return APP_CHAT;
+      }
       if (M5Cardputer.Keyboard.isKeyPressed('w') || M5Cardputer.Keyboard.isKeyPressed('W')) {
         waitRelease();
         return APP_WIFI;
@@ -4320,6 +4867,1572 @@ static uint8_t launcherScreen() {
         redraw = true;
       } else if (keyDown()) {
         sel = (sel + 1) % appCount;
+        redraw = true;
+      }
+    }
+    systemIdleTick();
+    if (autoSleepDue(lastInputMs)) return APP_SLEEP;
+    delay(8);
+  }
+}
+
+static size_t utf8LineBytes(const char *text, size_t start, size_t maxChars, char *line, size_t lineSize) {
+  if (!text || !line || lineSize == 0) return start;
+  size_t len = strlen(text);
+  size_t pos = start;
+  size_t out = 0;
+  size_t chars = 0;
+  while (pos < len && chars < maxChars && out + 4 < lineSize) {
+    uint8_t c = (uint8_t)text[pos];
+    size_t bytes = 1;
+    if ((c & 0x80) == 0) bytes = 1;
+    else if ((c & 0xE0) == 0xC0) bytes = 2;
+    else if ((c & 0xF0) == 0xE0) bytes = 3;
+    else if ((c & 0xF8) == 0xF0) bytes = 4;
+    if (pos + bytes > len || out + bytes >= lineSize) break;
+    memcpy(line + out, text + pos, bytes);
+    out += bytes;
+    pos += bytes;
+    chars++;
+  }
+  line[out] = 0;
+  return pos;
+}
+
+static void drawChatHeader(const char *title = "CHAT");
+
+static void drawChatHome(const char *status, const char *reply = nullptr) {
+  auto &d = M5Cardputer.Display;
+  uint16_t accent = chatAccentColor();
+  uint16_t dim = chatDimColor();
+  d.fillScreen(COL_BG);
+  drawChatHeader("CHAT");
+  FONT_ASCII(d);
+  d.setTextColor(accent, COL_BG);
+  d.setCursor(8, 31);
+  d.print("VOICE CHAT");
+  FONT_CN_12(d);
+  d.setTextColor(dim, COL_BG);
+  d.setCursor(8, 53);
+  d.print(status && status[0] ? status : "回车开始说话");
+  if (reply && reply[0]) {
+    d.setTextColor(accent, COL_BG);
+    char line[64];
+    size_t off = 0;
+    for (int row = 0; row < 3; row++) {
+      if (!reply[off]) break;
+      off = utf8LineBytes(reply, off, 14, line, sizeof(line));
+      d.setCursor(8, 74 + row * 16);
+      d.print(line);
+    }
+  } else {
+    d.setTextColor(dim, COL_BG);
+    d.setCursor(8, 74);
+    d.print("ASR-only 快速返回");
+    d.setCursor(8, 94);
+    d.print("不等待 DeepSeek");
+  }
+  drawFooter("回车说话  Space录音  Esc返回", dim);
+}
+
+static bool chatRecordOnceMounted(const char *path, uint32_t maxMs = 30000) {
+  auto &d = M5Cardputer.Display;
+  if (!SD.exists(CHAT_DIR)) SD.mkdir(CHAT_DIR);
+  SD.remove(path);
+  File f = SD.open(path, FILE_WRITE);
+  if (!f) return false;
+  writeWavHeader(f, REC_RATE, 0);
+
+  bool mustRearm = forceMicRearm;
+  bool micWasReady = micInputReady && !mustRearm;
+  if (!prepareMicInput(mustRearm)) {
+    f.close();
+    SD.remove(path);
+    return false;
+  }
+  if (!micWasReady && !mustRearm) delay(20);
+  if (mustRearm) {
+    for (int i = 0; i < REC_REARM_SETTLE_BUFFERS; i++) {
+      M5Cardputer.Mic.record(recBuf[0], REC_N, REC_RATE);
+      while (M5Cardputer.Mic.isRecording() > 0) delay(1);
+    }
+    forceMicRearm = false;
+  }
+
+  int b = 0;
+  size_t recWriteSamples = 0;
+  uint32_t dataBytes = 0;
+  uint32_t startMs = millis();
+  uint32_t lastDraw = 0;
+  uint32_t skipBuffers = micWasReady ? 4 : 8;
+  bool stop = false;
+  bool cancel = false;
+  bool ignoreStartKey = M5Cardputer.Keyboard.isPressed();
+  int32_t recDc = 0, recHum = 0, recLpf = 0, recNoiseRms = 90, recSoftGateQ8 = 256;
+
+  auto flushRecWrite = [&]() {
+    if (recWriteSamples == 0) return;
+    size_t bytes = recWriteSamples * sizeof(int16_t);
+    f.write((uint8_t *)recWriteBuf, bytes);
+    dataBytes += bytes;
+    recWriteSamples = 0;
+  };
+
+  M5Cardputer.Mic.record(recBuf[0], REC_N, REC_RATE);
+  M5Cardputer.Mic.record(recBuf[1], REC_N, REC_RATE);
+  d.fillScreen(COL_BG);
+  drawChatHeader("CHAT REC");
+  drawFooter("回车发送  Esc取消", chatDimColor());
+
+  while (!stop) {
+    while (true) {
+      M5Cardputer.update();
+      if (ignoreStartKey) {
+        if (!M5Cardputer.Keyboard.isPressed()) ignoreStartKey = false;
+      } else if (M5Cardputer.Keyboard.isChange() && M5Cardputer.Keyboard.isPressed()) {
+        if (keyEnter()) { stop = true; waitRelease(); break; }
+        if (keyEsc()) { stop = true; cancel = true; waitRelease(); break; }
+      }
+      if (millis() - startMs >= maxMs) { stop = true; break; }
+      if (M5Cardputer.Mic.isRecording() < 2) break;
+      delay(1);
+    }
+    if (stop) break;
+    int16_t *filled = recBuf[b];
+    processMicBuffer(filled, REC_N, recDc, recHum, recLpf, recNoiseRms, recSoftGateQ8);
+    if (skipBuffers > 0) skipBuffers--;
+    else {
+      memcpy(recWriteBuf + recWriteSamples, filled, REC_N * sizeof(int16_t));
+      recWriteSamples += REC_N;
+    }
+    M5Cardputer.Mic.record(filled, REC_N, REC_RATE);
+    b ^= 1;
+    if (recWriteSamples >= REC_WRITE_BATCH * REC_N) flushRecWrite();
+    uint32_t now = millis();
+    if (now - lastDraw >= 250) {
+      lastDraw = now;
+      uint32_t s = (now - startMs) / 1000;
+      d.fillRect(8, 48, 180, 48, COL_BG);
+      FONT_ASCII(d);
+      d.setTextColor(chatAccentColor(), COL_BG);
+      d.setCursor(8, 52);
+      d.printf("REC %02lu/%02lu sec", (unsigned long)s, (unsigned long)(maxMs / 1000));
+      FONT_CN_12(d);
+      d.setTextColor(chatDimColor(), COL_BG);
+      d.setCursor(8, 76);
+      d.print("说完按回车发送");
+    }
+  }
+
+  flushRecWrite();
+  uint32_t finalData = dataBytes;
+  bool ok = !cancel && finalData >= REC_RATE / 2;
+  if (ok) writeWavHeader(f, REC_RATE, finalData);
+  f.close();
+  while (M5Cardputer.Mic.isRecording() > 0) delay(1);
+  micInputReady = false;
+  forceMicRearm = true;
+  M5Cardputer.Mic.end();
+  const uint8_t ES = 0x18;
+  M5Cardputer.In_I2C.writeRegister8(ES, 0x0D, 0x01, 400000);
+  M5Cardputer.In_I2C.writeRegister8(ES, 0x00, 0x80, 400000);
+  if (!ok) SD.remove(path);
+  return ok;
+}
+
+static bool makeChatUploadPath(const char *uploadPath, char *chatPath, size_t n) {
+  if (!uploadPath || !chatPath || n == 0) return false;
+  const char *suffix = "/upload";
+  size_t len = strlen(uploadPath);
+  size_t suffixLen = strlen(suffix);
+  if (len >= suffixLen && strcmp(uploadPath + len - suffixLen, suffix) == 0) {
+    size_t baseLen = len - suffixLen;
+    if (baseLen + strlen("/chat/upload") >= n) return false;
+    memcpy(chatPath, uploadPath, baseLen);
+    chatPath[baseLen] = 0;
+    strlcat(chatPath, "/chat/upload", n);
+    return true;
+  }
+  return strlcpy(chatPath, "/chat/upload", n) < n;
+}
+
+static bool makeChatStreamPath(const char *uploadPath, char *streamPath, size_t n) {
+  if (!uploadPath || !streamPath || n == 0) return false;
+  (void)uploadPath;
+  return strlcpy(streamPath, "/chat/stream", n) < n;
+}
+
+static void chatPcmPumpPlayback();
+
+static bool readWsFrame(WiFiClient &client, uint8_t *payload, size_t payloadSize, size_t &payloadLen, uint8_t &opcode, uint32_t timeoutMs) {
+  payloadLen = 0;
+  opcode = 0;
+  uint32_t start = millis();
+  while (client.connected() && client.available() < 2 && millis() - start < timeoutMs) {
+    M5Cardputer.update();
+    chatPcmPumpPlayback();
+    delay(1);
+  }
+  if (client.available() < 2) return false;
+
+  uint8_t b0 = client.read();
+  uint8_t b1 = client.read();
+  opcode = b0 & 0x0f;
+  bool masked = (b1 & 0x80) != 0;
+  uint32_t len = b1 & 0x7f;
+  if (len == 126) {
+    while (client.available() < 2 && millis() - start < timeoutMs) {
+      M5Cardputer.update();
+      chatPcmPumpPlayback();
+      delay(1);
+    }
+    if (client.available() < 2) return false;
+    len = ((uint32_t)client.read() << 8) | (uint32_t)client.read();
+  } else if (len == 127) {
+    return false;
+  }
+
+  uint8_t mask[4] = {0, 0, 0, 0};
+  if (masked) {
+    while (client.available() < 4 && millis() - start < timeoutMs) {
+      M5Cardputer.update();
+      chatPcmPumpPlayback();
+      delay(1);
+    }
+    if (client.available() < 4) return false;
+    client.read(mask, 4);
+  }
+
+  payloadLen = len < payloadSize ? len : payloadSize;
+  if (!masked) {
+    uint32_t kept = 0;
+    uint8_t discard[64];
+    while (kept < len) {
+      uint8_t *dst = kept < payloadSize ? payload + kept : discard;
+      uint32_t remaining = len - kept;
+      size_t cap = kept < payloadSize ? payloadSize - kept : sizeof(discard);
+      size_t want = remaining < cap ? (size_t)remaining : cap;
+      while (client.available() <= 0 && client.connected() && millis() - start < timeoutMs) {
+        M5Cardputer.update();
+        chatPcmPumpPlayback();
+        delay(1);
+      }
+      if (!client.available()) return false;
+      size_t avail = (size_t)client.available();
+      int got = client.read(dst, want < avail ? want : avail);
+      if (got <= 0) return false;
+      kept += (uint32_t)got;
+      chatPcmPumpPlayback();
+    }
+    return true;
+  }
+  for (uint32_t i = 0; i < len; i++) {
+    while (!client.available() && client.connected() && millis() - start < timeoutMs) {
+      M5Cardputer.update();
+      chatPcmPumpPlayback();
+      delay(1);
+    }
+    if (!client.available()) return false;
+    uint8_t c = client.read();
+    if (masked) c ^= mask[i & 3];
+    if (i < payloadSize) payload[i] = c;
+    if ((i & 0x7f) == 0) chatPcmPumpPlayback();
+  }
+  return true;
+}
+
+static bool readWsTextFrame(WiFiClient &client, char *out, size_t n, uint32_t timeoutMs) {
+  if (!out || n == 0) return false;
+  out[0] = 0;
+  uint8_t frame[256];
+  size_t len = 0;
+  uint8_t opcode = 0;
+  if (!readWsFrame(client, frame, sizeof(frame) - 1, len, opcode, timeoutMs)) return false;
+  if (opcode != 0x01 || len == 0) return false;
+  frame[len] = 0;
+  strlcpy(out, (const char *)frame, n);
+  return true;
+}
+
+static bool writeWsFrame(WiFiClient &client, uint8_t opcode, const uint8_t *payload, size_t len) {
+  if (!client.connected()) return false;
+  static uint8_t txFrame[1400];
+  if (len + 8 > sizeof(txFrame)) return false;
+  size_t h = 0;
+  txFrame[h++] = 0x80 | (opcode & 0x0f);
+  if (len < 126) {
+    txFrame[h++] = 0x80 | (uint8_t)len;
+  } else if (len <= 0xffff) {
+    txFrame[h++] = 0x80 | 126;
+    txFrame[h++] = (uint8_t)(len >> 8);
+    txFrame[h++] = (uint8_t)len;
+  } else return false;
+  uint32_t seed = millis() ^ ((uint32_t)len << 11) ^ ((uint32_t)opcode << 24);
+  uint8_t *mask = txFrame + h;
+  mask[0] = (uint8_t)(seed >> 24);
+  mask[1] = (uint8_t)(seed >> 16);
+  mask[2] = (uint8_t)(seed >> 8);
+  mask[3] = (uint8_t)seed;
+  h += 4;
+  for (size_t i = 0; i < len; i++) {
+    txFrame[h + i] = payload ? (payload[i] ^ mask[i & 3]) : mask[i & 3];
+  }
+  size_t total = h + len;
+  return client.write(txFrame, total) == total;
+}
+
+static bool writeWsText(WiFiClient &client, const char *text) {
+  return writeWsFrame(client, 0x01, (const uint8_t *)text, text ? strlen(text) : 0);
+}
+
+static bool writeWsBinary(WiFiClient &client, const uint8_t *payload, size_t len) {
+  return writeWsFrame(client, 0x02, payload, len);
+}
+
+#if UPLOAD_WIFI_ENABLED
+static bool chatStreamConnectMounted(WiFiClient &client, char *detail, size_t detailLen) {
+  if (detail && detailLen) detail[0] = 0;
+  auto setDetail = [&](const char *s) {
+    if (detail && detailLen) strlcpy(detail, s ? s : "", detailLen);
+  };
+
+  if (!loadUploadConfig()) { setDetail("NO CFG"); return false; }
+  if (!uploadCfg.syncEnabled) { wifiPowerDown(); setDetail("SYNC OFF"); return false; }
+  if (!ensureWifiConnected()) { setDetail("WIFI ERR"); return false; }
+
+  char host[65], uploadPath[96], streamPath[96], hostHeader[72];
+  uint16_t port = 80;
+  if (!parseHttpUrl(uploadCfg.url, host, sizeof(host), port, uploadPath, sizeof(uploadPath)) ||
+      !makeChatStreamPath(uploadPath, streamPath, sizeof(streamPath))) {
+    wifiPowerDown();
+    setDetail("BAD URL");
+    return false;
+  }
+  if (port == 80) snprintf(hostHeader, sizeof(hostHeader), "%s", host);
+  else snprintf(hostHeader, sizeof(hostHeader), "%s:%u", host, (unsigned)port);
+
+  client.setTimeout(12000);
+  if (!client.connect(host, port, 5000)) {
+    wifiPowerDown();
+    setDetail("CONNECT ERR");
+    return false;
+  }
+  client.setNoDelay(true);
+  client.printf("GET %s HTTP/1.1\r\n", streamPath);
+  client.printf("Host: %s\r\n", hostHeader);
+  client.print("Upgrade: websocket\r\n");
+  client.print("Connection: Upgrade\r\n");
+  client.print("Sec-WebSocket-Version: 13\r\n");
+  client.print("Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n");
+  client.printf("X-Upload-Token: %s\r\n", uploadCfg.token);
+  client.printf("X-Device-Id: %s\r\n", uploadCfg.device);
+  client.printf("X-Wifi-Rssi: %d\r\n", WiFi.RSSI());
+  client.print("\r\n");
+
+  uint32_t start = millis();
+  while (!client.available() && client.connected() && millis() - start < 12000) {
+    M5Cardputer.update();
+    delay(20);
+  }
+  if (!client.available()) {
+    client.stop();
+    wifiPowerDown();
+    setDetail("NO RESPONSE");
+    return false;
+  }
+
+  String status = client.readStringUntil('\n');
+  int sp = status.indexOf(' ');
+  int code = sp >= 0 ? status.substring(sp + 1).toInt() : 0;
+  while (client.connected() || client.available()) {
+    String line = client.readStringUntil('\n');
+    if (line == "\r" || line.length() == 0) break;
+  }
+  if (code != 101) {
+    client.stop();
+    wifiPowerDown();
+    if (detail && detailLen) snprintf(detail, detailLen, "HTTP %d", code);
+    return false;
+  }
+
+  char hello[192];
+  if (!readWsTextFrame(client, hello, sizeof(hello), 8000)) {
+    client.stop();
+    wifiPowerDown();
+    setDetail("NO HELLO");
+    return false;
+  }
+  if (strstr(hello, "connected") == nullptr) {
+    client.stop();
+    wifiPowerDown();
+    setDetail("BAD HELLO");
+    return false;
+  }
+  setDetail("CONNECTED");
+  return true;
+}
+#else
+static bool chatStreamConnectMounted(WiFiClient &client, char *detail, size_t detailLen) {
+  (void)client;
+  if (detail && detailLen) strlcpy(detail, "NO WIFI", detailLen);
+  return false;
+}
+#endif
+
+static bool extractJsonStringValue(const String &json, const char *key, char *out, size_t n) {
+  if (!out || n == 0) return false;
+  out[0] = 0;
+  String needle = String("\"") + key + "\"";
+  int p = json.indexOf(needle);
+  if (p < 0) return false;
+  p = json.indexOf(':', p);
+  if (p < 0) return false;
+  p = json.indexOf('"', p);
+  if (p < 0) return false;
+  int e = p + 1;
+  size_t w = 0;
+  bool esc = false;
+  while (e < json.length() && w + 1 < n) {
+    char c = json[e++];
+    if (esc) {
+      if (c == 'n') out[w++] = '\n';
+      else if (c == 'r') out[w++] = '\n';
+      else if (c == 't') out[w++] = ' ';
+      else out[w++] = c;
+      esc = false;
+      continue;
+    }
+    if (c == '\\') { esc = true; continue; }
+    if (c == '"') break;
+    out[w++] = c;
+  }
+  out[w] = 0;
+  return w > 0;
+}
+
+static bool downloadHttpToFileMounted(const char *url, const char *path) {
+  if (!url || !url[0] || !path || !path[0]) return false;
+  if (!loadUploadConfig()) return false;
+  if (!ensureWifiConnected()) return false;
+
+  char host[65], reqPath[256], hostHeader[72];
+  uint16_t port = 80;
+  if (!parseHttpUrl(url, host, sizeof(host), port, reqPath, sizeof(reqPath))) {
+    wifiPowerDown();
+    return false;
+  }
+  if (port == 80) snprintf(hostHeader, sizeof(hostHeader), "%s", host);
+  else snprintf(hostHeader, sizeof(hostHeader), "%s:%u", host, (unsigned)port);
+
+  File out = SD.open(path, FILE_WRITE);
+  if (!out) {
+    wifiPowerDown();
+    return false;
+  }
+  WiFiClient client;
+  client.setTimeout(15000);
+  if (!client.connect(host, port, 4000)) {
+    out.close();
+    SD.remove(path);
+    wifiPowerDown();
+    return false;
+  }
+  client.setNoDelay(true);
+  client.printf("GET %s HTTP/1.1\r\n", reqPath);
+  client.printf("Host: %s\r\n", hostHeader);
+  client.print("Connection: close\r\n\r\n");
+
+  uint32_t start = millis();
+  while (!client.available() && client.connected() && millis() - start < 20000) {
+    M5Cardputer.update();
+    if (keyEsc()) {
+      client.stop();
+      out.close();
+      SD.remove(path);
+      wifiPowerDown();
+      return false;
+    }
+    delay(20);
+  }
+
+  int code = 0;
+  int contentLength = -1;
+  if (client.available()) {
+    String status = client.readStringUntil('\n');
+    int sp = status.indexOf(' ');
+    if (sp >= 0) code = status.substring(sp + 1).toInt();
+    while (client.connected() || client.available()) {
+      String line = client.readStringUntil('\n');
+      if (line == "\r" || line.length() == 0) break;
+      String lower = line;
+      lower.toLowerCase();
+      if (lower.startsWith("content-length:")) {
+        contentLength = lower.substring(15).toInt();
+      }
+    }
+  }
+  if (code < 200 || code >= 300) {
+    client.stop();
+    out.close();
+    SD.remove(path);
+    wifiPowerDown();
+    return false;
+  }
+
+  static uint8_t buf[UPLOAD_CHUNK_BYTES];
+  int received = 0;
+  while (client.connected() || client.available()) {
+    int avail = client.available();
+    if (avail > 0) {
+      int want = avail > (int)sizeof(buf) ? (int)sizeof(buf) : avail;
+      int got = client.read(buf, want);
+      if (got > 0) {
+        out.write(buf, got);
+        received += got;
+      }
+    } else {
+      delay(5);
+    }
+    M5Cardputer.update();
+    if (keyEsc()) {
+      client.stop();
+      out.close();
+      SD.remove(path);
+      wifiPowerDown();
+      return false;
+    }
+  }
+  client.stop();
+  out.flush();
+  out.close();
+  wifiPowerDown();
+  if (received <= 44 || (contentLength > 0 && received < contentLength)) {
+    SD.remove(path);
+    return false;
+  }
+  return true;
+}
+
+static bool playWavQuickMounted(const char *path) {
+  File f = SD.open(path, FILE_READ);
+  if (!f) return false;
+  uint32_t dataBytes = playableWavDataBytes(f);
+  if (!dataBytes || !f.seek(44)) {
+    f.close();
+    return false;
+  }
+  uint32_t rate = wavSampleRate(f);
+  f.seek(44);
+  speakerOn();
+  static int16_t pcm[PB_N];
+  uint32_t remaining = dataBytes;
+  while (remaining > 0) {
+    size_t want = remaining > sizeof(pcm) ? sizeof(pcm) : remaining;
+    want &= ~1U;
+    if (!want) break;
+    size_t got = f.read((uint8_t *)pcm, want);
+    if (got == 0) break;
+    size_t samples = got / 2;
+    while (M5Cardputer.Speaker.isPlaying(0) >= 2) {
+      M5Cardputer.update();
+      if (keyEsc()) {
+        M5Cardputer.Speaker.stop();
+        f.close();
+        return false;
+      }
+      delay(2);
+    }
+    M5Cardputer.Speaker.playRaw(pcm, samples, rate, false, 1, 0, false);
+    remaining -= got;
+  }
+  while (M5Cardputer.Speaker.isPlaying(0)) {
+    M5Cardputer.update();
+    if (keyEsc()) break;
+    delay(5);
+  }
+  M5Cardputer.Speaker.stop();
+  f.close();
+  return true;
+}
+
+#if UPLOAD_WIFI_ENABLED
+static uint8_t uploadChatWavMounted(const char *path, char *reply, size_t replyLen, char *audioUrl, size_t audioUrlLen) {
+  if (reply && replyLen) reply[0] = 0;
+  if (audioUrl && audioUrlLen) audioUrl[0] = 0;
+  if (!loadUploadConfig()) return UPSTAT_NO_CFG;
+  if (!uploadCfg.syncEnabled) { wifiPowerDown(); return UPSTAT_SYNC_OFF; }
+  if (!ensureWifiConnected()) return UPSTAT_WIFI_ERR;
+
+  File f = SD.open(path, FILE_READ);
+  if (!f || f.size() <= 44) {
+    if (f) f.close();
+    wifiPowerDown();
+    return UPSTAT_NO_FILE;
+  }
+  uint32_t bodyBytes = f.size();
+  char host[65], uploadPath[96], chatPath[96], hostHeader[72];
+  uint16_t port = 80;
+  if (!parseHttpUrl(uploadCfg.url, host, sizeof(host), port, uploadPath, sizeof(uploadPath)) ||
+      !makeChatUploadPath(uploadPath, chatPath, sizeof(chatPath))) {
+    f.close();
+    wifiPowerDown();
+    return UPSTAT_BAD_URL;
+  }
+  if (port == 80) snprintf(hostHeader, sizeof(hostHeader), "%s", host);
+  else snprintf(hostHeader, sizeof(hostHeader), "%s:%u", host, (unsigned)port);
+
+  char recordedAt[24] = {0};
+  boxFormatNow(recordedAt, sizeof(recordedAt));
+  WiFiClient client;
+  client.setTimeout(15000);
+  if (!client.connect(host, port, 4000)) {
+    f.close();
+    wifiPowerDown();
+    return UPSTAT_HTTP_ERR;
+  }
+  client.setNoDelay(true);
+  client.printf("POST %s HTTP/1.1\r\n", chatPath);
+  client.printf("Host: %s\r\n", hostHeader);
+  client.print("Connection: close\r\n");
+  client.print("Content-Type: audio/wav\r\n");
+  client.printf("Content-Length: %u\r\n", (unsigned)bodyBytes);
+  client.printf("X-Upload-Token: %s\r\n", uploadCfg.token);
+  client.printf("X-Device-Id: %s\r\n", uploadCfg.device);
+  client.printf("X-Wifi-Rssi: %d\r\n", WiFi.RSSI());
+  String localIp = WiFi.localIP().toString();
+  client.printf("X-Wifi-IP: %s\r\n", localIp.c_str());
+  if (recordedAt[0]) client.printf("X-Recorded-At: %s\r\n", recordedAt);
+  client.print("X-Recording-Name: CHAT_LAST.wav\r\n\r\n");
+
+  static uint8_t buf[UPLOAD_CHUNK_BYTES];
+  while (f.available()) {
+    size_t got = f.read(buf, sizeof(buf));
+    if (got == 0) break;
+    if (client.write(buf, got) != got) {
+      client.stop();
+      f.close();
+      wifiPowerDown();
+      return UPSTAT_HTTP_ERR;
+    }
+    M5Cardputer.update();
+    if (keyEsc()) {
+      client.stop();
+      f.close();
+      wifiPowerDown();
+      return UPSTAT_ABORTED;
+    }
+    delay(0);
+  }
+
+  uint32_t start = millis();
+  while (!client.available() && client.connected() && millis() - start < 90000) {
+    M5Cardputer.update();
+    if (keyEsc()) {
+      client.stop();
+      f.close();
+      wifiPowerDown();
+      return UPSTAT_ABORTED;
+    }
+    delay(30);
+  }
+  int code = 0;
+  String body;
+  if (client.available()) {
+    String status = client.readStringUntil('\n');
+    int sp = status.indexOf(' ');
+    if (sp >= 0) code = status.substring(sp + 1).toInt();
+    while (client.connected() || client.available()) {
+      String line = client.readStringUntil('\n');
+      if (line == "\r" || line.length() == 0) break;
+    }
+    body = client.readString();
+  }
+  client.stop();
+  f.close();
+  wifiPowerDown();
+  if (code >= 200 && code < 300) {
+    if (reply && replyLen) {
+      if (!extractJsonStringValue(body, "replyText", reply, replyLen)) {
+        extractJsonStringValue(body, "userText", reply, replyLen);
+      }
+      if (audioUrl && audioUrlLen) {
+        extractJsonStringValue(body, "audioUrl", audioUrl, audioUrlLen);
+      }
+    }
+    return UPSTAT_DONE;
+  }
+  return UPSTAT_HTTP_ERR;
+}
+#else
+static uint8_t uploadChatWavMounted(const char *path, char *reply, size_t replyLen, char *audioUrl, size_t audioUrlLen) {
+  (void)path;
+  if (reply && replyLen) reply[0] = 0;
+  if (audioUrl && audioUrlLen) audioUrl[0] = 0;
+  return UPSTAT_NO_CFG;
+}
+#endif
+
+static const size_t CHAT_PCM_RING_SAMPLES = 24576;
+static const size_t CHAT_PCM_START_SAMPLES = 8192;
+static const size_t CHAT_PCM_START_MIN_SAMPLES = 6144;
+static const size_t CHAT_PCM_START_MAX_SAMPLES = 16384;
+static const size_t CHAT_PLAY_SAMPLES = 512;
+static int16_t *chatPcmRing = nullptr;
+static size_t chatPcmHead = 0;
+static size_t chatPcmTail = 0;
+static size_t chatPcmCount = 0;
+static portMUX_TYPE chatPcmMux = portMUX_INITIALIZER_UNLOCKED;
+static int16_t chatPlayBuf[6][CHAT_PLAY_SAMPLES];
+static uint8_t chatPlayBufIndex = 0;
+static bool chatPcmStarted = false;
+static bool chatAudioStreaming = false;
+static bool chatDeferPlayback = false;
+static bool chatTtsPlaying = false;
+static bool chatReadyAfterPlayback = false;
+static volatile bool chatPlaybackTaskRun = false;
+static TaskHandle_t chatPlaybackTaskHandle = nullptr;
+static uint32_t chatBinaryFrames = 0;
+static uint32_t chatBinaryBytes = 0;
+static uint32_t chatDropSamples = 0;
+static uint32_t chatUnderruns = 0;
+static size_t chatPcmStartTarget = CHAT_PCM_START_SAMPLES;
+static bool chatTtsHadUnderrun = false;
+static bool chatShowDebugStats = false;
+static bool chatTextPageVisible = false;
+static bool chatUplinkActive = false;
+static bool chatUplinkQueued = false;
+static uint32_t chatUplinkChunks = 0;
+static uint32_t chatUplinkStartedAt = 0;
+static uint16_t chatUplinkLevel = 0;
+static int32_t chatUplinkDc = 0;
+static int32_t chatUplinkHum = 0;
+static int32_t chatUplinkLpf = 0;
+static int32_t chatUplinkNoiseRms = 90;
+static int32_t chatUplinkSoftGateQ8 = 256;
+static const uint32_t CHAT_TAP_CANCEL_MS = 320;
+static const uint32_t CHAT_MAX_UPLINK_MS = 20000;
+static const uint16_t CHAT_COL = 0x04FF;
+static const uint16_t CHAT_DIM = 0x0252;
+static const uint16_t CHAT_ACCENT_COLORS[] = {CHAT_COL, 0x04BF, 0x039F, 0x681F, 0x07FF};
+static uint8_t chatAccentIndex = 0;
+
+static uint16_t chatAccentColor() {
+  return CHAT_ACCENT_COLORS[chatAccentIndex % (sizeof(CHAT_ACCENT_COLORS) / sizeof(CHAT_ACCENT_COLORS[0]))];
+}
+
+static uint16_t chatDimColor() {
+  uint16_t col = chatAccentColor();
+  uint16_t r = (col >> 11) & 0x1f;
+  uint16_t g = (col >> 5) & 0x3f;
+  uint16_t b = col & 0x1f;
+  r = max<uint16_t>(1, (r * 2) / 5);
+  g = max<uint16_t>(2, (g * 2) / 5);
+  b = max<uint16_t>(1, (b * 2) / 5);
+  return (r << 11) | (g << 5) | b;
+}
+
+static void drawChatBattery() {
+  auto &d = M5Cardputer.Display;
+  int bat = filteredBatteryLevel();
+  uint16_t col = (bat <= 20) ? COL_RED : chatAccentColor();
+  d.fillRect(CONTENT_W - 62, 0, 62, 18, COL_BG);
+  char text[8];
+  snprintf(text, sizeof(text), "%d%%", bat);
+  drawDseg14Text(d, CONTENT_W - dseg14TextWidth(text) - 4, 1, text, col);
+}
+
+static void drawChatHeader(const char *title) {
+  auto &d = M5Cardputer.Display;
+  uint16_t col = chatAccentColor();
+  d.fillRect(0, 0, d.width(), 22, COL_BG);
+  d.fillRect(2, 5, 3, 13, col);
+  FONT_ASCII(d);
+  d.setTextColor(col, COL_BG);
+  d.setCursor(8, 4);
+  d.print(title && title[0] ? title : "CHAT");
+  drawChatBattery();
+  d.drawFastHLine(0, 21, d.width(), col);
+}
+
+static bool chatPcmAlloc() {
+  if (chatPcmRing) return true;
+  chatPcmRing = (int16_t *)malloc(CHAT_PCM_RING_SAMPLES * sizeof(int16_t));
+  return chatPcmRing != nullptr;
+}
+
+static void chatPcmFree() {
+  free(chatPcmRing);
+  chatPcmRing = nullptr;
+}
+
+static void chatPcmReset(bool keepTextPage = false) {
+  portENTER_CRITICAL(&chatPcmMux);
+  chatPcmHead = 0;
+  chatPcmTail = 0;
+  chatPcmCount = 0;
+  portEXIT_CRITICAL(&chatPcmMux);
+  chatPlayBufIndex = 0;
+  chatPcmStarted = false;
+  chatAudioStreaming = false;
+  chatDeferPlayback = false;
+  chatTtsPlaying = false;
+  chatReadyAfterPlayback = false;
+  chatBinaryFrames = 0;
+  chatBinaryBytes = 0;
+  chatDropSamples = 0;
+  chatUnderruns = 0;
+  chatTtsHadUnderrun = false;
+  if (!keepTextPage) chatTextPageVisible = false;
+  chatUplinkActive = false;
+  chatUplinkQueued = false;
+  chatUplinkChunks = 0;
+  chatUplinkStartedAt = 0;
+  chatUplinkLevel = 0;
+  chatUplinkDc = 0;
+  chatUplinkHum = 0;
+  chatUplinkLpf = 0;
+  chatUplinkNoiseRms = 90;
+  chatUplinkSoftGateQ8 = 256;
+}
+
+static bool chatPcmPushSample(int16_t sample) {
+  if (!chatPcmRing) return false;
+  bool ok = false;
+  portENTER_CRITICAL(&chatPcmMux);
+  if (chatPcmCount >= CHAT_PCM_RING_SAMPLES) {
+    portEXIT_CRITICAL(&chatPcmMux);
+    chatDropSamples++;
+    return false;
+  }
+  chatPcmRing[chatPcmHead] = sample;
+  chatPcmHead = (chatPcmHead + 1) % CHAT_PCM_RING_SAMPLES;
+  chatPcmCount++;
+  ok = true;
+  portEXIT_CRITICAL(&chatPcmMux);
+  return ok;
+}
+
+static void chatPcmPushBytes(const uint8_t *data, size_t len) {
+  if (!data || !chatPcmRing) return;
+  len &= ~1U;
+  size_t samples = len / 2;
+  size_t pushed = 0;
+  portENTER_CRITICAL(&chatPcmMux);
+  while (pushed < samples && chatPcmCount < CHAT_PCM_RING_SAMPLES) {
+    size_t i = pushed * 2;
+    chatPcmRing[chatPcmHead] = (int16_t)((uint16_t)data[i] | ((uint16_t)data[i + 1] << 8));
+    chatPcmHead = (chatPcmHead + 1) % CHAT_PCM_RING_SAMPLES;
+    chatPcmCount++;
+    pushed++;
+  }
+  portEXIT_CRITICAL(&chatPcmMux);
+  if (pushed < samples) chatDropSamples += samples - pushed;
+}
+
+static bool chatPcmPopBlock(int16_t *out, size_t samples) {
+  if (!chatPcmRing || !out || chatPcmCount < samples) return false;
+  portENTER_CRITICAL(&chatPcmMux);
+  if (chatPcmCount < samples) {
+    portEXIT_CRITICAL(&chatPcmMux);
+    return false;
+  }
+  for (size_t i = 0; i < samples; i++) {
+    out[i] = chatPcmRing[chatPcmTail];
+    chatPcmTail = (chatPcmTail + 1) % CHAT_PCM_RING_SAMPLES;
+    chatPcmCount--;
+  }
+  portEXIT_CRITICAL(&chatPcmMux);
+  return true;
+}
+
+static size_t chatPcmAvailable() {
+  portENTER_CRITICAL(&chatPcmMux);
+  size_t n = chatPcmCount;
+  portEXIT_CRITICAL(&chatPcmMux);
+  return n;
+}
+
+static void chatPlayReferenceTone() {
+  static int16_t refBuf[3][CHAT_PLAY_SAMPLES];
+  const uint32_t sampleRate = REC_RATE;
+  const uint32_t totalSamples = sampleRate * 1200 / 1000;
+  uint8_t bi = 0;
+  speakerOn();
+  for (uint32_t offset = 0; offset < totalSamples; offset += CHAT_PLAY_SAMPLES) {
+    size_t n = totalSamples - offset;
+    if (n > CHAT_PLAY_SAMPLES) n = CHAT_PLAY_SAMPLES;
+    while (M5Cardputer.Speaker.isPlaying(0) >= 2) {
+      M5Cardputer.update();
+      delay(2);
+    }
+    int16_t *out = refBuf[bi];
+    for (size_t i = 0; i < n; i++) {
+      uint32_t pos = offset + i;
+      float fadeIn = pos < 800 ? (float)pos / 800.0f : 1.0f;
+      float fadeOut = (totalSamples - pos) < 800 ? (float)(totalSamples - pos) / 800.0f : 1.0f;
+      float env = fadeIn < fadeOut ? fadeIn : fadeOut;
+      float t = (float)pos / (float)sampleRate;
+      out[i] = (int16_t)roundf(sinf(2.0f * PI * 660.0f * t) * 5200.0f * env);
+    }
+    M5Cardputer.Speaker.playRaw(out, n, sampleRate, false, 1, 0, false);
+    bi = (bi + 1) % 3;
+  }
+  while (M5Cardputer.Speaker.isPlaying(0)) {
+    M5Cardputer.update();
+    delay(5);
+  }
+  M5Cardputer.Speaker.stop();
+}
+
+static void chatPcmPumpPlayback() {
+  if (chatDeferPlayback && chatAudioStreaming) return;
+  if (!chatPcmStarted) {
+    if (chatPcmAvailable() < chatPcmStartTarget) return;
+    chatPcmStarted = true;
+  }
+  size_t available = chatPcmAvailable();
+  if (chatAudioStreaming && available < CHAT_PLAY_SAMPLES && M5Cardputer.Speaker.isPlaying(0) == 0) {
+    chatUnderruns++;
+    chatTtsHadUnderrun = true;
+  }
+  while (available >= CHAT_PLAY_SAMPLES && M5Cardputer.Speaker.isPlaying(0) < 5) {
+    int16_t *out = chatPlayBuf[chatPlayBufIndex];
+    if (!chatPcmPopBlock(out, CHAT_PLAY_SAMPLES)) return;
+    M5Cardputer.Speaker.playRaw(out, CHAT_PLAY_SAMPLES, REC_RATE, false, 1, 0, false);
+    chatPlayBufIndex = (chatPlayBufIndex + 1) % 6;
+    available = chatPcmAvailable();
+  }
+}
+
+static void chatTunePlaybackStartBuffer() {
+  if (chatTtsHadUnderrun || chatDropSamples > 0) {
+    if (chatPcmStartTarget < CHAT_PCM_START_MAX_SAMPLES) {
+      chatPcmStartTarget += 2048;
+      if (chatPcmStartTarget > CHAT_PCM_START_MAX_SAMPLES) chatPcmStartTarget = CHAT_PCM_START_MAX_SAMPLES;
+    }
+  } else if (chatPcmStartTarget > CHAT_PCM_START_MIN_SAMPLES) {
+    chatPcmStartTarget -= 1024;
+    if (chatPcmStartTarget < CHAT_PCM_START_MIN_SAMPLES) chatPcmStartTarget = CHAT_PCM_START_MIN_SAMPLES;
+  }
+  chatTtsHadUnderrun = false;
+}
+
+static void chatPlaybackTask(void *arg) {
+  (void)arg;
+  while (chatPlaybackTaskRun) {
+    chatPcmPumpPlayback();
+    vTaskDelay(pdMS_TO_TICKS(1));
+  }
+  chatPlaybackTaskHandle = nullptr;
+  vTaskDelete(nullptr);
+}
+
+static void chatStartPlaybackTask() {
+  if (chatPlaybackTaskHandle) return;
+  chatPlaybackTaskRun = true;
+  xTaskCreatePinnedToCore(chatPlaybackTask, "chat_play", 4096, nullptr, 2, &chatPlaybackTaskHandle, 1);
+}
+
+static void chatStopPlaybackTask() {
+  if (!chatPlaybackTaskHandle) return;
+  chatPlaybackTaskRun = false;
+  for (int i = 0; i < 50 && chatPlaybackTaskHandle; i++) delay(1);
+  chatPlaybackTaskHandle = nullptr;
+}
+
+static void drawChatStreamStats() {
+  if (!chatShowDebugStats) return;
+  auto &d = M5Cardputer.Display;
+  FONT_ASCII(d);
+  d.fillRect(0, 84, CONTENT_W, 44, COL_BG);
+  d.setTextColor(chatDimColor(), COL_BG);
+  d.setCursor(8, 88);
+  d.printf("BIN %lu  BUF %u", (unsigned long)chatBinaryFrames, (unsigned)chatPcmAvailable());
+  d.setCursor(8, 106);
+  d.printf("UND %lu  DROP %lu", (unsigned long)chatUnderruns, (unsigned long)chatDropSamples);
+}
+
+static void drawChatStreamHome(const char *status, uint16_t col);
+
+static void drawChatHintLine(const char *text, int y, uint16_t col) {
+  if (!text || !text[0]) return;
+  auto &d = M5Cardputer.Display;
+  FONT_ASCII(d);
+  d.setTextColor(col, COL_BG);
+  int w = d.textWidth(text);
+  int x = (CONTENT_W - w) / 2;
+  if (x < 0) x = 0;
+  d.setCursor(x, y);
+  d.print(text);
+}
+
+static void drawChatListenMeter(uint32_t elapsedMs, uint16_t level) {
+  auto &d = M5Cardputer.Display;
+  d.fillRect(0, 78, 172, 34, COL_BG);
+  FONT_ASCII(d);
+  d.setTextColor(chatAccentColor(), COL_BG);
+  char secText[16];
+  snprintf(secText, sizeof(secText), "REC %lus", (unsigned long)(elapsedMs / 1000));
+  d.setCursor(8, 84);
+  d.print(secText);
+  const int barX = 8;
+  const int barY = 104;
+  const int barW = 150;
+  const int barH = 6;
+  int fillW = map((int)min<uint16_t>(level, 9000), 0, 9000, 2, barW - 2);
+  d.drawRect(barX, barY, barW, barH, chatDimColor());
+  d.fillRect(barX + 1, barY + 1, fillW, barH - 2, chatAccentColor());
+}
+
+static size_t chatUtf8CharLen(unsigned char c) {
+  if ((c & 0x80) == 0) return 1;
+  if ((c & 0xE0) == 0xC0) return 2;
+  if ((c & 0xF0) == 0xE0) return 3;
+  if ((c & 0xF8) == 0xF0) return 4;
+  return 1;
+}
+
+static void drawChatStreamWrappedText(const char *text) {
+  auto &d = M5Cardputer.Display;
+  FONT_CN_12(d);
+  d.setTextColor(chatAccentColor(), COL_BG);
+  const int x = 8;
+  const int maxW = CONTENT_W - 16;
+  const int lineH = 16;
+  int y = 42;
+  char line[96];
+  size_t lineLen = 0;
+  line[0] = 0;
+
+  const char *p = text && text[0] ? text : "(empty)";
+  while (*p && y <= 122) {
+    size_t n = chatUtf8CharLen((unsigned char)*p);
+    if (n > 4) n = 1;
+    char ch[5] = {0};
+    for (size_t i = 0; i < n && p[i]; i++) ch[i] = p[i];
+    if (ch[0] == '\r' || ch[0] == '\n') ch[0] = ' ', ch[1] = 0, n = 1;
+
+    char candidate[sizeof(line)];
+    strlcpy(candidate, line, sizeof(candidate));
+    if (lineLen + n + 1 < sizeof(candidate)) strlcat(candidate, ch, sizeof(candidate));
+
+    if (lineLen > 0 && d.textWidth(candidate) > maxW) {
+      d.setCursor(x, y);
+      d.print(line);
+      y += lineH;
+      line[0] = 0;
+      lineLen = 0;
+      continue;
+    }
+    if (lineLen + n + 1 < sizeof(line)) {
+      strlcat(line, ch, sizeof(line));
+      lineLen += n;
+    }
+    p += n;
+  }
+  if (lineLen > 0 && y <= 122) {
+    d.setCursor(x, y);
+    d.print(line);
+  }
+}
+
+static bool chatLooksAsciiArt(const char *text) {
+  if (!text) return false;
+  size_t ascii = 0, total = 0, lines = 0;
+  for (const char *p = text; *p; p++) {
+    unsigned char c = (unsigned char)*p;
+    if (c == '\n') lines++;
+    if (c >= 32 && c <= 126) ascii++;
+    if (c != '\r' && c != '\n') total++;
+  }
+  return lines >= 2 && total > 12 && ascii * 100 / total >= 90;
+}
+
+static void drawChatStreamAsciiText(const char *text) {
+  auto &d = M5Cardputer.Display;
+  FONT_ASCII(d);
+  d.setTextColor(chatAccentColor(), COL_BG);
+  int y = 40;
+  char line[40];
+  size_t n = 0;
+  line[0] = 0;
+  const char *p = text && text[0] ? text : "(empty)";
+  while (*p && y <= 122) {
+    char c = *p++;
+    if (c == '\r') continue;
+    if (c == '\n' || n >= sizeof(line) - 1) {
+      line[n] = 0;
+      d.setCursor(8, y);
+      d.print(line);
+      y += 12;
+      n = 0;
+      line[0] = 0;
+      if (c == '\n') continue;
+    }
+    if (c >= 32 && c <= 126 && n < sizeof(line) - 1) line[n++] = c;
+  }
+  if (n > 0 && y <= 122) {
+    line[n] = 0;
+    d.setCursor(8, y);
+    d.print(line);
+  }
+}
+
+static void drawChatStreamTextPage(const char *title, const char *text) {
+  auto &d = M5Cardputer.Display;
+  chatTextPageVisible = true;
+  d.fillScreen(COL_BG);
+  drawChatHeader();
+  FONT_ASCII(d);
+  d.setTextColor(chatDimColor(), COL_BG);
+  d.setCursor(8, 24);
+  d.print((title && title[0]) ? title : "TEXT");
+  if (chatLooksAsciiArt(text)) drawChatStreamAsciiText(text);
+  else drawChatStreamWrappedText(text);
+}
+
+static void drawChatCornerStatus(const char *status, uint16_t col = CHAT_DIM) {
+  auto &d = M5Cardputer.Display;
+  const char *text = (status && status[0]) ? status : "READY";
+  FONT_ASCII(d);
+  int w = d.textWidth(text);
+  int x = CONTENT_W - w - 4;
+  if (x < 0) x = 0;
+  d.fillRect(x - 3, 116, w + 7, 15, COL_BG);
+  d.setTextColor(col == CHAT_DIM ? chatAccentColor() : col, COL_BG);
+  d.setCursor(x, 118);
+  d.print(text);
+}
+
+static void drawChatStreamAsrText(const char *text) {
+  drawChatStreamTextPage("YOU", text);
+}
+
+static void chatDrainBufferedAudio() {
+  chatAudioStreaming = false;
+  chatDeferPlayback = false;
+  chatPcmStarted = true;
+  speakerOn();
+  while (chatPcmCount >= CHAT_PLAY_SAMPLES) {
+    chatPcmPumpPlayback();
+    M5Cardputer.update();
+    delay(1);
+  }
+  while (M5Cardputer.Speaker.isPlaying(0)) {
+    M5Cardputer.update();
+    delay(5);
+  }
+  M5Cardputer.Speaker.stop();
+}
+
+static bool chatStartUplink(WiFiClient &client) {
+  if (chatUplinkActive) return true;
+  chatStopPlaybackTask();
+  M5Cardputer.Speaker.stop();
+  drawChatStreamHome("LISTEN", COL_GREEN);
+  drawChatStreamStats();
+
+  if (!prepareMicInput(true)) {
+    drawChatStreamHome("MIC ERR", COL_RED);
+    delay(800);
+    return false;
+  }
+
+  if (!writeWsText(client, "{\"type\":\"uplink_start\",\"codec\":\"pcm_s16le\",\"sampleRate\":16000,\"channels\":1,\"chunkSamples\":256,\"phase\":3}")) {
+    drawChatStreamHome("UP ERR", COL_RED);
+    return false;
+  }
+
+  chatUplinkChunks = 0;
+  chatUplinkStartedAt = millis();
+  chatUplinkLevel = 0;
+  chatUplinkDc = 0;
+  chatUplinkHum = 0;
+  chatUplinkLpf = 0;
+  chatUplinkNoiseRms = 90;
+  chatUplinkSoftGateQ8 = 256;
+  chatUplinkActive = true;
+  chatUplinkQueued = false;
+  M5Cardputer.Mic.record(recBuf[0], REC_N, REC_RATE);
+  return true;
+}
+
+static bool chatPumpUplink(WiFiClient &client) {
+  if (!chatUplinkActive || !client.connected()) return false;
+  if (M5Cardputer.Mic.isRecording() > 0) return true;
+  processMicBuffer(recBuf[0], REC_N, chatUplinkDc, chatUplinkHum, chatUplinkLpf, chatUplinkNoiseRms, chatUplinkSoftGateQ8);
+  uint16_t peak = 0;
+  for (size_t i = 0; i < REC_N; i++) {
+    recBuf[0][i] = (int16_t)((int32_t)recBuf[0][i] * 3 / 4);
+    uint16_t a = abs(recBuf[0][i]);
+    if (a > peak) peak = a;
+  }
+  chatUplinkLevel = (chatUplinkLevel * 3 + peak) / 4;
+  if (!writeWsBinary(client, (const uint8_t *)recBuf[0], REC_N * sizeof(int16_t))) {
+    drawChatStreamHome("UP ERR", COL_RED);
+    M5Cardputer.Mic.end();
+    micInputReady = false;
+    chatUplinkActive = false;
+    return false;
+  }
+  chatUplinkChunks++;
+  if ((chatUplinkChunks & 0x07) == 0) {
+    drawChatListenMeter(millis() - chatUplinkStartedAt, chatUplinkLevel);
+  }
+  M5Cardputer.Mic.record(recBuf[0], REC_N, REC_RATE);
+  return true;
+}
+
+static void chatStopUplink(WiFiClient &client) {
+  if (!chatUplinkActive) return;
+  while (M5Cardputer.Mic.isRecording() > 0) {
+    M5Cardputer.update();
+    delay(1);
+  }
+  M5Cardputer.Mic.end();
+  micInputReady = false;
+  chatUplinkActive = false;
+  chatUplinkQueued = false;
+  writeWsText(client, "{\"type\":\"uplink_end\",\"phase\":3}");
+  chatStartPlaybackTask();
+  drawChatStreamHome("THINKING", COL_GREEN);
+}
+
+static void chatCancelUplink(WiFiClient &client) {
+  if (!chatUplinkActive) return;
+  M5Cardputer.Mic.end();
+  micInputReady = false;
+  chatUplinkActive = false;
+  chatUplinkQueued = false;
+  writeWsText(client, "{\"type\":\"uplink_cancel\",\"reason\":\"tap\"}");
+  chatStartPlaybackTask();
+  drawChatStreamHome("READY", COL_GREEN);
+}
+
+static void chatAbortUplinkLocal() {
+  if (!chatUplinkActive) return;
+  M5Cardputer.Mic.end();
+  micInputReady = false;
+  chatUplinkActive = false;
+  chatUplinkQueued = false;
+}
+
+static void drawChatStreamHome(const char *status, uint16_t col = COL_GREEN) {
+  auto &d = M5Cardputer.Display;
+  chatTextPageVisible = false;
+  d.fillScreen(COL_BG);
+  drawChatHeader();
+  FONT_ASCII(d);
+  d.setTextColor(col == COL_RED ? COL_RED : chatAccentColor(), COL_BG);
+  const char *text = (status && status[0]) ? status : "CONNECTING";
+  int w = d.textWidth(text);
+  d.setCursor((CONTENT_W - w) / 2, 44);
+  d.print(text);
+  if (strcmp(text, "READY") == 0) {
+    drawChatHintLine("HOLD SPACE TO TALK", 76, chatDimColor());
+    drawChatHintLine("RELEASE TO SEND", 94, chatDimColor());
+  } else if (strcmp(text, "LISTEN") == 0) {
+    drawChatListenMeter(0, 0);
+  } else if (strcmp(text, "THINKING") == 0) {
+    drawChatHintLine("ASR / LLM", 82, chatDimColor());
+  } else if (strcmp(text, "SPEAKING") == 0) {
+    drawChatHintLine("SPACE INTERRUPTS", 82, chatDimColor());
+  } else if (col == COL_RED) {
+    drawChatHintLine("PRESS C TO EXIT", 82, chatDimColor());
+  }
+}
+
+static uint8_t chatStreamScreen() {
+  waitRelease();
+  uint32_t lastInputMs = millis();
+  WiFiClient client;
+  char detail[32] = {0};
+  uint8_t wsFrame[1152];
+  uint32_t lastStatsDraw = 0;
+  bool chatSpaceHeld = false;
+  uint32_t chatSpaceDownAt = 0;
+
+  if (!chatPcmAlloc()) {
+    drawChatStreamHome("NO RAM", COL_RED);
+    delay(900);
+    waitRelease();
+    return APP_LAUNCHER;
+  }
+  drawChatStreamHome("CONNECTING", COL_GREEN);
+  chatPcmReset();
+  bool connected = false;
+  if (!sdMount()) {
+    strlcpy(detail, "NO SD", sizeof(detail));
+  } else {
+    connected = chatStreamConnectMounted(client, detail, sizeof(detail));
+    SD.end();
+  }
+  drawChatStreamHome(connected ? "READY" : detail, connected ? COL_GREEN : COL_RED);
+  if (connected) {
+    chatStartPlaybackTask();
+    drawChatStreamStats();
+  }
+
+  while (true) {
+    M5Cardputer.update();
+    if (connected && !client.connected()) {
+      connected = false;
+      client.stop();
+      wifiPowerDown();
+      strlcpy(detail, "DISCONNECTED", sizeof(detail));
+      drawChatStreamHome(detail, COL_RED);
+      chatAbortUplinkLocal();
+      chatStopPlaybackTask();
+      M5Cardputer.Speaker.stop();
+      chatPcmFree();
+      delay(900);
+      waitRelease();
+      return APP_LAUNCHER;
+    }
+    if (connected && client.available() >= 2) {
+      size_t len = 0;
+      uint8_t opcode = 0;
+      if (readWsFrame(client, wsFrame, sizeof(wsFrame), len, opcode, 1200)) {
+        if (opcode == 0x02 && len > 0) {
+          if (!speakerOutputReady) speakerOn();
+          chatAudioStreaming = true;
+          chatBinaryFrames++;
+          chatBinaryBytes += len;
+          chatPcmPushBytes(wsFrame, len);
+          chatPcmPumpPlayback();
+          lastInputMs = millis();
+        } else if (opcode == 0x01 && len > 0) {
+          size_t textLen = len < sizeof(wsFrame) - 1 ? len : sizeof(wsFrame) - 1;
+          wsFrame[textLen] = 0;
+          if (strstr((const char *)wsFrame, "audio_start")) {
+            chatTtsPlaying = strstr((const char *)wsFrame, "\"source\":\"tts\"") != nullptr;
+            chatPcmReset(chatTextPageVisible && chatTtsPlaying);
+            chatTtsPlaying = strstr((const char *)wsFrame, "\"source\":\"tts\"") != nullptr;
+            if (chatTtsPlaying) {
+              M5Cardputer.Mic.end();
+              micInputReady = false;
+              M5Cardputer.Speaker.stop();
+              M5Cardputer.Speaker.end();
+              speakerOutputReady = false;
+              delay(8);
+              speakerOn();
+            }
+            chatAudioStreaming = true;
+            chatReadyAfterPlayback = false;
+            chatStartPlaybackTask();
+          }
+          if (strstr((const char *)wsFrame, "audio_end")) {
+            bool wasTts = chatTtsPlaying;
+            chatAudioStreaming = false;
+            if (wasTts) chatTunePlaybackStartBuffer();
+            if (wasTts) {
+              if (!chatPcmStarted && chatPcmAvailable() > 0) {
+                chatPcmStarted = true;
+                chatPcmPumpPlayback();
+              }
+              chatReadyAfterPlayback = true;
+            } else {
+              if (chatTextPageVisible) drawChatCornerStatus("READY", CHAT_DIM);
+              else {
+                drawChatStreamHome("READY", COL_GREEN);
+                drawChatStreamStats();
+              }
+            }
+            chatTtsPlaying = false;
+          }
+          if (strstr((const char *)wsFrame, "uplink_saved")) {
+            drawChatStreamStats();
+          }
+          if (strstr((const char *)wsFrame, "listen_cancelled")) {
+            drawChatStreamHome("READY", COL_GREEN);
+          }
+          if (strstr((const char *)wsFrame, "asr_start")) {
+            if (!chatTextPageVisible) drawChatStreamStats();
+          }
+          if (strstr((const char *)wsFrame, "asr_text")) {
+            char asrText[384];
+            if (extractJsonStringValue(String((const char *)wsFrame), "text", asrText, sizeof(asrText))) {
+              drawChatStreamAsrText(asrText);
+              drawChatCornerStatus("THINKING", CHAT_DIM);
+            } else if (!chatTextPageVisible) drawChatStreamStats();
+          }
+          if (strstr((const char *)wsFrame, "asr_error")) {
+            drawChatStreamHome("ASR ERR", COL_RED);
+          }
+          if (strstr((const char *)wsFrame, "reply_start")) {
+            if (chatTextPageVisible) drawChatCornerStatus("THINKING", CHAT_DIM);
+            else drawChatStreamHome("THINKING", COL_GREEN);
+          }
+          if (strstr((const char *)wsFrame, "reply_text")) {
+            char replyText[384];
+            if (extractJsonStringValue(String((const char *)wsFrame), "text", replyText, sizeof(replyText))) {
+              drawChatStreamTextPage("REPLY", replyText);
+              drawChatCornerStatus("SPEAKING", CHAT_DIM);
+            } else {
+              drawChatStreamHome("REPLY OK", COL_GREEN);
+            }
+          }
+          if (strstr((const char *)wsFrame, "tts_start")) {
+            if (chatTextPageVisible) drawChatCornerStatus("SPEAKING", CHAT_DIM);
+            else drawChatStreamHome("SPEAKING", COL_GREEN);
+          }
+          if (strstr((const char *)wsFrame, "tts_error")) {
+            drawChatStreamHome("TTS ERR", COL_RED);
+            chatReadyAfterPlayback = false;
+          }
+        } else if (opcode == 0x08) {
+          connected = false;
+          client.stop();
+          wifiPowerDown();
+          strlcpy(detail, "DISCONNECTED", sizeof(detail));
+          drawChatStreamHome(detail, COL_RED);
+          chatAbortUplinkLocal();
+          chatStopPlaybackTask();
+          M5Cardputer.Speaker.stop();
+          chatPcmFree();
+          delay(900);
+          waitRelease();
+          return APP_LAUNCHER;
+        }
+      }
+    }
+    chatPcmPumpPlayback();
+    if (chatUplinkActive) chatPumpUplink(client);
+    if (connected && millis() - lastStatsDraw >= 1000) {
+      lastStatsDraw = millis();
+      drawChatStreamStats();
+    }
+    bool spaceNow = keySpace();
+    if (connected && spaceNow && !chatSpaceHeld) {
+      lastInputMs = millis();
+      chatSpaceHeld = true;
+      chatSpaceDownAt = millis();
+      if (!chatUplinkActive) {
+        chatTextPageVisible = false;
+        writeWsText(client, "{\"type\":\"interrupt\"}");
+        M5Cardputer.Speaker.stop();
+        chatPcmReset();
+        chatAudioStreaming = false;
+        chatTtsPlaying = false;
+        chatStartUplink(client);
+      }
+    } else if (chatSpaceHeld && !spaceNow) {
+      lastInputMs = millis();
+      chatSpaceHeld = false;
+      uint32_t heldMs = millis() - chatSpaceDownAt;
+      if (chatUplinkActive) {
+        if (heldMs < CHAT_TAP_CANCEL_MS || chatUplinkChunks < 3) chatCancelUplink(client);
+        else chatStopUplink(client);
+      }
+    }
+    if (chatUplinkActive && millis() - chatUplinkStartedAt > CHAT_MAX_UPLINK_MS) {
+      chatSpaceHeld = false;
+      chatStopUplink(client);
+    }
+    if (M5Cardputer.Keyboard.isChange() && M5Cardputer.Keyboard.isPressed()) {
+      lastInputMs = millis();
+      if (keyEsc()) {
+        chatStopUplink(client);
+        chatStopPlaybackTask();
+        M5Cardputer.Speaker.stop();
+        chatPcmFree();
+        client.stop();
+        wifiPowerDown();
+        waitRelease();
+        return APP_SLEEP;
+      }
+      if (keyChat()) {
+        waitRelease();
+      }
+      if (keyBrightUp() || keyBrightDn()) {
+        size_t n = sizeof(CHAT_ACCENT_COLORS) / sizeof(CHAT_ACCENT_COLORS[0]);
+        if (keyBrightUp()) chatAccentIndex = (chatAccentIndex + 1) % n;
+        else chatAccentIndex = (chatAccentIndex + n - 1) % n;
+        drawChatStreamHome("COLOR", COL_GREEN);
+        waitRelease();
+      }
+    }
+    if (chatReadyAfterPlayback && !chatAudioStreaming &&
+        chatPcmAvailable() < CHAT_PLAY_SAMPLES &&
+        M5Cardputer.Speaker.isPlaying(0) == 0) {
+      chatReadyAfterPlayback = false;
+      M5Cardputer.Speaker.stop();
+      if (chatTextPageVisible) drawChatCornerStatus("READY", CHAT_DIM);
+      else drawChatStreamHome("READY", COL_GREEN);
+    }
+    systemIdleTick();
+    if (autoSleepDue(lastInputMs)) {
+      chatStopUplink(client);
+      chatStopPlaybackTask();
+      M5Cardputer.Speaker.stop();
+      chatPcmFree();
+      client.stop();
+      wifiPowerDown();
+      return APP_SLEEP;
+    }
+    delay(2);
+  }
+}
+
+static uint8_t chatHttpScreen() {
+  bool redraw = true;
+  uint32_t lastInputMs = millis();
+  char reply[180] = {0};
+  char audioUrl[256] = {0};
+  waitRelease();
+
+  while (true) {
+    M5Cardputer.update();
+    if (redraw) {
+      drawChatHome("回车开始说话", reply);
+      redraw = false;
+    }
+
+    if (M5Cardputer.Keyboard.isChange() && M5Cardputer.Keyboard.isPressed()) {
+      lastInputMs = millis();
+      if (keyEsc()) { waitRelease(); return APP_LAUNCHER; }
+      if (keySpace()) { waitRelease(); return APP_REC_RECORD; }
+      if (keyEnter()) {
+        if (!sdMount()) {
+          showMsg("CHAT", "未检测到 SD 卡", COL_RED);
+          waitRelease();
+          redraw = true;
+          continue;
+        }
+        bool ok = chatRecordOnceMounted(CHAT_LAST_PATH);
+        SD.end();
+        if (!ok) {
+          showMsg("CHAT", "录音取消或失败", COL_RED);
+          waitRelease();
+          redraw = true;
+          continue;
+        }
+        drawChatHome("正在上传并识别...", nullptr);
+        if (!sdMount()) {
+          showMsg("CHAT", "SD 读取失败", COL_RED);
+          waitRelease();
+          redraw = true;
+          continue;
+        }
+        audioUrl[0] = 0;
+        uint8_t status = uploadChatWavMounted(CHAT_LAST_PATH, reply, sizeof(reply), audioUrl, sizeof(audioUrl));
+        SD.end();
+        if (status != UPSTAT_DONE) {
+          snprintf(reply, sizeof(reply), "%s", uploadStatusLabel(status));
+          showMsg("CHAT", uploadStatusLabel(status), COL_RED);
+        } else if (!reply[0]) {
+          snprintf(reply, sizeof(reply), "已收到, 但没有返回文字");
+        } else if (audioUrl[0] && sdMount()) {
+          drawChatHome(reply, "正在播放语音...");
+          if (downloadHttpToFileMounted(audioUrl, CHAT_REPLY_PATH)) {
+            playWavQuickMounted(CHAT_REPLY_PATH);
+          }
+          SD.end();
+        }
+        waitRelease();
+        redraw = true;
+      } else if (keyChat()) {
+        waitRelease();
         redraw = true;
       }
     }
@@ -4405,6 +6518,10 @@ static void runApp(uint8_t app) {
       app = pomodoroScreen();
       continue;
     }
+    if (app == APP_CHAT) {
+      app = chatStreamScreen();
+      continue;
+    }
     if (app == APP_WIFI) {
       app = wifiSettingsScreen();
       continue;
@@ -4433,7 +6550,7 @@ static void micWarmup(bool rearmAfterWarmup = true, int warmBuffers = 24) {
   // 不 Mic.end(): 保持常开
 }
 
-// ---------- 息屏(轻睡眠): 关背光; 一直睡到"键盘中断"才醒; 空格=录音, 回车=列表, F=番茄钟, Alt=应用列表 ----------
+// ---------- 息屏(轻睡眠): 关背光; 一直睡到"键盘中断/Go键"才醒; 空格=录音, 回车=列表, C=CHAT, F=番茄钟, Go=应用列表 ----------
 // 核心思路: 不调 Mic.end() → ES8311 模拟段保持通电, 没有掉电瞬态, 没有爆音.
 // CONFIG_PM_ENABLE 未启用: I2S 不持有阻止轻睡眠的电源锁, 可直接 esp_light_sleep_start().
 // I2S 任务在睡眠期间被 RTOS 暂停, APB 时钟门控; 唤醒后自动续跑.
@@ -4477,21 +6594,22 @@ static void goSleep() {
     return;
   }
 
-  // 打开键盘芯片(TCA8418 @0x34)的按键中断 -> 按键时拉低 GPIO11; 可一直睡, 不必周期性醒
+  // 打开键盘芯片(TCA8418 @0x34)的按键中断 -> 按键时拉低 GPIO11; Go/BtnA 是 GPIO0 低有效
   M5Cardputer.In_I2C.writeRegister8(0x34, 0x01, 0x01, 400000);   // CFG: KE_IEN=1
   gpio_wakeup_enable(GPIO_NUM_11, GPIO_INTR_LOW_LEVEL);
+  gpio_wakeup_enable(GPIO_NUM_0, GPIO_INTR_LOW_LEVEL);
   esp_sleep_enable_gpio_wakeup();
 
   while (true) {
     M5Cardputer.update();                                          // 排空键盘事件
     M5Cardputer.In_I2C.writeRegister8(0x34, 0x02, 0x03, 400000);  // 清中断标志 -> INT 线复位为高
-    esp_light_sleep_start();                                       // 一直睡到 GPIO11 变低
+    esp_light_sleep_start();                                       // 一直睡到 GPIO11 或 GPIO0 变低
     bool recognized = false;
     for (int i = 0; i < 10; i++) {
       delay(8);
       M5Cardputer.update();
       uint8_t app = APP_REC_RECORD;
-      if (M5Cardputer.Keyboard.isPressed() && wakeAppFromPressedKeys(app)) {
+      if ((M5Cardputer.Keyboard.isPressed() || keyGo()) && wakeAppFromPressedKeys(app)) {
         wakeApp = app;
         recognized = true;
         break;
@@ -4502,6 +6620,7 @@ static void goSleep() {
 
   // 唤醒: 关掉唤醒源 + 键盘中断
   gpio_wakeup_disable(GPIO_NUM_11);
+  gpio_wakeup_disable(GPIO_NUM_0);
   M5Cardputer.In_I2C.writeRegister8(0x34, 0x01, 0x00, 400000);
   applyBrightness();
   applyBrightness();

@@ -1,0 +1,10 @@
+﻿{
+    "id":  "20260527T003921Z_cardputer-001_50c8d6",
+    "time":  "2026-05-27T00:39:29.261Z",
+    "intent":  "chat",
+    "mode":  "Queue",
+    "status":  "queued",
+    "text":  "给我讲一个",
+    "promptPath":  "codex-inbox/codex-window-prompt.txt",
+    "createdAt":  "2026-05-27T00:39:30.7998868Z"
+}

@@ -1,0 +1,27 @@
+﻿{
+    "id":  "20260526T163507Z_cardputer-001_06f072",
+    "time":  "2026-05-26T16:35:17.206Z",
+    "deviceId":  "cardputer-001",
+    "text":  "你告诉我，我们这个世界有多少个国家？",
+    "intent":  "chat",
+    "requiresConfirmation":  false,
+    "reason":  "plain chat message",
+    "source":  "cardputer-chat",
+    "createdAt":  "2026-05-26T16:35:16.6619179Z",
+    "job":  {
+                "id":  "20260526T163507Z_cardputer-001_06f072",
+                "status":  "done",
+                "deviceId":  "cardputer-001",
+                "recordingName":  "20260526T163507Z_cardputer-001_06f072.wav",
+                "userText":  "你告诉我，我们这个世界有多少个国家？",
+                "replyText":  "当前联合国会员国193个，加上观察员国共195个左右。",
+                "replyMode":  "chat-reply",
+                "command":  null,
+                "pendingReason":  "",
+                "lastError":  "",
+                "createdAt":  "2026-05-26T16:35:17.206Z",
+                "updatedAt":  "2026-05-26T16:35:17.206Z",
+                "bytes":  229376,
+                "audioPath":  "chat-stream-audio/20260526T163507Z_cardputer-001_06f072.wav"
+            }
+}

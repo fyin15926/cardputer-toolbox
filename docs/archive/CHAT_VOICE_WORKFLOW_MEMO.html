@@ -1,0 +1,469 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Cardputer CHAT 语音对话工作流备忘</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      --bg: #07100b;
+      --panel: #0d1b12;
+      --panel-2: #102618;
+      --text: #d8ffe1;
+      --muted: #8dbb97;
+      --line: #20452a;
+      --green: #70ff8a;
+      --amber: #ffd166;
+      --red: #ff6b6b;
+      --blue: #84c5ff;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      background: var(--bg);
+      color: var(--text);
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Microsoft YaHei", sans-serif;
+      line-height: 1.65;
+    }
+    main {
+      width: min(1060px, calc(100% - 32px));
+      margin: 0 auto;
+      padding: 32px 0 56px;
+    }
+    header {
+      border-bottom: 1px solid var(--line);
+      padding-bottom: 20px;
+      margin-bottom: 24px;
+    }
+    h1 {
+      margin: 0 0 10px;
+      font-size: 30px;
+      letter-spacing: 0;
+      color: var(--green);
+    }
+    h2 {
+      margin: 30px 0 12px;
+      font-size: 20px;
+      color: var(--green);
+    }
+    h3 {
+      margin: 20px 0 8px;
+      font-size: 16px;
+      color: var(--blue);
+    }
+    p { margin: 8px 0; }
+    .subtitle {
+      color: var(--muted);
+      max-width: 820px;
+      margin: 0;
+    }
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+      gap: 12px;
+    }
+    section, .card {
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 16px;
+    }
+    section { margin: 14px 0; }
+    ul, ol { padding-left: 22px; margin: 8px 0; }
+    li { margin: 5px 0; }
+    code {
+      color: var(--amber);
+      background: #07150b;
+      border: 1px solid #1c3a24;
+      border-radius: 4px;
+      padding: 1px 5px;
+      font-family: "Cascadia Code", Consolas, monospace;
+      font-size: 0.95em;
+    }
+    pre {
+      overflow-x: auto;
+      background: #07150b;
+      border: 1px solid #1c3a24;
+      border-radius: 8px;
+      padding: 12px;
+    }
+    pre code {
+      border: 0;
+      padding: 0;
+      background: transparent;
+      color: #d8ffe1;
+    }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      margin: 10px 0;
+      overflow: hidden;
+      border-radius: 8px;
+    }
+    th, td {
+      border: 1px solid var(--line);
+      padding: 8px 10px;
+      text-align: left;
+      vertical-align: top;
+    }
+    th {
+      color: var(--green);
+      background: var(--panel-2);
+    }
+    .note {
+      border-left: 4px solid var(--amber);
+      padding: 10px 12px;
+      background: #1d1808;
+      color: #fff0c2;
+      border-radius: 6px;
+    }
+    .danger {
+      border-left: 4px solid var(--red);
+      padding: 10px 12px;
+      background: #220c0c;
+      color: #ffd6d6;
+      border-radius: 6px;
+    }
+    .ok { color: var(--green); }
+    .muted { color: var(--muted); }
+  </style>
+</head>
+<body>
+<main>
+  <header>
+    <h1>Cardputer CHAT 语音对话工作流备忘</h1>
+    <p class="subtitle">
+      本文记录“小机器用 C 键唤醒进入 CHAT，与助手语音对话”的工作流、职责边界和后续实施顺序。
+      第一版目标是稳定跑通按键语音对话，不做持续监听和实时双工。
+    </p>
+  </header>
+
+  <section>
+    <h2>当前决策</h2>
+    <ul>
+      <li><code>Space</code> 继续作为息屏唤醒后快速录音入口。</li>
+      <li><code>F</code> 继续作为息屏唤醒后进入番茄钟入口。</li>
+      <li><code>C</code> 新增为息屏唤醒后进入 <code>CHAT</code> 语音对话入口。</li>
+      <li>CHAT 第一版采用“按键录一句、上传、等待回复、显示文字”的半双工流程。</li>
+      <li>语音转文字、对话模型、命令解析和后续 TTS 都放在服务器做，不放在 ESP32-S3 本地做。</li>
+    </ul>
+  </section>
+
+  <div class="grid">
+    <div class="card">
+      <h3>第一版必须做到</h3>
+      <ul>
+        <li>C 键唤醒直达 CHAT。</li>
+        <li>CHAT 内录一句话并上传。</li>
+        <li>服务器返回助手文字回复。</li>
+        <li>小机器屏幕显示回复摘要。</li>
+      </ul>
+    </div>
+    <div class="card">
+      <h3>第一版暂不做</h3>
+      <ul>
+        <li>持续监听唤醒词。</li>
+        <li>实时边说边回。</li>
+        <li>复杂多轮长上下文 UI。</li>
+        <li>危险命令自动执行。</li>
+      </ul>
+    </div>
+    <div class="card">
+      <h3>后续增强</h3>
+      <ul>
+        <li>服务器生成 TTS，机器下载播放。</li>
+        <li>后台网页可调助手提示词。</li>
+        <li>安全命令白名单。</li>
+        <li>短上下文记忆和最近录音检索。</li>
+      </ul>
+    </div>
+  </div>
+
+  <section>
+    <h2>唤醒入口</h2>
+    <table>
+      <thead>
+        <tr>
+          <th>按键</th>
+          <th>唤醒后动作</th>
+          <th>说明</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td><code>Space</code></td>
+          <td>进入录音</td>
+          <td>保留现有最快录音入口，不改变用户肌肉记忆。</td>
+        </tr>
+        <tr>
+          <td><code>Enter</code></td>
+          <td>进入录音列表</td>
+          <td>保留现有回放和管理入口。</td>
+        </tr>
+        <tr>
+          <td><code>F</code></td>
+          <td>进入番茄钟</td>
+          <td>与现有多应用唤醒设想一致。</td>
+        </tr>
+        <tr>
+          <td><code>C</code></td>
+          <td>进入 CHAT</td>
+          <td>新入口。唤醒后不自动录音，先显示 CHAT 准备界面，避免误触上传。</td>
+        </tr>
+      </tbody>
+    </table>
+    <p class="note">
+      固件层可新增 <code>APP_CHAT</code>，并扩展 <code>wakeAppFromPressedKeys()</code>：
+      检测到 <code>C/c</code> 时返回 <code>APP_CHAT</code>。
+    </p>
+  </section>
+
+  <section>
+    <h2>CHAT 设备端流程</h2>
+    <ol>
+      <li>息屏时按 <code>C</code>，设备唤醒并进入 <code>CHAT</code> 页面。</li>
+      <li>页面显示简短状态：<code>CHAT</code>、网络状态、录音提示。</li>
+      <li>按 <code>Enter</code> 开始录音；再次按 <code>Enter</code> 结束并发送。</li>
+      <li>录音保存为临时或普通 WAV，可按后续策略决定是否留档。</li>
+      <li>固件通过 Wi-Fi 上传到服务器 CHAT 接口。</li>
+      <li>上传中显示 <code>SEND</code> / <code>WAIT</code>，允许 <code>Esc</code> 取消等待并返回息屏。</li>
+      <li>收到回复后，屏幕显示助手回复的短文本。</li>
+      <li>后续加 TTS 后，若服务器返回音频 URL 或音频文件，设备下载并播放。</li>
+    </ol>
+  </section>
+
+  <section>
+    <h2>服务器流程</h2>
+    <p>服务器新增一条与录音备忘分开的 CHAT 路径，避免影响现有上传、转写、flomo 工作流。</p>
+    <pre><code>Cardputer CHAT WAV/ADPCM
+  -> POST /chat/upload
+  -> 保存 chat 原始音频
+  -> ASR 转文字
+  -> 对话模型生成回复
+  -> 可选：解析安全命令
+  -> 可选：TTS 生成回复音频
+  -> 返回 JSON 给设备</code></pre>
+    <p>建议第一版返回结构：</p>
+    <pre><code>{
+  "ok": true,
+  "id": "chat_20260526_153000",
+  "userText": "帮我总结一下最近的录音",
+  "replyText": "可以，我先看最近几条录音的转写结果。",
+  "command": null,
+  "audioUrl": null
+}</code></pre>
+  </section>
+
+  <section>
+    <h2>固件和服务器分工</h2>
+    <table>
+      <thead>
+        <tr>
+          <th>模块</th>
+          <th>负责内容</th>
+          <th>不负责内容</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>Cardputer 固件</td>
+          <td>按键唤醒、录音、上传、状态显示、播放服务器返回的音频。</td>
+          <td>大模型推理、高质量语音识别、TTS、复杂命令理解。</td>
+        </tr>
+        <tr>
+          <td>cloud-voice-server</td>
+          <td>接收音频、ASR、对话、TTS、命令白名单、上下文和日志。</td>
+          <td>实时采样、键盘事件、设备本地音频链路。</td>
+        </tr>
+        <tr>
+          <td>网页后台</td>
+          <td>测试 CHAT 请求、查看用户原文和助手回复、调提示词、回放 TTS。</td>
+          <td>替代设备端真实交互。</td>
+        </tr>
+      </tbody>
+    </table>
+  </section>
+
+  <section>
+    <h2>命令白名单</h2>
+    <p>命令必须先从少量安全动作开始。模型只能提出结构化命令，固件或服务器只执行白名单内的动作。</p>
+    <table>
+      <thead>
+        <tr>
+          <th>命令</th>
+          <th>第一版建议</th>
+          <th>安全策略</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td><code>show_recent_summary</code></td>
+          <td>可以做</td>
+          <td>只读最近录音转写，不改文件。</td>
+        </tr>
+        <tr>
+          <td><code>play_recording</code></td>
+          <td>可以做</td>
+          <td>只允许播放明确编号或最近一条。</td>
+        </tr>
+        <tr>
+          <td><code>mark_important</code></td>
+          <td>可以做</td>
+          <td>只标记当前或明确编号录音。</td>
+        </tr>
+        <tr>
+          <td><code>upload_recording</code></td>
+          <td>可以做</td>
+          <td>复用现有上传队列。</td>
+        </tr>
+        <tr>
+          <td><code>delete_recording</code></td>
+          <td>暂缓</td>
+          <td>必须二次确认，第一版不自动执行。</td>
+        </tr>
+        <tr>
+          <td><code>change_wifi_or_token</code></td>
+          <td>不做</td>
+          <td>配置类动作必须走设置页或电脑端配置工具。</td>
+        </tr>
+      </tbody>
+    </table>
+    <p class="danger">
+      删除、清空、覆盖配置、修改 token、批量移动文件等动作不得由模型一句话直接执行。
+    </p>
+  </section>
+
+  <section>
+    <h2>UI 草案</h2>
+    <p>屏幕很小，CHAT 页面只放状态和短回复。长文本留在服务器后台。</p>
+    <pre><code>┌────────────────────────┐
+│ CHAT            WiFi OK │
+│                        │
+│ Press ENTER to talk    │
+│                        │
+│ Reply:                 │
+│ 可以，我来帮你整理...   │
+│                        │
+│ ESC sleep        C new  │
+└────────────────────────┘</code></pre>
+    <ul>
+      <li><code>Enter</code>：开始/结束录音，或发送下一句话。</li>
+      <li><code>Esc</code>：退出并息屏。</li>
+      <li><code>C</code>：清空当前显示，准备新一轮对话。</li>
+      <li><code>Backspace</code>：返回上一层应用列表，后续如果有应用列表再接入。</li>
+    </ul>
+  </section>
+
+  <section>
+    <h2>和现有录音系统的关系</h2>
+    <ul>
+      <li>CHAT 音频上传不要自动进入 flomo，避免把临时对话污染备忘录。</li>
+      <li>CHAT 原始音频是否保存到 SD，后续可做成配置。第一版建议保存最近一条临时文件，便于失败重试。</li>
+      <li>服务器端 CHAT 日志单独放目录，例如 <code>chat-jobs/</code>、<code>chat-audio/</code>、<code>chat-tts/</code>。</li>
+      <li>现有 <code>/upload</code>、DashScope 转写、DeepSeek 整理、flomo 推送路径不应被 CHAT 改动。</li>
+      <li>如果复用现有 ASR 函数，应通过参数关闭 flomo 和备忘格式化。</li>
+    </ul>
+  </section>
+
+  <section>
+    <h2>实施顺序</h2>
+    <ol>
+      <li>先在文档中确认 C 键入口和 CHAT 半双工流程。</li>
+      <li>服务器新增 CHAT 接口和本地网页测试按钮，先用已有录音验证对话回复。</li>
+      <li>固件新增 <code>APP_CHAT</code> 和 C 键唤醒入口，先做占位页。</li>
+      <li>固件接入 CHAT 录音和上传，第一版只显示文字回复。</li>
+      <li>服务器加 TTS 音频生成，固件下载并播放回复。</li>
+      <li>加入少量只读或低风险命令白名单。</li>
+      <li>稳定后再考虑 Realtime 或更接近对讲机的低延迟模式。</li>
+    </ol>
+  </section>
+
+  <section>
+    <h2>待确认事项</h2>
+    <ul>
+      <li>第一版 CHAT 音频是否保存在 SD：建议保留最近一条临时文件。</li>
+      <li>第一版对话模型：可先复用服务器已有 DeepSeek；如果接 OpenAI，另行配置服务器环境变量。</li>
+      <li>第一版是否立即加 TTS：建议先文字回复跑通，再加语音播放。</li>
+      <li>CHAT 是否带上下文：建议只保留最近 3 到 5 轮，防止请求过长。</li>
+      <li>失败时是否落回普通录音：建议失败只显示错误，不自动转为 flomo 备忘。</li>
+    </ul>
+  </section>
+
+  <section>
+    <h2>2026-05-26 初始实施记录</h2>
+    <ul>
+      <li>固件已新增 <code>APP_CHAT</code>、<code>C/c</code> 唤醒入口和 launcher 里的 <code>CHAT</code> 菜单项。</li>
+      <li>固件已新增 CHAT 占位页：可从息屏按 <code>C</code> 进入，<code>Space</code> 转录音，<code>Esc</code> 返回 launcher。</li>
+      <li>服务器已新增独立 <code>/chat/upload</code> 接口，CHAT 音频保存到 <code>chat-audio/</code>，job 保存到 <code>chat-jobs/</code>。</li>
+      <li>服务器 CHAT 路径会复用 DashScope ASR，初始实现采用 <code>asr-only</code>：转写完成后立即返回识别文本，不同步等待 DeepSeek。</li>
+      <li>CHAT 不推送 flomo，不影响原 <code>/upload</code> 录音备忘链路；DeepSeek 回复后续可做成异步或可选模式。</li>
+      <li>服务器已新增 <code>/chat-audio/:name?token=...</code> 私有音频读取路径，供 DashScope 拉取 CHAT 音频。</li>
+      <li>本地验证：<code>node --check cloud-voice-server/server.js</code> 通过；<code>tools/cardputer_build.ps1</code> 固件编译通过。</li>
+    </ul>
+  </section>
+
+  <section>
+    <h2>2026-05-26 设备端接入记录</h2>
+    <ul>
+      <li>CHAT 页面已从占位推进到真实录音上传：按 <code>C</code> 进入后，<code>Enter</code> 开始录一句，<code>Enter</code> 结束并发送。</li>
+      <li>设备端 CHAT 录音写入 <code>/CHAT/CHAT_LAST.wav</code>，不进入普通 <code>/REC</code> 列表。</li>
+      <li>固件会从现有 <code>url=.../upload</code> 推导出 <code>/chat/upload</code>，复用原 <code>token</code>、<code>device</code>、Wi-Fi 配置。</li>
+      <li>当前 CHAT 上传短句 WAV，不做 ADPCM；第一版最长录音 30 秒。</li>
+      <li>服务器返回 <code>userText</code> 后，小机器屏幕显示识别结果；失败时显示上传状态码对应的短错误。</li>
+      <li>本地验证：固件编译通过；服务器 <code>node --check</code> 通过。尚未真机烧录和端到端实测。</li>
+    </ul>
+  </section>
+
+  <section>
+    <h2>2026-05-26 部署与烧录记录</h2>
+    <ul>
+      <li>服务器已备份旧文件：<code>/opt/cardputer-voice/server.js.bak-20260526-chat-asr-only</code>。</li>
+      <li>服务器已上传新版 <code>server.js</code> 到 <code>/opt/cardputer-voice/server.js</code>，并重启 <code>cardputer-voice.service</code>。</li>
+      <li>公网健康检查 <code>http://cardputer.flye.cc/health</code> 返回 <code>ok: true</code>，<code>dashScope</code>、<code>asrFileToken</code>、<code>uploadToken</code> 均为已配置。</li>
+      <li>固件已编译并烧录到 <code>COM3</code>，烧录日志包含 ESP32-S3、Embedded Flash 8MB、<code>Hash of data verified</code>、<code>Hard resetting with RTC WDT</code>。</li>
+      <li>本地 <code>/chat/upload</code> smoke test 通过：未配置 ASR 的本地服务能接收 WAV、保存 CHAT job，并返回 <code>pendingReason: chat transcription is not configured</code>。</li>
+      <li>远端完整 ASR smoke test 尚未完成：远端 SSH 在测试时偶发 <code>Permission denied</code>，但服务日志显示新版服务已启动。</li>
+    </ul>
+  </section>
+
+  <section>
+    <h2>2026-05-26 HTTP ERR 修复记录</h2>
+    <ul>
+      <li>真机 CHAT 发送后显示 <code>HTTP ERR</code>。公网测试发现 <code>POST /chat/upload</code> 返回 nginx HTML 404，而 Node 本机 <code>127.0.0.1:3000/chat/upload</code> 返回 JSON 401。</li>
+      <li>根因：nginx 只代理了 <code>/upload</code>、<code>/audio/</code> 等旧路径，没有代理新增的 <code>/chat/upload</code> 和 <code>/chat-audio/</code>。</li>
+      <li>已修复线上 <code>/etc/nginx/conf.d/cardputer-voice-domain.conf</code> 与 <code>/etc/nginx/conf.d/cardputer-voice-31112.conf</code>，并备份为 <code>*.bak-20260526-chat-routes</code>。</li>
+      <li>已执行 <code>nginx -t</code> 与 <code>systemctl reload nginx</code>；公网 <code>POST /chat/upload</code> 已从 nginx 404 变为 Node JSON 401，说明路由已打通。</li>
+      <li>仓库里的 nginx 部署模板也已同步加入 CHAT 路由。</li>
+    </ul>
+  </section>
+
+  <section>
+    <h2>电脑 Codex 桥接规划</h2>
+    <p>
+      当前已跑通的是“小机器 → 云端服务器 → 小机器显示 ASR 文本”。这还不是“小机器直接把消息发进当前 Codex 对话窗口”。
+      Codex 桌面应用目前没有给外部设备直接注入当前会话消息的稳定入口，因此需要做一层电脑端桥接。
+    </p>
+    <ul>
+      <li>服务器侧新增 <code>GET /api/chat/recent</code>，电脑可用 <code>X-Upload-Token</code> 拉取最近 CHAT 语音文本。</li>
+      <li>第一阶段桥接：电脑本地脚本轮询 <code>/api/chat/recent</code>，把最新 <code>userText</code> 写入本地 inbox 文件；需要时让 Codex 读取这个文件。</li>
+      <li>第二阶段桥接：做一个本地小网页或托盘程序，显示小机器语音输入，并提供“一键复制/发送给 Codex”的工作流。</li>
+      <li>真正自动进入当前 Codex 对话，需要 Codex 桌面端提供本地 API、插件入口或可控 MCP 通道；没有这个入口时，不建议用脆弱的 UI 自动化硬塞消息。</li>
+    </ul>
+  </section>
+
+  <section>
+    <h2>2026-05-26 电脑 Inbox Bridge</h2>
+    <ul>
+      <li>已新增本地脚本 <code>tools/chat_inbox_bridge.ps1</code>。</li>
+      <li>脚本轮询 <code>/api/chat/recent</code>，把最新 <code>userText</code> 写入 <code>codex-inbox/latest-chat.txt</code> 和 <code>latest-chat.json</code>。</li>
+      <li>token 来源优先级：环境变量 <code>UPLOAD_TOKEN</code>、<code>-TokenFile</code>、<code>-NetConfig</code> 指定的 <code>UPLOAD/net.txt</code>，以及常见盘符 <code>F:/E:/D:/UPLOAD/net.txt</code>。</li>
+      <li>运行一次测试：<code>powershell -ExecutionPolicy Bypass -File tools/chat_inbox_bridge.ps1 -Once -NetConfig F:\UPLOAD\net.txt</code></li>
+      <li>常驻轮询：<code>powershell -ExecutionPolicy Bypass -File tools/chat_inbox_bridge.ps1 -NetConfig F:\UPLOAD\net.txt</code></li>
+      <li>如果本机 HTTP/proxy 拦截 <code>X-Upload-Token</code>，可用 SSH 版本：<code>powershell -ExecutionPolicy Bypass -File tools/chat_inbox_bridge_ssh.ps1</code></li>
+      <li>如果 PowerShell 捕获 SSH 输出不稳定，可用 SCP 版本同步远端 JSON：<code>powershell -ExecutionPolicy Bypass -File tools/chat_inbox_bridge_scp.ps1</code></li>
+    </ul>
+  </section>
+</main>
+</body>
+</html>

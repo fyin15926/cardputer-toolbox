@@ -1,0 +1,27 @@
+﻿{
+    "id":  "20260526_171119_cardputer-001_chat_921031",
+    "time":  "2026-05-26T09:10:55.690Z",
+    "deviceId":  "cardputer-001",
+    "text":  "你现在能搜到我从小机器说的话吗？",
+    "intent":  "chat",
+    "requiresConfirmation":  false,
+    "reason":  "plain chat message",
+    "source":  "cardputer-chat",
+    "createdAt":  "2026-05-26T09:10:56.2993066Z",
+    "job":  {
+                "id":  "20260526_171119_cardputer-001_chat_921031",
+                "status":  "done",
+                "deviceId":  "cardputer-001",
+                "recordingName":  "20260526_171119_cardputer-001_chat_921031.wav",
+                "userText":  "你现在能搜到我从小机器说的话吗？",
+                "replyText":  "我听到了：你现在能搜到我从小机器说的话吗？",
+                "replyMode":  "asr-only",
+                "command":  null,
+                "pendingReason":  "",
+                "lastError":  "",
+                "createdAt":  "2026-05-26T09:10:51.793Z",
+                "updatedAt":  "2026-05-26T09:10:55.690Z",
+                "bytes":  157228,
+                "audioPath":  "chat-audio/20260526_171119_cardputer-001_chat_921031.wav"
+            }
+}

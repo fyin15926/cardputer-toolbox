@@ -19,7 +19,7 @@ const CHAT_CONTEXT_TURNS = Math.max(0, Math.min(10, parseInt(process.env.CHAT_CO
 const CHAT_TTS_ENABLED = !/^(0|false|no)$/i.test(process.env.CHAT_TTS_ENABLED || 'true');
 const DASH_SCOPE_TTS_WS_URL = process.env.DASH_SCOPE_TTS_WS_URL || 'wss://dashscope.aliyuncs.com/api-ws/v1/inference/';
 const DASH_SCOPE_TTS_MODEL = process.env.DASH_SCOPE_TTS_MODEL || 'cosyvoice-v3-flash';
-const DASH_SCOPE_TTS_VOICE = process.env.DASH_SCOPE_TTS_VOICE || 'longanyang';
+const DEFAULT_DASH_SCOPE_TTS_VOICE = process.env.DASH_SCOPE_TTS_VOICE || 'longanyang';
 const DASH_SCOPE_TTS_SAMPLE_RATE = parseInt(process.env.DASH_SCOPE_TTS_SAMPLE_RATE || '24000', 10);
 const DASHSCOPE_API_KEY = process.env.DASHSCOPE_API_KEY || '';
 const DASHSCOPE_MODEL = process.env.DASHSCOPE_MODEL || 'paraformer-v2';
@@ -34,7 +34,7 @@ const MAX_UPLOAD_BYTES = parseInt(process.env.MAX_UPLOAD_BYTES || `${64 * 1024 *
 const DEEPSEEK_API_KEY = process.env.DEEPSEEK_API_KEY || '';
 const DEEPSEEK_BASE_URL = (process.env.DEEPSEEK_BASE_URL || 'https://api.deepseek.com').replace(/\/+$/, '');
 const DEEPSEEK_MODEL = process.env.DEEPSEEK_MODEL || 'deepseek-v4-pro';
-const DEEPSEEK_TIMEOUT_MS = parseInt(process.env.DEEPSEEK_TIMEOUT_MS || '45000', 10);
+const DEEPSEEK_TIMEOUT_MS = parseInt(process.env.DEEPSEEK_TIMEOUT_MS || '120000', 10);
 const DEEPSEEK_MAX_TRANSCRIPT_CHARS = parseInt(process.env.DEEPSEEK_MAX_TRANSCRIPT_CHARS || '20000', 10);
 const DASH_SCOPE_TRANSCRIPTION_URL = 'https://dashscope.aliyuncs.com/api/v1/services/audio/asr/transcription';
 const DASH_SCOPE_TASK_URL = 'https://dashscope.aliyuncs.com/api/v1/tasks/';
@@ -65,9 +65,13 @@ const DEEPSEEK_SETTINGS_PATH = process.env.DEEPSEEK_SETTINGS_PATH
 const CHAT_MEMORY_PATH = process.env.CHAT_MEMORY_PATH
   ? path.resolve(process.env.CHAT_MEMORY_PATH)
   : path.join(DATA_ROOT, 'chat-memory.json');
+const CHAT_TTS_SETTINGS_PATH = process.env.CHAT_TTS_SETTINGS_PATH
+  ? path.resolve(process.env.CHAT_TTS_SETTINGS_PATH)
+  : path.join(DATA_ROOT, 'chat-tts-settings.json');
 const processingJobs = new Set();
 const activeUploads = new Map();
 const deviceStatuses = new Map();
+let currentChatTtsVoice = DEFAULT_DASH_SCOPE_TTS_VOICE;
 
 const DEFAULT_CHAT_MEMORY = {
   version: 1,
@@ -140,21 +144,25 @@ const DEFAULT_DEEPSEEK_SETTINGS = {
   timeoutMs: DEEPSEEK_TIMEOUT_MS,
   maxTranscriptChars: DEEPSEEK_MAX_TRANSCRIPT_CHARS,
   thinkingDisabled: false,
-  fixedTerms: 'Cardputer、M5Stack、DashScope、Paraformer、flomo、ADPCM、WAV、Wi-Fi、SD 卡。',
+  fixedTerms: 'Cardputer、M5Stack、DashScope、Paraformer、flomo、ADPCM、WAV、Wi-Fi、SD 卡、iPhone、Apple Log、Log、Final Cut Pro。',
   systemPrompt: [
     '你是中文语音转文字后处理器，只处理用户给出的 ASR 文本。',
     '任务：修正常见同音错字、品牌/项目名、标点、断句和少量口头禅；保留说话者原意，不扩写、不编造没有说过的内容。',
+    '先判断内容类型：随手备忘、对话、会议、视频文稿、课程口播、广告介绍、评论或长独白。摘要必须服务于这个类型，而不是机械摘录开头句。',
     '输出必须是 JSON 对象，不要 Markdown，不要代码块。字段：title, summary, corrected_text。',
-    'title 不超过 24 个中文字符；summary 由你根据内容类型决定写法，可以是短段落、要点列表或视频文稿式结构化总结；corrected_text 是分段后的校正文。'
+    'title 不超过 24 个中文字符；summary 由你根据内容类型决定写法，可以是短段落、要点列表或视频文稿式结构化总结；corrected_text 是分段后的校正文。',
+    'summary 必须是对全文的提炼，不要直接复制 ASR 中疑似破碎、重复、半截或同音误识别的原句；不确定的细节宁可略过，不要硬写进摘要。'
   ].join('\n'),
   userPrompt: [
     '请根据下面的录音元信息、项目词典和 ASR 原始文本，生成适合写入 flomo 的整理结果。',
     '只允许基于原文纠错和整理，不要加入原文没有的信息。',
     'summary 不要套固定模板：如果是随手备忘，保持简短；如果是视频文稿、课程、评论或长独白，请自己决定最适合读者复用的总结结构。',
+    '如果内容像视频广告、课程介绍、产品介绍或口播稿，summary 应概括“它在卖什么/讲什么、核心卖点、课程结构、价格或行动号召”等全文信息；不要把开头的画面对比或残缺口播当成主要摘要。',
+    '摘要里不要保留明显 ASR 噪声和口吃重复，例如“这些这些这些”“啊这”“有几”这类无意义片段；corrected_text 中也应删去不影响原意的重复口头禅。',
     '如果 ASR 文本已经包含“说话人1：”“说话人2：”等角色标签，corrected_text 必须保留这些标签和对话顺序，不要把不同说话人的内容合并成一段；每一次说话人切换都必须单独换行。',
     '如果对话中有人说“我是A/我叫A”，后续请优先用“A：”作为标签，不要写“说话人A：”。如果一句话里粘连了“我是A，我是B”，请拆成“A：我是A。”和“B：我是B。”两行。',
     '如果某句以另一个参与者名字开头并在提问，例如“大宝贝为什么还不去洗澡呢？”，通常这是对那个人的称呼或提问，不代表说话人就是大宝贝；请结合上一下文纠正角色标签。',
-    '常见同音错词：上下文是“考虑全面”时，“考得/考的”通常应改为“考虑得”；上下文是责任压力时，“当多少职人/担多少职人”通常应改为“担多少责任”。',
+    '常见同音错词：上下文是“考虑全面”时，“考得/考的”通常应改为“考虑得”；上下文是责任压力时，“当多少职人/担多少职人”通常应改为“担多少责任”；影像/调色上下文里，“拍烙/拍唠/拍 lock/lock素材”通常应改为“拍 Log/Log 素材”，“苹果 log”应规范成“Apple Log”。',
     '如果 ASR 原始文本主要是英文、日文或其他外语，corrected_text 必须先输出完整中文翻译；如果原文识别很破碎，请在不编造事实的前提下翻译可确认部分，并标注“部分语句疑似识别不清”。',
     '外语内容不要只保留原文；可在中文翻译后追加“原文转写：...”以便核对。',
     '不要额外输出待办、想法、标签或其他分栏；最终 memo 只需要摘要和原文两块。',
@@ -165,6 +173,10 @@ const DEFAULT_DEEPSEEK_SETTINGS = {
 const DEEPSEEK_HARD_USER_RULES = [
   '硬性格式要求：corrected_text 必须是最终可读原文，不要输出分析过程，不要把整段压成一行。',
   'summary 由你按内容类型自行决定写法；不要被固定的 1-3 条摘要限制。视频文稿可以写成更有层次的内容总结，但不要编造原文没有的信息。',
+  'summary 必须基于全文综合归纳，不能只摘取开头 1-3 句；开头如果包含重复、断裂、半句话或明显错词，不要把它写进摘要。',
+  '视频文稿、课程口播、广告介绍类内容的 summary 优先写成“主题/卖点/结构/价格或行动号召”的清楚总结；不要把它误写成个人待办或零散原文摘抄。',
+  '影像课程语境常见纠错：iPhone、Apple Log、Log、Final Cut Pro；“拍烙/拍唠/拍 lock”多半是“拍 Log”，“lock素材”多半是“Log 素材”。',
+  '去除不影响原意的口吃和填充词，例如连续重复的“这些这些这些”“然后然后”“啊这个”；保留必要语气，但不要让噪声进入摘要。',
   '不要额外输出待办、想法、标签或其他分栏；只整理 title、summary 和 corrected_text。',
   '如果是多人内容，必须自动区分说话人；已有“说话人1/说话人2/Speaker 1”等标签时必须保留轮次顺序。每个说话人轮次单独一行，轮次之间用一个空行隔开。',
   '如果能从自我介绍中确认姓名，例如“我是A/我叫A”，后续标签用“A：”；不能确认姓名时用“说话人1：”“说话人2：”，不要凭空起名。',
@@ -260,6 +272,14 @@ function safeSendWsJson(ws, payload) {
   return false;
 }
 
+function elapsedMs(from, to = Date.now()) {
+  return from ? Math.max(0, to - from) : 0;
+}
+
+function formatMs(ms) {
+  return `${Math.round(ms)}ms`;
+}
+
 function createRealtimeAsrSession(clientWs, capture) {
   if (!DASHSCOPE_API_KEY) {
     return null;
@@ -339,6 +359,7 @@ function createRealtimeAsrSession(clientWs, capture) {
     if (event === 'task-started') {
       started = true;
       capture.realtimeStarted = true;
+      capture.timings.realtimeAsrStartedAt = Date.now();
       safeSendWsJson(clientWs, { type: 'asr_start', id: capture.id, mode: 'realtime' });
       flushQueued();
       if (finishing) finish();
@@ -351,6 +372,7 @@ function createRealtimeAsrSession(clientWs, capture) {
         capture.realtimeText = text;
         capture.realtimeFinal = Boolean(sentence.sentence_end);
         capture.realtimeLast = message;
+        capture.timings.realtimeAsrTextAt = Date.now();
         safeSendWsJson(clientWs, {
           type: 'asr_text',
           id: capture.id,
@@ -364,6 +386,7 @@ function createRealtimeAsrSession(clientWs, capture) {
     }
     if (event === 'task-finished') {
       capture.realtimeFinished = true;
+      capture.timings.realtimeAsrFinishedAt = Date.now();
       closed = true;
       remote.close();
       return;
@@ -435,13 +458,29 @@ function attachChatStream(server) {
       realtimeLast: null,
       realtime: null,
       sessionSeq: 0,
-      interrupted: false
+      interrupted: false,
+      timings: {
+        createdAt: Date.now(),
+        firstUplinkAt: 0,
+        lastUplinkAt: 0,
+        uplinkEndAt: 0,
+        savedAt: 0,
+        realtimeAsrStartedAt: 0,
+        realtimeAsrTextAt: 0,
+        realtimeAsrFinishedAt: 0,
+        asrReadyAt: 0,
+        llmStartAt: 0,
+        llmEndAt: 0,
+        ttsStartAt: 0,
+        ttsEndAt: 0
+      }
     };
   }
 
   function finishStreamCapture(capture, ws, reason = 'done') {
     if (!capture || capture.closed) return;
     capture.closed = true;
+    capture.timings.uplinkEndAt = Date.now();
     capture.out.end(() => {
       try {
         const header = Buffer.alloc(44);
@@ -449,9 +488,21 @@ function attachChatStream(server) {
         const fd = fs.openSync(capture.wavPath, 'r+');
         fs.writeSync(fd, header, 0, header.length, 0);
         fs.closeSync(fd);
+        capture.timings.savedAt = Date.now();
+        const audioMs = capture.bytes / 2 / 16000 * 1000;
+        if (capture.interrupted || capture.bytes < 16000 * 2 * 0.35) {
+          safeSendWsJson(ws, {
+            type: 'listen_cancelled',
+            id: capture.id,
+            reason: capture.interrupted ? 'interrupted' : 'too_short',
+            audioMs: Math.round(audioMs)
+          });
+          console.log(`[chat-stream] cancelled uplink ${capture.id} ${capture.bytes} bytes reason=${reason} audio=${formatMs(audioMs)}`);
+          return;
+        }
         safeSendWsJson(ws, { type: 'reply_start', id: capture.id, stage: 'asr' });
         if (capture.realtime) capture.realtime.finish();
-        console.log(`[chat-stream] saved uplink ${capture.id} ${capture.bytes} bytes ${capture.chunks} chunks`);
+        console.log(`[chat-stream] saved uplink ${capture.id} ${capture.bytes} bytes ${capture.chunks} chunks reason=${reason} audio=${formatMs(audioMs)} upload=${formatMs(elapsedMs(capture.timings.firstUplinkAt, capture.timings.uplinkEndAt))} save=${formatMs(elapsedMs(capture.timings.uplinkEndAt, capture.timings.savedAt))}`);
         finalizeStreamAsr(capture, ws).catch((err) => {
           console.error('[chat-stream] asr failed', err);
           safeSendWsJson(ws, { type: 'asr_error', message: err.message || 'asr failed' });
@@ -465,9 +516,17 @@ function attachChatStream(server) {
     });
   }
 
+  function cancelStreamCapture(capture, ws, reason = 'client_cancel') {
+    if (!capture || capture.closed) return;
+    capture.interrupted = true;
+    if (capture.realtime) capture.realtime.close();
+    finishStreamCapture(capture, ws, reason);
+  }
+
   async function finalizeStreamAsr(capture, ws) {
     if (!capture || capture.bytes <= 0) return;
     if (capture.interrupted) return;
+    const asrStartAt = Date.now();
     if (capture.realtime) {
       for (let i = 0; i < 20; i += 1) {
         if (capture.realtimeText || capture.realtimeFailed || capture.realtimeFinished) break;
@@ -475,17 +534,20 @@ function attachChatStream(server) {
       }
       if (capture.realtimeText && capture.realtimeFinal && !looksIncompleteChatTranscript(capture.realtimeText)) {
         if (capture.interrupted) return;
+        capture.timings.asrReadyAt = Date.now();
         const transcriptPath = path.join(CHAT_STREAM_AUDIO_DIR, `${capture.id}.txt`);
         const transcriptJsonPath = path.join(CHAT_STREAM_AUDIO_DIR, `${capture.id}.realtime.json`);
         await fsp.writeFile(transcriptPath, `${capture.realtimeText}\n`, 'utf8');
         await fsp.writeFile(transcriptJsonPath, `${JSON.stringify(capture.realtimeLast || {}, null, 2)}\n`, 'utf8');
-        console.log(`[chat-stream] realtime asr ${capture.id}: ${capture.realtimeText.slice(0, 120)}`);
+        console.log(`[chat-stream] realtime asr ${capture.id} wait_after_uplink=${formatMs(elapsedMs(asrStartAt, capture.timings.asrReadyAt))} since_first_audio=${formatMs(elapsedMs(capture.timings.firstUplinkAt, capture.timings.asrReadyAt))}: ${capture.realtimeText.slice(0, 120)}`);
         await replyToStreamCapture(capture, ws, capture.realtimeText);
         return;
       }
-      console.warn(`[chat-stream] realtime asr fallback ${capture.id}: ${capture.realtimeFailed || (capture.realtimeText ? `incomplete: ${capture.realtimeText.slice(0, 80)}` : 'no realtime text')}`);
+      console.warn(`[chat-stream] realtime asr fallback ${capture.id} wait=${formatMs(elapsedMs(asrStartAt))}: ${capture.realtimeFailed || (capture.realtimeText ? `incomplete: ${capture.realtimeText.slice(0, 80)}` : 'no realtime text')}`);
     }
     const text = await transcribeStreamCapture(capture, ws);
+    capture.timings.asrReadyAt = Date.now();
+    console.log(`[chat-stream] file asr ready ${capture.id} duration=${formatMs(elapsedMs(asrStartAt, capture.timings.asrReadyAt))}`);
     await replyToStreamCapture(capture, ws, text);
   }
 
@@ -507,7 +569,7 @@ function attachChatStream(server) {
     const transcriptJsonPath = path.join(CHAT_STREAM_AUDIO_DIR, `${capture.id}.json`);
     await fsp.writeFile(transcriptPath, `${text}\n`, 'utf8');
     await fsp.writeFile(transcriptJsonPath, `${JSON.stringify(asr.transcription, null, 2)}\n`, 'utf8');
-    console.log(`[chat-stream] asr ${capture.id}: ${text.slice(0, 120)}`);
+    console.log(`[chat-stream] file asr ${capture.id}: ${text.slice(0, 120)}`);
     return text;
   }
 
@@ -524,6 +586,7 @@ function attachChatStream(server) {
       textLength: text.length
     });
     safeSendWsJson(ws, { type: 'reply_start', id: capture.id, stage: 'llm' });
+    capture.timings.llmStartAt = Date.now();
     let chatReply = {
       replyText: fallbackChatReplyText(text),
       command: null,
@@ -540,19 +603,32 @@ function attachChatStream(server) {
       const replyPath = path.join(CHAT_STREAM_AUDIO_DIR, `${capture.id}.reply.json`);
       await fsp.writeFile(replyPath, `${JSON.stringify(chatReply, null, 2)}\n`, 'utf8');
     } catch (err) {
-      console.error('[chat-stream] reply failed', capture.id, err);
-      chatReply = {
-        replyText: fallbackChatReplyText(text),
-        command: null,
-        provider: 'rules',
-        error: err.message
-      };
+      const modelError = providerStageError(err, 'DeepSeek', 'chat_reply');
+      console.error('[chat-stream] reply failed', capture.id, modelError.message);
+      safeSendWsJson(ws, { type: 'reply_error', id: capture.id, stage: 'llm', message: modelError.message });
+      await fsp.writeFile(chatJobPathForId(capture.id), `${JSON.stringify({
+        id: capture.id,
+        status: 'chat_reply_failed',
+        phase: 4,
+        deviceId: capture.deviceId,
+        recordingName: `${capture.id}.wav`,
+        userText: text,
+        lastError: modelError.message,
+        bytes: capture.bytes,
+        audioPath: path.relative(DATA_ROOT, capture.wavPath),
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString()
+      }, null, 2)}\n`, 'utf8').catch((saveErr) => {
+        console.error('[chat-stream] save failed chat job failed', capture.id, saveErr);
+      });
+      return;
     }
+    capture.timings.llmEndAt = Date.now();
     if (capture.interrupted) return;
     const replyText = String(chatReply.replyText || fallbackChatReplyText(text)).trim().slice(0, 160);
     const displayText = String(chatReply.displayText || replyText).trim().slice(0, 360);
     const speakText = String(chatReply.speakText || replyText).trim().slice(0, 160);
-    console.log(`[chat-stream] reply ${capture.id}: ${displayText.slice(0, 120)}`);
+    console.log(`[chat-stream] reply ${capture.id} provider=${chatReply.provider || 'rules'} llm=${formatMs(elapsedMs(capture.timings.llmStartAt, capture.timings.llmEndAt))}: ${displayText.slice(0, 120)}`);
     safeSendWsJson(ws, {
       type: 'reply_text',
       id: capture.id,
@@ -582,8 +658,12 @@ function attachChatStream(server) {
     if (CHAT_TTS_ENABLED && speakText && ws.readyState === 1) {
       try {
         if (capture.interrupted) return;
+        capture.timings.ttsStartAt = Date.now();
         safeSendWsJson(ws, { type: 'tts_start', id: capture.id });
-        await streamChatTtsAudio(ws, speakText, capture.id, () => capture.interrupted);
+        const ttsMetrics = await streamChatTtsAudio(ws, speakText, capture.id, () => capture.interrupted);
+        capture.timings.ttsEndAt = Date.now();
+        const firstAudioAt = ttsMetrics?.audioStartedAt || 0;
+        console.log(`[chat-stream] latency ${capture.id} wait_asr=${formatMs(elapsedMs(capture.timings.uplinkEndAt, capture.timings.asrReadyAt))} wait_reply_text=${formatMs(elapsedMs(capture.timings.uplinkEndAt, capture.timings.llmEndAt))} wait_first_audio=${formatMs(firstAudioAt ? elapsedMs(capture.timings.uplinkEndAt, firstAudioAt) : 0)} total_until_audio_end=${formatMs(elapsedMs(capture.timings.uplinkEndAt, capture.timings.ttsEndAt))} tts_first_audio=${formatMs(ttsMetrics?.firstAudioMs || 0)} tts_total=${formatMs(ttsMetrics?.totalMs || elapsedMs(capture.timings.ttsStartAt, capture.timings.ttsEndAt))} chunks=${ttsMetrics?.chunks || 0} bytes=${ttsMetrics?.bytes || 0}`);
       } catch (err) {
         console.error('[chat-stream] tts failed', capture.id, err);
         safeSendWsJson(ws, { type: 'tts_error', id: capture.id, message: err.message || 'tts failed' });
@@ -689,6 +769,9 @@ function attachChatStream(server) {
       if (isBinary) {
         if (!capture || capture.closed) return;
         const buf = Buffer.isBuffer(data) ? data : Buffer.from(data);
+        const nowMs = Date.now();
+        if (!capture.timings.firstUplinkAt) capture.timings.firstUplinkAt = nowMs;
+        capture.timings.lastUplinkAt = nowMs;
         capture.out.write(buf);
         capture.bytes += buf.length;
         capture.chunks += 1;
@@ -708,6 +791,7 @@ function attachChatStream(server) {
         capture = createStreamCapture(deviceId);
         capture.sessionSeq = sessionSeq;
         capture.realtime = createRealtimeAsrSession(ws, capture);
+        console.log(`[chat-stream] uplink_start ${capture.id} device=${deviceId} seq=${sessionSeq}`);
         ws.send(JSON.stringify({
           type: 'uplink_ready',
           id: capture.id,
@@ -717,6 +801,8 @@ function attachChatStream(server) {
         }));
       } else if (msg.type === 'interrupt') {
         markInterrupted();
+      } else if (msg.type === 'uplink_cancel') {
+        cancelStreamCapture(capture, ws, msg.reason || 'client_cancel');
       } else if (msg.type === 'uplink_end') {
         finishStreamCapture(capture, ws, 'client_end');
       }
@@ -1747,7 +1833,7 @@ function dashboardLabHtml() {
     function previewParamsFromForm() { return { gain: Number($('previewGain').value), rumbleHighpass: Number($('previewRumbleHighpass').value), lowpass: Number($('previewLowpass').value), highMix: Number($('previewHighMix').value), holdFrames: Number($('previewHold').value), scratchRmsMax: Number($('previewRms').value), scratchDiffMin: Number($('previewDiff').value), scratchRatio: Number($('previewRatio').value), frameSamples: Number($('previewFrame').value), noiseRmsMax: Number($('previewNoiseRms').value), noiseMix: Number($('previewNoiseMix').value) }; }
     function setAsrParams(params) { const p = { ...defaultAsrParams, ...(params || {}) }; $('asrGain').value = p.gain; $('asrHighpass').value = p.highpass; $('asrPreEmphasis').value = p.preEmphasis; $('asrNoiseGateRms').value = p.noiseGateRms; $('asrNoiseGateFloor').value = p.noiseGateFloor; $('asrCompressorThreshold').value = p.compressorThreshold; $('asrCompressorRatio').value = p.compressorRatio; $('asrTargetPeak').value = p.targetPeak; $('asrLimiter').value = p.limiter; $('asrFrameSamples').value = p.frameSamples; }
     function asrParamsFromForm() { return { gain: Number($('asrGain').value), highpass: Number($('asrHighpass').value), preEmphasis: Number($('asrPreEmphasis').value), noiseGateRms: Number($('asrNoiseGateRms').value), noiseGateFloor: Number($('asrNoiseGateFloor').value), compressorThreshold: Number($('asrCompressorThreshold').value), compressorRatio: Number($('asrCompressorRatio').value), targetPeak: Number($('asrTargetPeak').value), limiter: Number($('asrLimiter').value), frameSamples: Number($('asrFrameSamples').value) }; }
-    function setDeepSeekSettings(settings) { const s = { ...defaultDeepSeekSettings, ...(settings || {}) }; $('deepSeekEnabled').value = String(s.enabled !== false); $('deepSeekModel').value = s.model || ''; $('deepSeekTemperature').value = s.temperature; $('deepSeekMaxTokens').value = s.maxTokens; $('deepSeekTimeoutMs').value = s.timeoutMs; $('deepSeekMaxTranscriptChars').value = s.maxTranscriptChars; $('deepSeekThinkingDisabled').value = String(s.thinkingDisabled !== false); $('deepSeekFixedTerms').value = s.fixedTerms || ''; $('deepSeekSystemPrompt').value = s.systemPrompt || ''; $('deepSeekUserPrompt').value = s.userPrompt || ''; }
+    function setDeepSeekSettings(settings) { const s = { ...defaultDeepSeekSettings, ...(settings || {}) }; $('deepSeekEnabled').value = String(s.enabled !== false); $('deepSeekModel').value = s.model || ''; $('deepSeekTemperature').value = s.temperature; $('deepSeekMaxTokens').value = s.maxTokens; $('deepSeekTimeoutMs').value = s.timeoutMs; $('deepSeekMaxTranscriptChars').value = s.maxTranscriptChars; $('deepSeekThinkingDisabled').value = String(s.thinkingDisabled === true); $('deepSeekFixedTerms').value = s.fixedTerms || ''; $('deepSeekSystemPrompt').value = s.systemPrompt || ''; $('deepSeekUserPrompt').value = s.userPrompt || ''; }
     function deepSeekSettingsFromForm() { return { enabled: $('deepSeekEnabled').value === 'true', model: $('deepSeekModel').value, temperature: Number($('deepSeekTemperature').value), maxTokens: Number($('deepSeekMaxTokens').value), timeoutMs: Number($('deepSeekTimeoutMs').value), maxTranscriptChars: Number($('deepSeekMaxTranscriptChars').value), thinkingDisabled: $('deepSeekThinkingDisabled').value === 'true', fixedTerms: $('deepSeekFixedTerms').value, systemPrompt: $('deepSeekSystemPrompt').value, userPrompt: $('deepSeekUserPrompt').value }; }
     async function loadDeepSeekSettings() { const uploadToken = token(); if (!uploadToken) { setDeepSeekSettings(defaultDeepSeekSettings); $('deepSeekStatus').textContent = '输入 token 后读取。'; return; } $('deepSeekStatus').textContent = '正在读取设置...'; try { const res = await fetch('/api/deepseek-settings', { headers: { 'X-Upload-Token': uploadToken } }); const data = await res.json(); if (!res.ok) throw new Error(data.error || 'HTTP ' + res.status); setDeepSeekSettings(data.settings); $('deepSeekStatus').textContent = '已读取 ' + fmtTime(data.time); } catch (error) { $('deepSeekStatus').textContent = error.message === 'invalid upload token' ? 'token 不正确' : error.message; } }
     async function saveDeepSeekSettings() { const uploadToken = token(); if (!uploadToken) { $('deepSeekStatus').textContent = '先输入 token。'; return false; } $('deepSeekStatus').textContent = '正在保存设置...'; try { const res = await fetch('/api/deepseek-settings', { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Upload-Token': uploadToken }, body: JSON.stringify({ settings: deepSeekSettingsFromForm() }) }); const data = await res.json(); if (!res.ok) throw new Error(data.error || 'HTTP ' + res.status); setDeepSeekSettings(data.settings); $('deepSeekStatus').textContent = '已保存 ' + fmtTime(data.time); return true; } catch (error) { $('deepSeekStatus').textContent = error.message === 'invalid upload token' ? 'token 不正确' : error.message; return false; } }
@@ -2793,6 +2879,35 @@ async function fetchJson(url, options) {
   return payload;
 }
 
+function normalizeProviderError(error, provider) {
+  const rawMessage = String(error?.message || error || '').trim();
+  const payload = error?.payload || {};
+  const payloadText = (() => {
+    try {
+      return JSON.stringify(payload);
+    } catch {
+      return '';
+    }
+  })();
+  const combined = `${rawMessage}\n${payloadText}`;
+  const providerName = provider || 'model provider';
+  if (/(insufficient|balance|recharge|arrears|billing|payment|quota|credit|credits|402|429|欠费|余额|额度|充值|账单|付费|限额)/i.test(combined)) {
+    return `${providerName} service unavailable: insufficient balance, billing issue, or quota exhausted`;
+  }
+  if (/unauthorized|invalid api key|forbidden|401|403|鉴权|认证|权限|密钥|api.?key/i.test(combined)) {
+    return `${providerName} service unavailable: authentication failed`;
+  }
+  return rawMessage ? `${providerName} service failed: ${rawMessage}` : `${providerName} service failed`;
+}
+
+function providerStageError(error, provider, stage) {
+  const wrapped = new Error(normalizeProviderError(error, provider));
+  wrapped.cause = error;
+  wrapped.stage = stage;
+  wrapped.provider = provider;
+  return wrapped;
+}
+
 async function submitDashScopeTask(audioUrl, options = {}) {
   const speakerCount = normalizeSpeakerCount(options.speakerCount);
 
@@ -2944,13 +3059,22 @@ function normalizeTranscriptText(text) {
 
 function applyCommonTranscriptRepairs(text) {
   return String(text || '')
+    .replace(/(?:这些){3,}/g, '这些')
+    .replace(/(?:然后){3,}/g, '然后')
+    .replace(/(?:这个){3,}/g, '这个')
+    .replace(/(?:那个){3,}/g, '那个')
     .replace(/不需要考[得的]那么/g, '不需要考虑得那么')
     .replace(/不需要考[得的]/g, '不需要考虑得')
     .replace(/去当多少职人/g, '去担多少责任')
     .replace(/担多少职人/g, '担多少责任')
     .replace(/这个dear/gi, '这个 idea')
     .replace(/舒适最舒适的idea/gi, '舒服的 idea')
-    .replace(/前端后段/g, '前端后端');
+    .replace(/前端后段/g, '前端后端')
+    .replace(/苹果\s*log/gi, 'Apple Log')
+    .replace(/apple\s*log/gi, 'Apple Log')
+    .replace(/拍\s*[烙唠]/g, '拍 Log')
+    .replace(/拍\s*lock/gi, '拍 Log')
+    .replace(/lock\s*素材/gi, 'Log 素材');
 }
 
 function ensureReadableParagraphs(text) {
@@ -3267,7 +3391,7 @@ function normalizeDeepSeekSettings(input = {}) {
     maxTokens: Math.round(clampNumber(raw.maxTokens, defaults.maxTokens, 512, 16000)),
     timeoutMs: Math.round(clampNumber(raw.timeoutMs, defaults.timeoutMs, 5000, 180000)),
     maxTranscriptChars: Math.round(clampNumber(raw.maxTranscriptChars, defaults.maxTranscriptChars, 1000, 100000)),
-    thinkingDisabled: raw.thinkingDisabled !== false,
+    thinkingDisabled: raw.thinkingDisabled === true,
     fixedTerms: String(raw.fixedTerms ?? defaults.fixedTerms).slice(0, 4000),
     systemPrompt: String(raw.systemPrompt || defaults.systemPrompt).slice(0, 12000),
     userPrompt: String(raw.userPrompt || defaults.userPrompt).slice(0, 12000)
@@ -3457,6 +3581,74 @@ function makeRuleChatReply(text) {
   };
 }
 
+function getChatTtsVoice() {
+  return currentChatTtsVoice || DEFAULT_DASH_SCOPE_TTS_VOICE;
+}
+
+async function loadChatTtsSettings() {
+  const raw = await fsp.readFile(CHAT_TTS_SETTINGS_PATH, 'utf8').catch(() => '');
+  if (!raw) return;
+  try {
+    const parsed = JSON.parse(raw);
+    const voice = String(parsed.voice || '').trim();
+    if (voice) currentChatTtsVoice = voice;
+  } catch (error) {
+    console.warn('[chat-tts] failed to read settings', error.message);
+  }
+}
+
+async function saveChatTtsSettings() {
+  const payload = {
+    provider: 'dashscope',
+    model: DASH_SCOPE_TTS_MODEL,
+    voice: getChatTtsVoice(),
+    updatedAt: new Date().toISOString()
+  };
+  await fsp.mkdir(path.dirname(CHAT_TTS_SETTINGS_PATH), { recursive: true });
+  await fsp.writeFile(CHAT_TTS_SETTINGS_PATH, `${JSON.stringify(payload, null, 2)}\n`, 'utf8');
+}
+
+async function setChatTtsVoice(voice) {
+  const nextVoice = String(voice || '').trim();
+  if (!nextVoice) return;
+  currentChatTtsVoice = nextVoice;
+  await saveChatTtsSettings();
+  console.log(`[chat-tts] voice switched to ${nextVoice}`);
+}
+
+async function tryChatTtsVoiceSwitch(userText) {
+  const source = String(userText || '').trim();
+  if (!source) return null;
+  if (/(切换|切換|换成|換成|切到|改成|变成|變成|用|说|講|讲).{0,8}(粤语|粵語|广东话|廣東話|Cantonese)/iu.test(source) ||
+      /(粤语|粵語|广东话|廣東話|Cantonese).{0,8}(模式|音色|声音|聲音|回复|回覆|说话|講嘢|讲话)/iu.test(source)) {
+    await setChatTtsVoice('longanyue_v3');
+    return makeRuleChatReply('已切换成粤语男声。你可以用粤语同我讲嘢。');
+  }
+  if (/(切换|切換|换成|換成|切到|改成|变成|變成|用|说|講|讲).{0,10}(女声|女聲|女生|女人声|女人聲|龙安雅|龍安雅|longanya)/iu.test(source) ||
+      /(女声|女聲|女生|女人声|女人聲|龙安雅|龍安雅|longanya).{0,10}(模式|音色|声音|聲音|回复|回覆|说话|讲话)/iu.test(source)) {
+    await setChatTtsVoice('longanya_v3');
+    return makeRuleChatReply('已切换成龙安雅女声。');
+  }
+  if (/(切换|切換|换成|換成|切到|改成|变成|變成|用|说|講|讲).{0,10}(男声|男聲|男生|男人声|男人聲|龙安洋|龍安洋|longanyang)/iu.test(source) ||
+      /(男声|男聲|男生|男人声|男人聲|龙安洋|龍安洋|longanyang).{0,10}(模式|音色|声音|聲音|回复|回覆|说话|讲话)/iu.test(source)) {
+    await setChatTtsVoice('longanyang');
+    return makeRuleChatReply('已切换成龙安洋男声。');
+  }
+  if (/(切回|切换|切換|换回|換回|换成|換成|切到|改成|变成|變成|用|说|講|讲).{0,8}(普通话|普通話|国语|國語|Mandarin)/iu.test(source) ||
+      /(普通话|普通話|国语|國語|Mandarin).{0,8}(模式|音色|声音|聲音|回复|回覆|说话|讲话)/iu.test(source)) {
+    await setChatTtsVoice(DEFAULT_DASH_SCOPE_TTS_VOICE);
+    return makeRuleChatReply('已切换回普通话音色。');
+  }
+  return null;
+}
+
+function isReminderRequest(text) {
+  const source = String(text || '').trim();
+  if (!source) return false;
+  return /(提醒我|叫我|到点|定个闹钟|闹钟|分钟后|小时后|半小时后|一会儿|待会儿|稍后|明天|今晚|晚上|早上|中午|下午).{0,30}(提醒|叫我|洗澡|吃饭|充电|喝水|出门|睡觉|开会|联系|发送|检查|处理|记得)?/u.test(source) ||
+    /(提醒|叫我).{0,30}(分钟后|小时后|半小时后|一会儿|待会儿|稍后|明天|今晚|晚上|早上|中午|下午|到点)/u.test(source);
+}
+
 function parseSmallChineseNumber(text) {
   const source = String(text || '').trim();
   if (/^\d+$/.test(source)) return Number(source);
@@ -3476,6 +3668,10 @@ function tryFastChatReply(userText) {
   const source = String(userText || '').trim();
   if (!source) return null;
   const compact = source.replace(/\s+/g, '');
+
+  if (isReminderRequest(source)) {
+    return makeRuleChatReply('我能记下这句话，但现在还不能到点自动提醒；真正提醒功能还没做完。');
+  }
 
   if (/(机票|機票|票价|票價|航班|飞机票|飛機票).{0,16}(多少钱|多少錢|价格|價格|大概|今天|查一下|查询|查詢)/u.test(source) ||
       /(多少钱|多少錢|价格|價格).{0,16}(机票|機票|票价|票價|航班|飞机票|飛機票)/u.test(source)) {
@@ -3700,6 +3896,11 @@ async function replyToChatWithDeepSeek(userText, job) {
       provider: 'rules'
     };
   }
+  if (isReminderRequest(source)) {
+    return makeRuleChatReply('我能记下这句话，但现在还不能到点自动提醒；真正提醒功能还没做完。');
+  }
+  const voiceSwitchReply = await tryChatTtsVoiceSwitch(source);
+  if (voiceSwitchReply) return voiceSwitchReply;
   const artReply = asciiArtChatReply(source, job?.chatContext);
   if (artReply) return artReply;
   const fastReply = tryEssentialChatReply(source);
@@ -3770,7 +3971,8 @@ async function replyToChatWithDeepSeek(userText, job) {
           'Do not merely repeat what the user said unless you are confirming a command.',
           'Use recent context. If the user says "change it", "another one", "too ugly", "continue", or a short follow-up, infer the referenced object from recent turns and act instead of asking a generic question.',
           'When a reasonable action is obvious, do it. Ask clarification only when the missing object truly blocks the answer.',
-          'If the user asks for ASCII art, put the art in displayText and put only a short spoken confirmation in speakText.'
+          'If the user asks for ASCII art, put the art in displayText and put only a short spoken confirmation in speakText.',
+          'Reminder capability rule: the device cannot yet wake itself at a scheduled time or ring for reminders. If the user asks for a reminder, say you can note the sentence but cannot automatically remind at the time yet. Never promise screen or speaker reminders until the reminder system is implemented.'
         ].join('\n')
       }
     ],
@@ -3928,7 +4130,7 @@ async function synthesizeChatReplyWav(text, id) {
           model: DASH_SCOPE_TTS_MODEL,
           parameters: {
             text_type: 'PlainText',
-            voice: DASH_SCOPE_TTS_VOICE,
+            voice: getChatTtsVoice(),
             format: 'pcm',
             sample_rate: sampleRate,
             volume: 60,
@@ -4000,7 +4202,7 @@ async function synthesizeChatReplyWav(text, id) {
     sampleRate,
     provider: 'dashscope',
     model: DASH_SCOPE_TTS_MODEL,
-    voice: DASH_SCOPE_TTS_VOICE
+    voice: getChatTtsVoice()
   };
 }
 
@@ -4035,8 +4237,8 @@ async function sendChatTtsAudio(ws, tts, shouldStop = () => false) {
   const pcm = resamplePcm16Mono(sourcePcm, wav.sampleRate, sampleRate);
   const chunkBytes = 512 * 2;
   const chunkSamples = 512;
-  const prerollSamples = 20000;
-  const pacedDelayMs = 32;
+  const prerollSamples = 24000;
+  const pacedDelayMs = 30;
   let chunks = 0;
   console.log(`[chat-stream] tts audio_start ${tts.audioPath}: ${pcm.length} bytes ${sampleRate}Hz`);
   safeSendWsJson(ws, {
@@ -4068,14 +4270,17 @@ async function streamChatTtsAudio(clientWs, text, id, shouldStop = () => false) 
   const source = String(text || '').trim().slice(0, 220);
   if (!CHAT_TTS_ENABLED || !source || !DASHSCOPE_API_KEY || clientWs.readyState !== 1) return;
   const WebSocket = require('ws');
+  const ttsStartedAt = Date.now();
   const taskId = crypto.randomUUID().replace(/-/g, '');
   const sampleRate = 16000;
   const chunkBytes = 512 * 2;
   const chunkSamples = 512;
-  const prerollSamples = 20000;
-  const pacedDelayMs = 32;
+  const prerollSamples = 24000;
+  const pacedDelayMs = 30;
   let pending = Buffer.alloc(0);
   let audioStarted = false;
+  let audioStartedAt = 0;
+  let firstBinaryAt = 0;
   let chunks = 0;
   let bytes = 0;
   let sendChain = Promise.resolve();
@@ -4083,7 +4288,8 @@ async function streamChatTtsAudio(clientWs, text, id, shouldStop = () => false) 
   const sendAudioStart = () => {
     if (audioStarted || clientWs.readyState !== 1 || shouldStop()) return;
     audioStarted = true;
-    console.log(`[chat-stream] tts stream audio_start ${id}: ${sampleRate}Hz`);
+    audioStartedAt = Date.now();
+    console.log(`[chat-stream] tts stream audio_start ${id} first_audio=${formatMs(elapsedMs(ttsStartedAt, audioStartedAt))} first_binary=${formatMs(elapsedMs(ttsStartedAt, firstBinaryAt))}: ${sampleRate}Hz`);
     safeSendWsJson(clientWs, {
       type: 'audio_start',
       codec: 'pcm_s16le',
@@ -4111,7 +4317,7 @@ async function streamChatTtsAudio(clientWs, text, id, shouldStop = () => false) 
     }
   };
 
-  await new Promise((resolve, reject) => {
+  const metrics = await new Promise((resolve, reject) => {
     const ttsWs = new WebSocket(DASH_SCOPE_TTS_WS_URL, {
       headers: {
         Authorization: `bearer ${DASHSCOPE_API_KEY}`,
@@ -4140,7 +4346,7 @@ async function streamChatTtsAudio(clientWs, text, id, shouldStop = () => false) 
           model: DASH_SCOPE_TTS_MODEL,
           parameters: {
             text_type: 'PlainText',
-            voice: DASH_SCOPE_TTS_VOICE,
+            voice: getChatTtsVoice(),
             format: 'pcm',
             sample_rate: sampleRate,
             volume: 60,
@@ -4158,6 +4364,7 @@ async function streamChatTtsAudio(clientWs, text, id, shouldStop = () => false) 
         return;
       }
       if (isBinary) {
+        if (!firstBinaryAt) firstBinaryAt = Date.now();
         pending = pending.length ? Buffer.concat([pending, Buffer.from(data)]) : Buffer.from(data);
         sendChain = sendChain.then(() => flushPending(false)).catch(fail);
         return;
@@ -4198,10 +4405,18 @@ async function streamChatTtsAudio(clientWs, text, id, shouldStop = () => false) 
             if (!shouldStop()) {
               if (!audioStarted) sendAudioStart();
               safeSendWsJson(clientWs, { type: 'audio_end', phase: 5, source: 'tts', chunks, bytes });
-              console.log(`[chat-stream] tts stream audio_end ${id}: ${chunks} chunks ${bytes} bytes`);
+              console.log(`[chat-stream] tts stream audio_end ${id} total=${formatMs(elapsedMs(ttsStartedAt))}: ${chunks} chunks ${bytes} bytes`);
             }
             try { ttsWs.close(); } catch {}
-            resolve();
+            resolve({
+              chunks,
+              bytes,
+              audioStartedAt,
+              firstBinaryAt,
+              firstAudioMs: elapsedMs(ttsStartedAt, audioStartedAt || Date.now()),
+              firstBinaryMs: elapsedMs(ttsStartedAt, firstBinaryAt || Date.now()),
+              totalMs: elapsedMs(ttsStartedAt)
+            });
           })
           .catch(fail);
       } else if (event === 'task-failed' || event === 'error') {
@@ -4211,6 +4426,7 @@ async function streamChatTtsAudio(clientWs, text, id, shouldStop = () => false) 
     ttsWs.on('error', fail);
     ttsWs.on('close', () => {});
   });
+  return metrics;
 }
 
 function splitLongSentence(sentence, maxLength) {
@@ -4272,13 +4488,43 @@ function makeTranscriptSummary(sentences) {
 
   const useful = sentences
     .map(stripSentenceEnd)
-    .filter((sentence) => sentence.length >= 8);
-  const picked = useful.slice(0, 3);
+    .filter((sentence) => sentence.length >= 8)
+    .filter((sentence) => !isLowValueSummarySentence(sentence));
+  const picked = pickSummarySentences(useful);
   if (!picked.length) return useful[0] || stripSentenceEnd(sentences[0]);
 
   return picked
     .map((sentence) => `- ${sentence}`)
     .join('\n');
+}
+
+function isLowValueSummarySentence(sentence) {
+  const value = String(sentence || '').trim();
+  if (!value) return true;
+  if (/(这些这些|然后然后|这个这个|那个那个|啊这|嗯|呃|额)/.test(value)) return true;
+  if (value.length < 14 && /^(好|对|然后|那|这个|就是|所以)/.test(value)) return true;
+  if (/[为什吗啊呢有几]$/.test(value) && value.length < 30) return true;
+  return false;
+}
+
+function scoreSummarySentence(sentence, index) {
+  const value = String(sentence || '');
+  let score = Math.min(value.length, 90) / 10;
+  if (/(核心|重点|结论|未来|课程|单元|价格|定价|调色|拍摄|视频|作品|手机|iPhone|Apple Log|Log|赠送|参与|链接)/i.test(value)) score += 8;
+  if (/(首先|其次|最后|主要|分为|因为|所以|但是|而如今|只要|如果)/.test(value)) score += 3;
+  if (/[？?]$/.test(value)) score -= 3;
+  if (index < 2) score -= 1;
+  return score;
+}
+
+function pickSummarySentences(sentences) {
+  const ranked = sentences
+    .map((sentence, index) => ({ sentence, index, score: scoreSummarySentence(sentence, index) }))
+    .sort((a, b) => b.score - a.score || a.index - b.index)
+    .slice(0, 3)
+    .sort((a, b) => a.index - b.index)
+    .map((item) => item.sentence);
+  return [...new Set(ranked)];
 }
 
 function makeMemoTitle(sentences, job) {
@@ -4353,7 +4599,9 @@ async function buildMemoSections(text, job) {
         };
       }
     } catch (error) {
-      console.error(`DeepSeek polish failed for ${job.id || 'unknown'}: ${error.message}`);
+      const modelError = providerStageError(error, 'DeepSeek', 'deepseek');
+      console.error(`DeepSeek polish failed for ${job.id || 'unknown'}: ${modelError.message}`);
+      throw modelError;
     }
   }
 
@@ -4615,9 +4863,17 @@ async function processJob(id) {
   } catch (error) {
     const job = await readJob(id).catch(() => null);
     if (job) {
-      job.status = job.status === 'transcribing' ? 'transcribe_failed' : 'flomo_failed';
+      job.status = error.stage === 'deepseek'
+        ? 'deepseek_failed'
+        : (job.status === 'transcribing' ? 'transcribe_failed' : 'flomo_failed');
       job.lastError = error.message;
       await writeJob(job).catch(() => {});
+      updateDeviceStatus(job.deviceId || 'unknown', {
+        lastStatus: job.status,
+        lastRecordingName: job.recordingName,
+        lastJobId: job.id,
+        lastError: job.lastError
+      });
     }
     console.error(`Job ${id} failed: ${error.message}`);
   } finally {
@@ -4948,13 +5204,33 @@ async function handleChatUpload(req, res) {
         await fsp.writeFile(deepSeekPath, `${JSON.stringify(chatReply, null, 2)}\n`, 'utf8');
         job.chatDeepSeekPath = path.relative(DATA_ROOT, deepSeekPath);
       } catch (error) {
-        chatReply = {
-          replyText: fallbackChatReplyText(userText),
-          command: null,
-          provider: 'rules',
-          error: error.message
-        };
-        job.chatReplyError = error.message;
+        const modelError = providerStageError(error, 'DeepSeek', 'chat_reply');
+        Object.assign(job, {
+          status: 'chat_reply_failed',
+          phase: 3,
+          transcriptPath: path.relative(DATA_ROOT, transcriptPath),
+          transcriptJsonPath: path.relative(DATA_ROOT, transcriptJsonPath),
+          userText,
+          chatReplyError: modelError.message,
+          lastError: modelError.message,
+          dashScope: {
+            taskId: asr.taskId,
+            model: DASHSCOPE_MODEL,
+            disfluencyRemoval: DASHSCOPE_DISFLUENCY_REMOVAL,
+            usage: asr.output.usage,
+            taskMetrics: asr.output.task_metrics
+          },
+          updatedAt: new Date().toISOString()
+        });
+        await fsp.writeFile(jobPath, `${JSON.stringify(job, null, 2)}\n`, 'utf8');
+        sendJson(res, 502, {
+          ok: false,
+          id,
+          status: job.status,
+          userText,
+          error: modelError.message
+        });
+        return;
       }
     }
     const replyText = String(chatReply.replyText || fallbackChatReplyText(userText)).slice(0, 160);
@@ -6792,6 +7068,7 @@ async function runChatReplyProbe() {
 
 async function main() {
   await ensureRuntimeDirs();
+  await loadChatTtsSettings();
 
   if (/^(1|true|yes)$/i.test(process.env.CHAT_REPLY_PROBE || '')) {
     await runChatReplyProbe();

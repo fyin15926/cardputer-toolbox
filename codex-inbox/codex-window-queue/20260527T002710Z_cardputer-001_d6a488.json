@@ -1,0 +1,10 @@
+﻿{
+    "id":  "20260527T002710Z_cardputer-001_d6a488",
+    "time":  "2026-05-27T00:27:21.839Z",
+    "intent":  "chat",
+    "mode":  "Queue",
+    "status":  "queued",
+    "text":  "12345上三打老虎。",
+    "promptPath":  "codex-inbox/codex-window-prompt.txt",
+    "createdAt":  "2026-05-27T00:27:24.9823658Z"
+}

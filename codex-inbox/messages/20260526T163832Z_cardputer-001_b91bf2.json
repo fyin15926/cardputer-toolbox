@@ -1,0 +1,27 @@
+﻿{
+    "id":  "20260526T163832Z_cardputer-001_b91bf2",
+    "time":  "2026-05-26T16:38:40.924Z",
+    "deviceId":  "cardputer-001",
+    "text":  "你说你是哪家的大模型？",
+    "intent":  "chat",
+    "requiresConfirmation":  false,
+    "reason":  "plain chat message",
+    "source":  "cardputer-chat",
+    "createdAt":  "2026-05-26T16:38:40.7745313Z",
+    "job":  {
+                "id":  "20260526T163832Z_cardputer-001_b91bf2",
+                "status":  "done",
+                "deviceId":  "cardputer-001",
+                "recordingName":  "20260526T163832Z_cardputer-001_b91bf2.wav",
+                "userText":  "你说你是哪家的大模型？",
+                "replyText":  "我是小机子，基于开源大模型本地运行，具体信息请参考项目文档。",
+                "replyMode":  "chat-reply",
+                "command":  null,
+                "pendingReason":  "",
+                "lastError":  "",
+                "createdAt":  "2026-05-26T16:38:40.924Z",
+                "updatedAt":  "2026-05-26T16:38:40.924Z",
+                "bytes":  147456,
+                "audioPath":  "chat-stream-audio/20260526T163832Z_cardputer-001_b91bf2.wav"
+            }
+}

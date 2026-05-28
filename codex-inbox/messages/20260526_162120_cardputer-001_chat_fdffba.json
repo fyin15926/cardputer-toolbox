@@ -1,0 +1,27 @@
+﻿{
+    "id":  "20260526_162120_cardputer-001_chat_fdffba",
+    "time":  "2026-05-26T08:21:08.061Z",
+    "deviceId":  "cardputer-001",
+    "text":  "测试测试，现在是14点21分。",
+    "intent":  "chat",
+    "requiresConfirmation":  false,
+    "reason":  "plain chat message",
+    "source":  "cardputer-chat",
+    "createdAt":  "2026-05-26T08:25:50.4219281Z",
+    "job":  {
+                "id":  "20260526_162120_cardputer-001_chat_fdffba",
+                "status":  "done",
+                "deviceId":  "cardputer-001",
+                "recordingName":  "20260526_162120_cardputer-001_chat_fdffba.wav",
+                "userText":  "测试测试，现在是14点21分。",
+                "replyText":  "我听到了：测试测试，现在是14点21分。",
+                "replyMode":  "asr-only",
+                "command":  null,
+                "pendingReason":  "",
+                "lastError":  "",
+                "createdAt":  "2026-05-26T08:21:04.866Z",
+                "updatedAt":  "2026-05-26T08:21:08.061Z",
+                "bytes":  109100,
+                "audioPath":  "chat-audio/20260526_162120_cardputer-001_chat_fdffba.wav"
+            }
+}

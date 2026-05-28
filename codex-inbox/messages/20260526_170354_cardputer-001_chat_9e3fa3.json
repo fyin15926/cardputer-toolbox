@@ -1,0 +1,27 @@
+﻿{
+    "id":  "20260526_170354_cardputer-001_chat_9e3fa3",
+    "time":  "2026-05-26T09:03:31.355Z",
+    "deviceId":  "cardputer-001",
+    "text":  "这是一句通过小机器发送的话。",
+    "intent":  "chat",
+    "requiresConfirmation":  false,
+    "reason":  "plain chat message",
+    "source":  "cardputer-chat",
+    "createdAt":  "2026-05-26T09:03:30.8035251Z",
+    "job":  {
+                "id":  "20260526_170354_cardputer-001_chat_9e3fa3",
+                "status":  "done",
+                "deviceId":  "cardputer-001",
+                "recordingName":  "20260526_170354_cardputer-001_chat_9e3fa3.wav",
+                "userText":  "这是一句通过小机器发送的话。",
+                "replyText":  "我听到了：这是一句通过小机器发送的话。",
+                "replyMode":  "asr-only",
+                "command":  null,
+                "pendingReason":  "",
+                "lastError":  "",
+                "createdAt":  "2026-05-26T09:03:27.577Z",
+                "updatedAt":  "2026-05-26T09:03:31.355Z",
+                "bytes":  162348,
+                "audioPath":  "chat-audio/20260526_170354_cardputer-001_chat_9e3fa3.wav"
+            }
+}

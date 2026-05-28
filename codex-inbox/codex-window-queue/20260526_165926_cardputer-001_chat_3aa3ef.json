@@ -1,0 +1,10 @@
+﻿{
+    "id":  "20260526_165926_cardputer-001_chat_3aa3ef",
+    "time":  "2026-05-26T08:59:05.441Z",
+    "intent":  "command",
+    "mode":  "Queue",
+    "status":  "queued",
+    "text":  "发送给Codex继续做这个项目。",
+    "promptPath":  "codex-inbox/codex-window-prompt.txt",
+    "createdAt":  "2026-05-26T09:01:59.6503145Z"
+}

@@ -1,0 +1,10 @@
+﻿{
+    "id":  "20260526T163402Z_cardputer-001_fbbe4c",
+    "time":  "2026-05-26T16:34:11.143Z",
+    "intent":  "chat",
+    "mode":  "Queue",
+    "status":  "queued",
+    "text":  "你用的哪家的大模型？",
+    "promptPath":  "codex-inbox/codex-window-prompt.txt",
+    "createdAt":  "2026-05-26T16:34:11.5852547Z"
+}

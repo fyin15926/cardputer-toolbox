@@ -1,5 +1,7 @@
 # Arduino build files
 build/
+build_check/
+build_backups/
 *.o
 *.a
 *.elf

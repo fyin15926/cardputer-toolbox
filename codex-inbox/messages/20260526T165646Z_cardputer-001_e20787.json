@@ -1,0 +1,27 @@
+﻿{
+    "id":  "20260526T165646Z_cardputer-001_e20787",
+    "time":  "2026-05-26T16:56:52.046Z",
+    "deviceId":  "cardputer-001",
+    "text":  "介绍一下你自己。3",
+    "intent":  "chat",
+    "requiresConfirmation":  false,
+    "reason":  "plain chat message",
+    "source":  "cardputer-chat",
+    "createdAt":  "2026-05-26T16:56:52.1321413Z",
+    "job":  {
+                "id":  "20260526T165646Z_cardputer-001_e20787",
+                "status":  "done",
+                "deviceId":  "cardputer-001",
+                "recordingName":  "20260526T165646Z_cardputer-001_e20787.wav",
+                "userText":  "介绍一下你自己。3",
+                "replyText":  "我是小机子，外号大聪明。运行在M5Stack Cardputer上的机仆式逻辑助手。",
+                "replyMode":  "chat-reply",
+                "command":  null,
+                "pendingReason":  "",
+                "lastError":  "",
+                "createdAt":  "2026-05-26T16:56:52.046Z",
+                "updatedAt":  "2026-05-26T16:56:52.046Z",
+                "bytes":  124416,
+                "audioPath":  "chat-stream-audio/20260526T165646Z_cardputer-001_e20787.wav"
+            }
+}

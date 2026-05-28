@@ -1,0 +1,10 @@
+﻿{
+    "id":  "20260526T170156Z_cardputer-001_226fc5",
+    "time":  "2026-05-26T17:02:07.965Z",
+    "intent":  "chat",
+    "mode":  "Queue",
+    "status":  "queued",
+    "text":  "Names有一给我念一篇",
+    "promptPath":  "codex-inbox/codex-window-prompt.txt",
+    "createdAt":  "2026-05-26T17:02:08.8618740Z"
+}

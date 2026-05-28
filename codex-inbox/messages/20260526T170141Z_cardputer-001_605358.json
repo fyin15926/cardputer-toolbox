@@ -1,0 +1,27 @@
+﻿{
+    "id":  "20260526T170141Z_cardputer-001_605358",
+    "time":  "2026-05-26T17:01:48.637Z",
+    "deviceId":  "cardputer-001",
+    "text":  "这叫王点。要首",
+    "intent":  "chat",
+    "requiresConfirmation":  false,
+    "reason":  "plain chat message",
+    "source":  "cardputer-chat",
+    "createdAt":  "2026-05-26T17:01:48.2795139Z",
+    "job":  {
+                "id":  "20260526T170141Z_cardputer-001_605358",
+                "status":  "done",
+                "deviceId":  "cardputer-001",
+                "recordingName":  "20260526T170141Z_cardputer-001_605358.wav",
+                "userText":  "这叫王点。要首",
+                "replyText":  "{\"replyText\": \"没听清。你是要一首叫《王点》的诗吗？还是打",
+                "replyMode":  "chat-reply",
+                "command":  null,
+                "pendingReason":  "",
+                "lastError":  "",
+                "createdAt":  "2026-05-26T17:01:48.637Z",
+                "updatedAt":  "2026-05-26T17:01:48.637Z",
+                "bytes":  132096,
+                "audioPath":  "chat-stream-audio/20260526T170141Z_cardputer-001_605358.wav"
+            }
+}

@@ -1,0 +1,10 @@
+﻿{
+    "id":  "20260526_174455_cardputer-001_chat_56e8c7",
+    "time":  "2026-05-26T09:45:02.363Z",
+    "intent":  "chat",
+    "mode":  "Queue",
+    "status":  "queued",
+    "text":  "你能听见我说话吗？",
+    "promptPath":  "codex-inbox/codex-window-prompt.txt",
+    "createdAt":  "2026-05-26T09:45:05.3070229Z"
+}

@@ -1,0 +1,27 @@
+﻿{
+    "id":  "20260527T001903Z_cardputer-001_56b3e4",
+    "time":  "2026-05-27T00:19:07.108Z",
+    "deviceId":  "cardputer-001",
+    "text":  "像",
+    "intent":  "chat",
+    "requiresConfirmation":  false,
+    "reason":  "plain chat message",
+    "source":  "cardputer-chat",
+    "createdAt":  "2026-05-27T00:19:07.6033498Z",
+    "job":  {
+                "id":  "20260527T001903Z_cardputer-001_56b3e4",
+                "status":  "done",
+                "deviceId":  "cardputer-001",
+                "recordingName":  "20260527T001903Z_cardputer-001_56b3e4.wav",
+                "userText":  "像",
+                "replyText":  "像什么？请说清楚。",
+                "replyMode":  "chat-reply",
+                "command":  null,
+                "pendingReason":  "",
+                "lastError":  "",
+                "createdAt":  "2026-05-27T00:19:07.108Z",
+                "updatedAt":  "2026-05-27T00:19:07.108Z",
+                "bytes":  59904,
+                "audioPath":  "chat-stream-audio/20260527T001903Z_cardputer-001_56b3e4.wav"
+            }
+}

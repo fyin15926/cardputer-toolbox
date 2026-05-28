@@ -1,0 +1,35 @@
+{
+  "id": "20260526_153236_cardputer-001_chat_e13e62",
+  "type": "chat",
+  "status": "done",
+  "phase": 4,
+  "deviceId": "cardputer-001",
+  "recordingName": "20260526_153236_cardputer-001_chat_e13e62.wav",
+  "sourceRecordingName": "CHAT_LAST.wav",
+  "recordedAt": "2026-05-26 15:32:36",
+  "uploadEncoding": "wav",
+  "createdAt": "2026-05-26T07:32:38.150Z",
+  "updatedAt": "2026-05-26T07:32:42.034Z",
+  "bytes": 159788,
+  "uploadedBytes": 159788,
+  "originalBytes": 159788,
+  "compressionRatio": 1,
+  "audioPath": "chat-audio/20260526_153236_cardputer-001_chat_e13e62.wav",
+  "audioUrl": "http://cardputer.flye.cc/chat-audio/20260526_153236_cardputer-001_chat_e13e62.wav?token=***",
+  "transcriptPath": "chat-transcripts/20260526_153236_cardputer-001_chat_e13e62.txt",
+  "transcriptJsonPath": "chat-transcripts/20260526_153236_cardputer-001_chat_e13e62.json",
+  "userText": "现在是15点32分测试测试。",
+  "replyText": "我听到了：现在是15点32分测试测试。",
+  "replyMode": "asr-only",
+  "command": null,
+  "dashScope": {
+    "taskId": "4bbbd3ca-b539-4944-ba46-88703612e1a7",
+    "model": "paraformer-v2",
+    "disfluencyRemoval": false,
+    "taskMetrics": {
+      "TOTAL": 1,
+      "SUCCEEDED": 1,
+      "FAILED": 0
+    }
+  }
+}

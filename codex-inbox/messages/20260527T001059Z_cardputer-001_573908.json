@@ -1,0 +1,27 @@
+﻿{
+    "id":  "20260527T001059Z_cardputer-001_573908",
+    "time":  "2026-05-27T00:11:05.175Z",
+    "deviceId":  "cardputer-001",
+    "text":  "你知道现在几？",
+    "intent":  "chat",
+    "requiresConfirmation":  false,
+    "reason":  "plain chat message",
+    "source":  "cardputer-chat",
+    "createdAt":  "2026-05-27T00:11:05.2658416Z",
+    "job":  {
+                "id":  "20260527T001059Z_cardputer-001_573908",
+                "status":  "done",
+                "deviceId":  "cardputer-001",
+                "recordingName":  "20260527T001059Z_cardputer-001_573908.wav",
+                "userText":  "你知道现在几？",
+                "replyText":  "抱歉，我没有实时时钟功能，无法知道当前时间。你可以去设置页手动设置时间。",
+                "replyMode":  "chat-reply",
+                "command":  null,
+                "pendingReason":  "",
+                "lastError":  "",
+                "createdAt":  "2026-05-27T00:11:05.175Z",
+                "updatedAt":  "2026-05-27T00:11:05.175Z",
+                "bytes":  111104,
+                "audioPath":  "chat-stream-audio/20260527T001059Z_cardputer-001_573908.wav"
+            }
+}

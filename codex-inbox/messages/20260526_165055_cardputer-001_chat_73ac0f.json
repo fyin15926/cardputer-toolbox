@@ -1,0 +1,27 @@
+﻿{
+    "id":  "20260526_165055_cardputer-001_chat_73ac0f",
+    "time":  "2026-05-26T08:50:33.775Z",
+    "deviceId":  "cardputer-001",
+    "text":  "12345。上山打老虎。",
+    "intent":  "chat",
+    "requiresConfirmation":  false,
+    "reason":  "plain chat message",
+    "source":  "cardputer-chat",
+    "createdAt":  "2026-05-26T08:50:33.7927630Z",
+    "job":  {
+                "id":  "20260526_165055_cardputer-001_chat_73ac0f",
+                "status":  "done",
+                "deviceId":  "cardputer-001",
+                "recordingName":  "20260526_165055_cardputer-001_chat_73ac0f.wav",
+                "userText":  "12345。上山打老虎。",
+                "replyText":  "我听到了：12345。上山打老虎。",
+                "replyMode":  "asr-only",
+                "command":  null,
+                "pendingReason":  "",
+                "lastError":  "",
+                "createdAt":  "2026-05-26T08:50:30.743Z",
+                "updatedAt":  "2026-05-26T08:50:33.775Z",
+                "bytes":  90156,
+                "audioPath":  "chat-audio/20260526_165055_cardputer-001_chat_73ac0f.wav"
+            }
+}

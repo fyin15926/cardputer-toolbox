@@ -1,0 +1,10 @@
+﻿{
+    "id":  "20260526_171119_cardputer-001_chat_921031",
+    "time":  "2026-05-26T09:10:55.690Z",
+    "intent":  "chat",
+    "mode":  "Queue",
+    "status":  "queued",
+    "text":  "你现在能搜到我从小机器说的话吗？",
+    "promptPath":  "codex-inbox/codex-window-prompt.txt",
+    "createdAt":  "2026-05-26T09:12:23.1809473Z"
+}

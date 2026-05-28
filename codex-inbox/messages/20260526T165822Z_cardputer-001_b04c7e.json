@@ -1,0 +1,27 @@
+﻿{
+    "id":  "20260526T165822Z_cardputer-001_b04c7e",
+    "time":  "2026-05-26T16:58:35.847Z",
+    "deviceId":  "cardputer-001",
+    "text":  "1369乘12569",
+    "intent":  "chat",
+    "requiresConfirmation":  false,
+    "reason":  "plain chat message",
+    "source":  "cardputer-chat",
+    "createdAt":  "2026-05-26T16:58:36.8847528Z",
+    "job":  {
+                "id":  "20260526T165822Z_cardputer-001_b04c7e",
+                "status":  "done",
+                "deviceId":  "cardputer-001",
+                "recordingName":  "20260526T165822Z_cardputer-001_b04c7e.wav",
+                "userText":  "1369乘12569",
+                "replyText":  "已收到。需要结论、解释，还是执行动作？",
+                "replyMode":  "rules",
+                "command":  null,
+                "pendingReason":  "",
+                "lastError":  "",
+                "createdAt":  "2026-05-26T16:58:35.847Z",
+                "updatedAt":  "2026-05-26T16:58:35.847Z",
+                "bytes":  227328,
+                "audioPath":  "chat-stream-audio/20260526T165822Z_cardputer-001_b04c7e.wav"
+            }
+}

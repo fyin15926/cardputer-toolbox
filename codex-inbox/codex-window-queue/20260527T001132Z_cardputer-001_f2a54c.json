@@ -1,0 +1,10 @@
+﻿{
+    "id":  "20260527T001132Z_cardputer-001_f2a54c",
+    "time":  "2026-05-27T00:11:40.192Z",
+    "intent":  "chat",
+    "mode":  "Queue",
+    "status":  "queued",
+    "text":  "今天太原多少度？",
+    "promptPath":  "codex-inbox/codex-window-prompt.txt",
+    "createdAt":  "2026-05-27T00:11:43.7298023Z"
+}

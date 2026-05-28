@@ -1,0 +1,27 @@
+﻿{
+    "id":  "20260526T170121Z_cardputer-001_b8f1c5",
+    "time":  "2026-05-26T17:01:27.575Z",
+    "deviceId":  "cardputer-001",
+    "text":  "你说啥？我说让你给我念一首",
+    "intent":  "chat",
+    "requiresConfirmation":  false,
+    "reason":  "plain chat message",
+    "source":  "cardputer-chat",
+    "createdAt":  "2026-05-26T17:01:28.6870477Z",
+    "job":  {
+                "id":  "20260526T170121Z_cardputer-001_b8f1c5",
+                "status":  "done",
+                "deviceId":  "cardputer-001",
+                "recordingName":  "20260526T170121Z_cardputer-001_b8f1c5.wav",
+                "userText":  "你说啥？我说让你给我念一首",
+                "replyText":  "好的，再念一首：《春晓》春眠不觉晓，处处闻啼鸟。夜来风雨声，花落知多少。",
+                "replyMode":  "chat-reply",
+                "command":  null,
+                "pendingReason":  "",
+                "lastError":  "",
+                "createdAt":  "2026-05-26T17:01:27.575Z",
+                "updatedAt":  "2026-05-26T17:01:27.575Z",
+                "bytes":  141312,
+                "audioPath":  "chat-stream-audio/20260526T170121Z_cardputer-001_b8f1c5.wav"
+            }
+}

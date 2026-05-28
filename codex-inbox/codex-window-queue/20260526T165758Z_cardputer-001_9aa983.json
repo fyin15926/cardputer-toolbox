@@ -1,0 +1,10 @@
+﻿{
+    "id":  "20260526T165758Z_cardputer-001_9aa983",
+    "time":  "2026-05-26T16:58:03.674Z",
+    "intent":  "chat",
+    "mode":  "Queue",
+    "status":  "queued",
+    "text":  "就念首唐",
+    "promptPath":  "codex-inbox/codex-window-prompt.txt",
+    "createdAt":  "2026-05-26T16:58:05.7858516Z"
+}

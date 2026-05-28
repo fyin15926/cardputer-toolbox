@@ -1,0 +1,27 @@
+﻿{
+    "id":  "20260526_183234_cardputer-001_chat_29eb9c",
+    "time":  "2026-05-26T10:32:49.095Z",
+    "deviceId":  "cardputer-001",
+    "text":  "你能听见我说话吗？你说一下现在是什么时间，什么地点，然后给我讲个笑话吧。",
+    "intent":  "chat",
+    "requiresConfirmation":  false,
+    "reason":  "plain chat message",
+    "source":  "cardputer-chat",
+    "createdAt":  "2026-05-26T10:32:49.7127730Z",
+    "job":  {
+                "id":  "20260526_183234_cardputer-001_chat_29eb9c",
+                "status":  "done",
+                "deviceId":  "cardputer-001",
+                "recordingName":  "20260526_183234_cardputer-001_chat_29eb9c.wav",
+                "userText":  "你能听见我说话吗？你说一下现在是什么时间，什么地点，然后给我讲个笑话吧。",
+                "replyText":  "抱歉，我无法获取当前时间和位置。给你讲个笑话：为什么程序员总分不清万圣节和圣诞节？因为 Oct 31 等于 Dec 25！",
+                "replyMode":  "chat-reply",
+                "command":  null,
+                "pendingReason":  "",
+                "lastError":  "",
+                "createdAt":  "2026-05-26T10:32:34.932Z",
+                "updatedAt":  "2026-05-26T10:32:49.095Z",
+                "bytes":  271404,
+                "audioPath":  "chat-audio/20260526_183234_cardputer-001_chat_29eb9c.wav"
+            }
+}

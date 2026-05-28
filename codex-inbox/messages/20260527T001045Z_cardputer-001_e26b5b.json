@@ -1,0 +1,27 @@
+﻿{
+    "id":  "20260527T001045Z_cardputer-001_e26b5b",
+    "time":  "2026-05-27T00:10:49.272Z",
+    "deviceId":  "cardputer-001",
+    "text":  "Hello",
+    "intent":  "chat",
+    "requiresConfirmation":  false,
+    "reason":  "plain chat message",
+    "source":  "cardputer-chat",
+    "createdAt":  "2026-05-27T00:10:50.0555797Z",
+    "job":  {
+                "id":  "20260527T001045Z_cardputer-001_e26b5b",
+                "status":  "done",
+                "deviceId":  "cardputer-001",
+                "recordingName":  "20260527T001045Z_cardputer-001_e26b5b.wav",
+                "userText":  "Hello",
+                "replyText":  "你好。要继续之前的长诗请求，还是说别的？",
+                "replyMode":  "chat-reply",
+                "command":  null,
+                "pendingReason":  "",
+                "lastError":  "",
+                "createdAt":  "2026-05-27T00:10:49.271Z",
+                "updatedAt":  "2026-05-27T00:10:49.272Z",
+                "bytes":  70656,
+                "audioPath":  "chat-stream-audio/20260527T001045Z_cardputer-001_e26b5b.wav"
+            }
+}

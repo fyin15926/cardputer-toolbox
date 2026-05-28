@@ -1,0 +1,27 @@
+﻿{
+    "id":  "20260526T165758Z_cardputer-001_9aa983",
+    "time":  "2026-05-26T16:58:03.674Z",
+    "deviceId":  "cardputer-001",
+    "text":  "就念首唐",
+    "intent":  "chat",
+    "requiresConfirmation":  false,
+    "reason":  "plain chat message",
+    "source":  "cardputer-chat",
+    "createdAt":  "2026-05-26T16:58:04.1183487Z",
+    "job":  {
+                "id":  "20260526T165758Z_cardputer-001_9aa983",
+                "status":  "done",
+                "deviceId":  "cardputer-001",
+                "recordingName":  "20260526T165758Z_cardputer-001_9aa983.wav",
+                "userText":  "就念首唐",
+                "replyText":  "没听清，你是说念首唐诗？",
+                "replyMode":  "chat-reply",
+                "command":  null,
+                "pendingReason":  "",
+                "lastError":  "",
+                "createdAt":  "2026-05-26T16:58:03.674Z",
+                "updatedAt":  "2026-05-26T16:58:03.674Z",
+                "bytes":  95232,
+                "audioPath":  "chat-stream-audio/20260526T165758Z_cardputer-001_9aa983.wav"
+            }
+}

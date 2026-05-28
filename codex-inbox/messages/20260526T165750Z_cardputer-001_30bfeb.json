@@ -1,0 +1,27 @@
+﻿{
+    "id":  "20260526T165750Z_cardputer-001_30bfeb",
+    "time":  "2026-05-26T16:57:53.715Z",
+    "deviceId":  "cardputer-001",
+    "text":  "你说",
+    "intent":  "chat",
+    "requiresConfirmation":  false,
+    "reason":  "plain chat message",
+    "source":  "cardputer-chat",
+    "createdAt":  "2026-05-26T16:57:53.2484653Z",
+    "job":  {
+                "id":  "20260526T165750Z_cardputer-001_30bfeb",
+                "status":  "done",
+                "deviceId":  "cardputer-001",
+                "recordingName":  "20260526T165750Z_cardputer-001_30bfeb.wav",
+                "userText":  "你说",
+                "replyText":  "我没有听到声音。请说点什么。",
+                "replyMode":  "chat-reply",
+                "command":  null,
+                "pendingReason":  "",
+                "lastError":  "",
+                "createdAt":  "2026-05-26T16:57:53.715Z",
+                "updatedAt":  "2026-05-26T16:57:53.715Z",
+                "bytes":  42496,
+                "audioPath":  "chat-stream-audio/20260526T165750Z_cardputer-001_30bfeb.wav"
+            }
+}

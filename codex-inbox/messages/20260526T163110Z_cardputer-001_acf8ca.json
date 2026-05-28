@@ -1,0 +1,27 @@
+﻿{
+    "id":  "20260526T163110Z_cardputer-001_acf8ca",
+    "time":  "2026-05-26T16:31:16.036Z",
+    "deviceId":  "cardputer-001",
+    "text":  "你说呀，你是谁呀？",
+    "intent":  "chat",
+    "requiresConfirmation":  false,
+    "reason":  "plain chat message",
+    "source":  "cardputer-chat",
+    "createdAt":  "2026-05-26T16:31:16.3722521Z",
+    "job":  {
+                "id":  "20260526T163110Z_cardputer-001_acf8ca",
+                "status":  "done",
+                "deviceId":  "cardputer-001",
+                "recordingName":  "20260526T163110Z_cardputer-001_acf8ca.wav",
+                "userText":  "你说呀，你是谁呀？",
+                "replyText":  "我是小机子，也叫大聪明，是运行在Cardputer里的机仆式逻辑伙伴。",
+                "replyMode":  "chat-reply",
+                "command":  null,
+                "pendingReason":  "",
+                "lastError":  "",
+                "createdAt":  "2026-05-26T16:31:16.036Z",
+                "updatedAt":  "2026-05-26T16:31:16.036Z",
+                "bytes":  112640,
+                "audioPath":  "chat-stream-audio/20260526T163110Z_cardputer-001_acf8ca.wav"
+            }
+}

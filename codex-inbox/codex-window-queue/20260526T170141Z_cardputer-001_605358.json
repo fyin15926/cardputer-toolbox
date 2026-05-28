@@ -1,0 +1,10 @@
+﻿{
+    "id":  "20260526T170141Z_cardputer-001_605358",
+    "time":  "2026-05-26T17:01:48.637Z",
+    "intent":  "chat",
+    "mode":  "Queue",
+    "status":  "queued",
+    "text":  "这叫王点。要首",
+    "promptPath":  "codex-inbox/codex-window-prompt.txt",
+    "createdAt":  "2026-05-26T17:01:48.6094638Z"
+}

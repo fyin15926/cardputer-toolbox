@@ -1,0 +1,27 @@
+﻿{
+    "id":  "20260526_092522_cardputer-001_chat_8e4821",
+    "time":  "2026-05-26T09:25:27.526Z",
+    "deviceId":  "cardputer-001",
+    "text":  "你能听见我说话吗？你回复我。",
+    "intent":  "chat",
+    "requiresConfirmation":  false,
+    "reason":  "plain chat message",
+    "source":  "cardputer-chat",
+    "createdAt":  "2026-05-26T09:25:27.4935406Z",
+    "job":  {
+                "id":  "20260526_092522_cardputer-001_chat_8e4821",
+                "status":  "done",
+                "deviceId":  "cardputer-001",
+                "recordingName":  "20260526_092522_cardputer-001_chat_8e4821.wav",
+                "userText":  "你能听见我说话吗？你回复我。",
+                "replyText":  "我能听见你说话，我在直接回复你。有什么可以帮你？",
+                "replyMode":  "chat-reply",
+                "command":  null,
+                "pendingReason":  "",
+                "lastError":  "",
+                "createdAt":  "2026-05-26T09:25:22.082Z",
+                "updatedAt":  "2026-05-26T09:25:27.526Z",
+                "bytes":  120876,
+                "audioPath":  "chat-audio/20260526_092522_cardputer-001_chat_8e4821.wav"
+            }
+}

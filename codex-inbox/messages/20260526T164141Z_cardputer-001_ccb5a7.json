@@ -1,0 +1,27 @@
+﻿{
+    "id":  "20260526T164141Z_cardputer-001_ccb5a7",
+    "time":  "2026-05-26T16:41:47.380Z",
+    "deviceId":  "cardputer-001",
+    "text":  "给我寄送一下你。",
+    "intent":  "chat",
+    "requiresConfirmation":  false,
+    "reason":  "plain chat message",
+    "source":  "cardputer-chat",
+    "createdAt":  "2026-05-26T16:41:48.4925212Z",
+    "job":  {
+                "id":  "20260526T164141Z_cardputer-001_ccb5a7",
+                "status":  "done",
+                "deviceId":  "cardputer-001",
+                "recordingName":  "20260526T164141Z_cardputer-001_ccb5a7.wav",
+                "userText":  "给我寄送一下你。",
+                "replyText":  "无法寄送实体。请问你是需要导出数据或文件吗？",
+                "replyMode":  "chat-reply",
+                "command":  null,
+                "pendingReason":  "",
+                "lastError":  "",
+                "createdAt":  "2026-05-26T16:41:47.380Z",
+                "updatedAt":  "2026-05-26T16:41:47.380Z",
+                "bytes":  147968,
+                "audioPath":  "chat-stream-audio/20260526T164141Z_cardputer-001_ccb5a7.wav"
+            }
+}

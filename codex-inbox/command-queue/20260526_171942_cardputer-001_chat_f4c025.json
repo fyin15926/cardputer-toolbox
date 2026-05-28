@@ -1,0 +1,27 @@
+﻿{
+    "id":  "20260526_171942_cardputer-001_chat_f4c025",
+    "time":  "2026-05-26T09:19:19.985Z",
+    "deviceId":  "cardputer-001",
+    "text":  "帮我记一下，我在外面等我回去继续做小机器项目。",
+    "intent":  "command",
+    "requiresConfirmation":  true,
+    "reason":  "matched command-like wording",
+    "source":  "cardputer-chat",
+    "createdAt":  "2026-05-26T09:19:20.9319113Z",
+    "job":  {
+                "id":  "20260526_171942_cardputer-001_chat_f4c025",
+                "status":  "done",
+                "deviceId":  "cardputer-001",
+                "recordingName":  "20260526_171942_cardputer-001_chat_f4c025.wav",
+                "userText":  "帮我记一下，我在外面等我回去继续做小机器项目。",
+                "replyText":  "好的，已记下：你在外面，回去继续做小机器项目。",
+                "replyMode":  "chat-reply",
+                "command":  null,
+                "pendingReason":  "",
+                "lastError":  "",
+                "createdAt":  "2026-05-26T09:19:11.661Z",
+                "updatedAt":  "2026-05-26T09:19:19.985Z",
+                "bytes":  255532,
+                "audioPath":  "chat-audio/20260526_171942_cardputer-001_chat_f4c025.wav"
+            }
+}
