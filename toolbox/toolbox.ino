@@ -84,8 +84,9 @@ static const uint32_t SHORTCUT_RETRIM_TAIL_PAD = REC_RATE / 40;  // 25ms
 static const uint32_t SHORTCUT_FADE_SAMPLES = REC_RATE / 125; // 8ms 淡入淡出
 static const size_t   REC_N    = 256;    // 每缓冲样本数 (~16ms, 小=波形更流畅)
 static const size_t   PB_N     = 256;    // 播放缓冲样本数 (~16ms, B线更贴近录音页)
-static const uint32_t REC_UI_FRAME_MS = 40;  // Keep UI below audio/SD priority; 25fps is enough for the small waveform.
-static const uint32_t PB_UI_FRAME_MS  = 40;  // Lower display traffic avoids playback stutter and visible flicker.
+static const uint32_t REC_UI_FRAME_MS = 33;  // Sprite path: about 30fps while keeping audio/SD priority.
+static const uint32_t PB_UI_FRAME_MS  = 33;  // Sprite path: smoother playback UI without pushing toward 60fps.
+static const uint32_t DIRECT_UI_FRAME_MS = 66;  // No-sprite fallback: about 15fps to avoid direct-draw flicker.
 static const uint32_t REC_AUTO_SEGMENT_MS = 30UL * 60UL * 1000UL;
 static const uint8_t  REC_WRITE_BATCH = 4;
 static const uint8_t  REC_REARM_SETTLE_BUFFERS = 6;
@@ -2112,7 +2113,7 @@ int playbackScreen(const char *path, int recNum, int prevRec, int nextRec) {
   bool useBottomSprite = useWaveSprite && bottomCv.createSprite(CONTENT_W, CHROME_H) != nullptr;
   M5Canvas cv(&d);
   bool useSprite = !useWaveSprite && cv.createSprite(CONTENT_W, d.height()) != nullptr;
-  const uint32_t pbFrameMs = (useWaveSprite || useSprite) ? PB_UI_FRAME_MS : 90;
+  const uint32_t pbFrameMs = (useWaveSprite || useSprite) ? PB_UI_FRAME_MS : DIRECT_UI_FRAME_MS;
   g_mediaBusy = true;
 
   // 静态部分(画一次): 顶栏
@@ -3877,7 +3878,7 @@ int recordingScreen() {
   M5Canvas bottomCv(&d);
   bool useBottomSprite = useWaveSprite && bottomCv.createSprite(CONTENT_W, CHROME_H) != nullptr;
   bool useSprite = !useWaveSprite && cv.createSprite(CONTENT_W, d.height()) != nullptr;
-  const uint32_t recFrameMs = (useWaveSprite || useSprite) ? REC_UI_FRAME_MS : 90;
+  const uint32_t recFrameMs = (useWaveSprite || useSprite) ? REC_UI_FRAME_MS : DIRECT_UI_FRAME_MS;
   uint32_t lastRecChromeSec = 0xFFFFFFFFUL;
   bool lastRecChromeBlink = false;
   uint32_t lastRecChromeHeldBucket = 0xFFFFFFFFUL;
