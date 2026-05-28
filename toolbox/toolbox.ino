@@ -3341,6 +3341,7 @@ static bool systemIdleTick() {
   if (!g_uploadActiveAnnounced && now - lastUploadTickMs < UPLOAD_IDLE_DELAY_MS) return false;
   if (!sdMount()) {
     bool wasActive = g_uploadActiveAnnounced || g_uploadActiveRec != 0;
+    lastUploadTickMs = now;
     g_uploadActiveAnnounced = false;
     g_uploadActiveRec = 0;
     g_uploadStatus = UPSTAT_NO_SD;
@@ -3350,6 +3351,7 @@ static bool systemIdleTick() {
     int nextRec = 0;
     uint8_t nextKind = REC_NORMAL;
     if (!uploadReadFirstJob(nextRec, nextKind)) {
+      lastUploadTickMs = now;
       SD.end();
       return false;
     }
@@ -3364,6 +3366,7 @@ static bool systemIdleTick() {
   g_uploadActiveAnnounced = false;
   g_uploadActiveRec = 0;
   if (g_uploadStatus == UPSTAT_UPLOADING) g_uploadStatus = UPSTAT_QUEUED;
+  if (!changed) lastUploadTickMs = now;
   SD.end();
   return true;
 }
