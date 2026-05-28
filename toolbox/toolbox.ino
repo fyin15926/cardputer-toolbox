@@ -137,6 +137,7 @@ static bool g_uploadExitRequested = false;
 static uint8_t g_uploadExitApp = 0;
 static uint8_t g_uploadBatchDone = 0;
 static uint8_t g_uploadBatchTotal = 0;
+static bool g_wifiSessionActive = false;
 static bool g_mediaBusy = false;
 
 // SD 引脚(运行时由 M5Unified 按机型给出, 失败则回退到 Adv 已知值)
@@ -2862,6 +2863,10 @@ static bool boxFormatNow(char *buf, size_t n) {
 }
 
 static void wifiPowerDown() {
+  if (!g_wifiSessionActive && WiFi.getMode() == WIFI_OFF) {
+    boxClockSynced = false;
+    return;
+  }
   WiFi.setAutoReconnect(false);
   WiFi.disconnect(true, true);
   delay(60);
@@ -2869,6 +2874,7 @@ static void wifiPowerDown() {
   esp_wifi_stop();
   esp_wifi_deinit();
   delay(140);
+  g_wifiSessionActive = false;
   boxClockSynced = false;
 }
 
@@ -2877,7 +2883,7 @@ static void pauseUploadForMedia() {
   g_uploadActiveRec = 0;
   if (g_uploadStatus == UPSTAT_UPLOADING) g_uploadStatus = UPSTAT_QUEUED;
 #if UPLOAD_WIFI_ENABLED
-  wifiPowerDown();
+  if (g_wifiSessionActive || WiFi.getMode() != WIFI_OFF) wifiPowerDown();
 #endif
 }
 
@@ -2888,6 +2894,7 @@ static bool tryWifiProfile(const char *ssid, const char *password) {
   WiFi.disconnect(true, true);
   delay(120);
   WiFi.mode(WIFI_STA);
+  g_wifiSessionActive = true;
   WiFi.setSleep(false);
   WiFi.setAutoReconnect(false);
   WiFi.begin(ssid, password ? password : "");
