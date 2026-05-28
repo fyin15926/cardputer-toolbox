@@ -157,6 +157,9 @@ static const char *UPLOAD_RECORDED_AT_PATH = "/UPLOAD/recorded_at.txt";
 static const char *REC_VOLUME_PATH = "/REC/volume.txt";
 static const size_t UPLOAD_CHUNK_BYTES = 4096;
 static const uint32_t UPLOAD_ADPCM_THRESHOLD_BYTES = 3UL * 1024UL * 1024UL;
+static const uint8_t UPLOAD_BATCH_MAX_JOBS = 40;
+static const uint32_t UPLOAD_BATCH_BUDGET_MS = 180000;
+static const uint32_t UPLOAD_MODE_HOLD_MS = 850;
 static const int MAX_REC = 9999;
 static int8_t recVolumeDelta[MAX_REC];
 static bool recVolumeDirty = false;
@@ -3333,52 +3336,79 @@ static bool uploadQueuedJobsMounted(uint8_t maxJobs = 1, uint32_t budgetMs = 900
   return changed;
 }
 
-static bool systemIdleTick() {
+static bool uploadQueueHasJobMounted(int *recOut = nullptr) {
+  int recNum = 0;
+  uint8_t kind = REC_NORMAL;
+  bool hasJob = uploadReadFirstJob(recNum, kind);
+  if (hasJob && recOut) *recOut = recNum;
+  return hasJob;
+}
+
+static void drawUploadMode(const char *status, uint16_t col) {
+  auto &d = M5Cardputer.Display;
+  d.fillScreen(COL_BG);
+  drawHeader("UPLOAD");
+  FONT_TIMER(d);
+  d.setTextColor(col, COL_BG);
+  d.setCursor(28, 50);
+  d.print(status);
+  drawFooter("ESC ABORT");
+}
+
+static bool runUploadBatchMounted(bool visible) {
 #if !UPLOAD_WIFI_ENABLED
+  (void)visible;
   return false;
-#endif
-  if (g_mediaBusy) return false;
-  if (M5Cardputer.Keyboard.isPressed()) {
-    if (g_uploadActiveAnnounced) {
-      g_uploadActiveAnnounced = false;
-      g_uploadActiveRec = 0;
-      g_uploadStatus = UPSTAT_QUEUED;
-      return true;
-    }
+#else
+  if (!sdMount()) {
+    g_uploadStatus = UPSTAT_NO_SD;
+    if (visible) drawUploadMode(uploadStatusLabel(g_uploadStatus), COL_RED);
     return false;
   }
-  uint32_t now = millis();
-  if (!g_uploadActiveAnnounced && now - lastUploadTickMs < UPLOAD_IDLE_DELAY_MS) return false;
-  if (!sdMount()) {
-    bool wasActive = g_uploadActiveAnnounced || g_uploadActiveRec != 0;
-    lastUploadTickMs = now;
+  int firstRec = 0;
+  if (!uploadQueueHasJobMounted(&firstRec)) {
     g_uploadActiveAnnounced = false;
     g_uploadActiveRec = 0;
-    g_uploadStatus = UPSTAT_NO_SD;
-    return wasActive;
-  }
-  if (!g_uploadActiveAnnounced) {
-    int nextRec = 0;
-    uint8_t nextKind = REC_NORMAL;
-    if (!uploadReadFirstJob(nextRec, nextKind)) {
-      lastUploadTickMs = now;
-      SD.end();
-      return false;
-    }
-    g_uploadActiveRec = nextRec;
-    g_uploadStatus = UPSTAT_UPLOADING;
-    g_uploadActiveAnnounced = true;
+    g_uploadStatus = UPSTAT_IDLE;
     SD.end();
-    return true;
+    if (visible) drawUploadMode("NO WT", COL_DIM);
+    return false;
   }
-  lastUploadTickMs = now;
-  bool changed = uploadQueuedJobsMounted();
+  g_uploadActiveAnnounced = visible;
+  g_uploadActiveRec = firstRec;
+  g_uploadStatus = UPSTAT_UPLOADING;
+  if (visible) drawUploadMode("GO", COL_GREEN);
+  bool changed = uploadQueuedJobsMounted(UPLOAD_BATCH_MAX_JOBS, UPLOAD_BATCH_BUDGET_MS);
+  int nextRec = 0;
+  bool hasNext = uploadQueueHasJobMounted(&nextRec);
   g_uploadActiveAnnounced = false;
-  g_uploadActiveRec = 0;
-  if (g_uploadStatus == UPSTAT_UPLOADING) g_uploadStatus = UPSTAT_QUEUED;
-  if (!changed) lastUploadTickMs = now;
+  g_uploadActiveRec = hasNext ? nextRec : 0;
+  if (hasNext) {
+    g_uploadStatus = UPSTAT_QUEUED;
+    if (visible) drawUploadMode("WT", COL_GREEN);
+  } else if (changed && g_uploadStatus == UPSTAT_UPLOADING) {
+    g_uploadStatus = UPSTAT_DONE;
+    if (visible) drawUploadMode("OKK", COL_GREEN);
+  } else if (visible) {
+    drawUploadMode(uploadStatusLabel(g_uploadStatus), (g_uploadStatus == UPSTAT_DONE || g_uploadStatus == UPSTAT_QUEUED) ? COL_GREEN : COL_RED);
+  }
   SD.end();
-  return true;
+  return changed;
+#endif
+}
+
+static bool uploadModeHoldTriggered() {
+  uint32_t start = millis();
+  while (keyUpload() && !keyTab()) {
+    M5Cardputer.update();
+    if (millis() - start >= UPLOAD_MODE_HOLD_MS) return true;
+    delay(10);
+  }
+  return false;
+}
+
+static bool systemIdleTick() {
+  return false;
 }
 
 // ---------- 按键摩擦后处理: 只压低低能量、高变化率的细碎刮擦声 ----------
@@ -4510,27 +4540,33 @@ int listScreen(int selectIdx) {
         if (M5Cardputer.Keyboard.isPressed()) waitRelease();
       }
       else if (keyUpload() && sel >= 0) {
-        uint8_t status = UPSTAT_NO_SD;
-        if (sdMount()) {
-          int recNum = recList[sel];
-          if (uploadDone(recNum)) {
-            status = UPSTAT_DONE;
-          } else if (uploadPending(recNum) || uploadModelErr(recNum) || uploadJobErr(recNum)) {
-            uploadMarkDone(recNum);
-            status = UPSTAT_DONE;
-          } else {
-            bool queued = enqueueUploadMounted(recNum, recKindOf(recNum));
-            status = queued ? validateUploadConfigMounted() : UPSTAT_NO_SD;
-            if (status == UPSTAT_IDLE) {
-              status = UPSTAT_QUEUED;
-              g_uploadStatus = status;
-              lastUploadTickMs = millis();
+        if (uploadModeHoldTriggered()) {
+          drawActionToast("GO", COL_GREEN);
+          waitRelease();
+          runUploadBatchMounted(true);
+        } else {
+          uint8_t status = UPSTAT_NO_SD;
+          if (sdMount()) {
+            int recNum = recList[sel];
+            if (uploadDone(recNum)) {
+              status = UPSTAT_DONE;
+            } else if (uploadPending(recNum) || uploadModelErr(recNum) || uploadJobErr(recNum)) {
+              uploadMarkDone(recNum);
+              status = UPSTAT_DONE;
+            } else {
+              bool queued = enqueueUploadMounted(recNum, recKindOf(recNum));
+              status = queued ? validateUploadConfigMounted() : UPSTAT_NO_SD;
+              if (status == UPSTAT_IDLE) {
+                status = UPSTAT_QUEUED;
+                g_uploadStatus = status;
+                lastUploadTickMs = millis();
+              }
             }
+            SD.end();
           }
-          SD.end();
+          g_uploadStatus = status;
+          drawActionToast(uploadStatusLabel(status), (status == UPSTAT_QUEUED || status == UPSTAT_DONE) ? COL_GREEN : COL_RED);
         }
-        g_uploadStatus = status;
-        drawActionToast(uploadStatusLabel(status), (status == UPSTAT_QUEUED || status == UPSTAT_DONE) ? COL_GREEN : COL_RED);
         redraw = true;
         if (M5Cardputer.Keyboard.isPressed()) waitRelease();
       }
@@ -6620,6 +6656,10 @@ static void goSleep() {
     waitRelease();
     return;
   }
+
+#if UPLOAD_WIFI_ENABLED
+  if (!g_mediaBusy) runUploadBatchMounted(false);
+#endif
 
   // 打开键盘芯片(TCA8418 @0x34)的按键中断 -> 按键时拉低 GPIO11; Go/BtnA 是 GPIO0 低有效
   M5Cardputer.In_I2C.writeRegister8(0x34, 0x01, 0x01, 400000);   // CFG: KE_IEN=1
