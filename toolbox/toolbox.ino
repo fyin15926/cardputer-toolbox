@@ -130,6 +130,13 @@ static bool g_uploadPausedForInput = false;
 static bool g_uploadCancelRequested = false;
 static int g_uploadActiveRec = 0;
 static bool g_uploadActiveAnnounced = false;
+static bool g_uploadModeActive = false;
+static bool g_uploadModeVisible = false;
+static bool g_uploadModeIgnoreKeys = false;
+static bool g_uploadExitRequested = false;
+static uint8_t g_uploadExitApp = 0;
+static uint8_t g_uploadBatchDone = 0;
+static uint8_t g_uploadBatchTotal = 0;
 static bool g_mediaBusy = false;
 
 // SD 引脚(运行时由 M5Unified 按机型给出, 失败则回退到 Adv 已知值)
@@ -337,8 +344,43 @@ static bool keyVolUp() { return !keyTab() && (M5Cardputer.Keyboard.isKeyPressed(
 static bool keyVolDn() { return !keyTab() && (M5Cardputer.Keyboard.isKeyPressed('-') || M5Cardputer.Keyboard.isKeyPressed('_')); }
 static bool keyBrightUp() { return !keyTab() && (M5Cardputer.Keyboard.isKeyPressed(']') || M5Cardputer.Keyboard.isKeyPressed('}')); }
 static bool keyBrightDn() { return !keyTab() && (M5Cardputer.Keyboard.isKeyPressed('[') || M5Cardputer.Keyboard.isKeyPressed('{')); }
+static const char *uploadStatusLabel(uint8_t status);
+static void drawUploadMode(const char *status, uint16_t col);
 static bool keyUploadAbort() {
-  if (!M5Cardputer.Keyboard.isPressed()) return false;
+  bool inputPressed = M5Cardputer.Keyboard.isPressed() || keyGo();
+  if (!inputPressed) {
+    g_uploadModeIgnoreKeys = false;
+    return false;
+  }
+  if (g_uploadModeActive) {
+    if (!g_uploadModeVisible) {
+      applyBrightness();
+      g_uploadModeVisible = true;
+      g_uploadModeIgnoreKeys = true;
+      drawUploadMode(uploadStatusLabel(g_uploadStatus), COL_GREEN);
+      return false;
+    }
+    if (g_uploadModeIgnoreKeys) return false;
+    if (keySpace()) {
+      g_uploadExitRequested = true;
+      g_uploadExitApp = APP_REC_RECORD;
+      g_uploadPausedForInput = true;
+      return true;
+    }
+    if (keyEnter()) {
+      g_uploadExitRequested = true;
+      g_uploadExitApp = APP_REC_LIST;
+      g_uploadPausedForInput = true;
+      return true;
+    }
+    if (keyEsc()) {
+      g_uploadExitRequested = true;
+      g_uploadExitApp = APP_SLEEP;
+      g_uploadPausedForInput = true;
+      return true;
+    }
+    return false;
+  }
   g_uploadPausedForInput = true;
   if (keyTab() && keyUpload()) g_uploadCancelRequested = true;
   return true;
@@ -3319,13 +3361,21 @@ static bool uploadQueuedJobsMounted(uint8_t maxJobs = 1, uint32_t budgetMs = 900
   for (uint8_t i = 0; i < maxJobs; i++) {
     if (millis() - start > budgetMs) break;
     M5Cardputer.update();
-    if (M5Cardputer.Keyboard.isPressed()) {
+    if (keyUploadAbort()) {
       g_uploadPausedForInput = true;
       g_uploadStatus = UPSTAT_QUEUED;
       break;
     }
+    int nextRec = 0;
+    uint8_t nextKind = REC_NORMAL;
+    if (g_uploadModeVisible && uploadReadFirstJob(nextRec, nextKind)) {
+      g_uploadActiveRec = nextRec;
+      g_uploadStatus = UPSTAT_UPLOADING;
+      drawUploadMode("GO", COL_GREEN);
+    }
     bool oneChanged = uploadOneJobMounted();
     if (!oneChanged) break;
+    if (g_uploadBatchDone < 255) g_uploadBatchDone++;
     changed = true;
   }
 #if UPLOAD_WIFI_ENABLED
@@ -3344,15 +3394,46 @@ static bool uploadQueueHasJobMounted(int *recOut = nullptr) {
   return hasJob;
 }
 
+static uint8_t uploadQueueCountMounted() {
+  uint8_t count = 0;
+  File f = SD.open(UPLOAD_QUEUE_PATH, FILE_READ);
+  if (!f) return 0;
+  char line[32];
+  while (f.available() && count < 255) {
+    int len = f.readBytesUntil('\n', line, sizeof(line) - 1);
+    line[len] = 0;
+    strTrim(line);
+    if (line[0]) count++;
+  }
+  f.close();
+  return count;
+}
+
 static void drawUploadMode(const char *status, uint16_t col) {
   auto &d = M5Cardputer.Display;
   d.fillScreen(COL_BG);
   drawHeader("UPLOAD");
   FONT_TIMER(d);
   d.setTextColor(col, COL_BG);
-  d.setCursor(28, 50);
+  d.setCursor(18, 42);
   d.print(status);
-  drawFooter("ESC ABORT");
+  if (g_uploadBatchTotal > 0) {
+    char progress[16];
+    uint8_t current = g_uploadBatchDone;
+    if (strcmp(status, "GO") == 0 && current < g_uploadBatchTotal) current++;
+    snprintf(progress, sizeof(progress), "%02u/%02u", (unsigned)current, (unsigned)g_uploadBatchTotal);
+    d.setCursor(96, 42);
+    d.print(progress);
+  }
+  if (g_uploadActiveRec > 0) {
+    char rec[16];
+    snprintf(rec, sizeof(rec), "REC_%04d", g_uploadActiveRec);
+    FONT_ASCII(d);
+    d.setTextColor(COL_DIM, COL_BG);
+    d.setCursor(54, 78);
+    d.print(rec);
+  }
+  drawFooter("SPC REC  ENT LIST  ESC SLEEP");
 }
 
 static bool runUploadBatchMounted(bool visible) {
@@ -3360,9 +3441,18 @@ static bool runUploadBatchMounted(bool visible) {
   (void)visible;
   return false;
 #else
+  g_uploadModeActive = true;
+  g_uploadModeVisible = visible;
+  g_uploadModeIgnoreKeys = visible && (M5Cardputer.Keyboard.isPressed() || keyGo());
+  g_uploadExitRequested = false;
+  g_uploadExitApp = APP_SLEEP;
+  g_uploadBatchDone = 0;
+  g_uploadBatchTotal = 0;
   if (!sdMount()) {
     g_uploadStatus = UPSTAT_NO_SD;
     if (visible) drawUploadMode(uploadStatusLabel(g_uploadStatus), COL_RED);
+    g_uploadModeActive = false;
+    g_uploadModeIgnoreKeys = false;
     return false;
   }
   int firstRec = 0;
@@ -3372,12 +3462,15 @@ static bool runUploadBatchMounted(bool visible) {
     g_uploadStatus = UPSTAT_IDLE;
     SD.end();
     if (visible) drawUploadMode("NO WT", COL_DIM);
+    g_uploadModeActive = false;
+    g_uploadModeIgnoreKeys = false;
     return false;
   }
+  g_uploadBatchTotal = uploadQueueCountMounted();
   g_uploadActiveAnnounced = visible;
   g_uploadActiveRec = firstRec;
   g_uploadStatus = UPSTAT_UPLOADING;
-  if (visible) drawUploadMode("GO", COL_GREEN);
+  if (g_uploadModeVisible) drawUploadMode("GO", COL_GREEN);
   bool changed = uploadQueuedJobsMounted(UPLOAD_BATCH_MAX_JOBS, UPLOAD_BATCH_BUDGET_MS);
   int nextRec = 0;
   bool hasNext = uploadQueueHasJobMounted(&nextRec);
@@ -3385,14 +3478,16 @@ static bool runUploadBatchMounted(bool visible) {
   g_uploadActiveRec = hasNext ? nextRec : 0;
   if (hasNext) {
     g_uploadStatus = UPSTAT_QUEUED;
-    if (visible) drawUploadMode("WT", COL_GREEN);
+    if (g_uploadModeVisible) drawUploadMode("WT", COL_GREEN);
   } else if (changed && g_uploadStatus == UPSTAT_UPLOADING) {
     g_uploadStatus = UPSTAT_DONE;
-    if (visible) drawUploadMode("OKK", COL_GREEN);
-  } else if (visible) {
+    if (g_uploadModeVisible) drawUploadMode("OKK", COL_GREEN);
+  } else if (g_uploadModeVisible) {
     drawUploadMode(uploadStatusLabel(g_uploadStatus), (g_uploadStatus == UPSTAT_DONE || g_uploadStatus == UPSTAT_QUEUED) ? COL_GREEN : COL_RED);
   }
   SD.end();
+  g_uploadModeActive = false;
+  g_uploadModeIgnoreKeys = false;
   return changed;
 #endif
 }
@@ -4544,6 +4639,13 @@ int listScreen(int selectIdx) {
           drawActionToast("GO", COL_GREEN);
           waitRelease();
           runUploadBatchMounted(true);
+          if (g_uploadExitRequested) {
+            uint8_t app = g_uploadExitApp;
+            g_uploadExitRequested = false;
+            g_uploadExitApp = APP_SLEEP;
+            if (app == APP_REC_RECORD) return R_RECORD;
+            if (app == APP_SLEEP) return R_BACK;
+          }
         } else {
           uint8_t status = UPSTAT_NO_SD;
           if (sdMount()) {
@@ -6659,6 +6761,23 @@ static void goSleep() {
 
 #if UPLOAD_WIFI_ENABLED
   if (!g_mediaBusy) runUploadBatchMounted(false);
+  if (g_uploadExitRequested) {
+    uint8_t app = g_uploadExitApp;
+    g_uploadExitRequested = false;
+    g_uploadExitApp = APP_SLEEP;
+    if (app != APP_SLEEP) {
+      applyBrightness();
+      M5Cardputer.update();
+      wakeApp = app;
+      autoRecordPending = true;
+      waitRelease();
+      return;
+    }
+    d.setBrightness(0);
+  } else if (g_uploadModeVisible) {
+    d.setBrightness(0);
+    g_uploadModeVisible = false;
+  }
 #endif
 
   // 打开键盘芯片(TCA8418 @0x34)的按键中断 -> 按键时拉低 GPIO11; Go/BtnA 是 GPIO0 低有效
