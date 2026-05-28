@@ -91,14 +91,19 @@ static const uint32_t REC_AUTO_SEGMENT_MS = 30UL * 60UL * 1000UL;
 static const uint8_t  REC_WRITE_BATCH = 4;
 static const uint8_t  REC_REARM_SETTLE_BUFFERS = 6;
 static const uint32_t UPLOAD_IDLE_DELAY_MS = 3000;
+static const uint32_t SPEAKER_IDLE_OFF_MS = 3000;
+static const uint32_t PLAYBACK_EDGE_FADE_BYTES = REC_RATE * 2 * 80 / 1000;
 static int16_t recBuf[2][REC_N];
 static int16_t pbBuf[2][PB_N];           // 播放双缓冲(放一块/读另一块, 避免覆盖破音)
 static int16_t recWriteBuf[REC_WRITE_BATCH * REC_N];
 static int16_t recVisualBuf[REC_N];
 static int16_t playbackVisualBuf[PB_N];
+static int16_t speakerSilenceBuf[PB_N];
 static int16_t seekToneBuf[384];
 int recGain = 36;                        // 录音软件增益默认值(W/S 现场可调, 带削波保护)
 int playVol = 200;                       // 回放音量(+/- 可调, 0..255)
+static char g_shortcutKeyRoot = 'C';
+static int8_t g_shortcutTransposeSemis = 0;
 static const int VOL_LEVELS = 10;
 static const uint8_t BRIGHT_LEVELS = 5;
 static const uint8_t BRIGHT_VALUES[BRIGHT_LEVELS] = {25, 55, 90, 125, 170};
@@ -214,6 +219,9 @@ static bool micInputReady = false;
 static bool forceMicRearm = true;  // 开机/唤醒后的第一次正式录音要强制重建输入链路
 static bool autoRecordPending = true;
 static bool speakerOutputReady = false;
+static int speakerVolumeCurrent = 0;
+static uint32_t speakerIdleOffAtMs = 0;
+static bool speakerDrainBeforeNextPlayback = false;
 
 #define APP_SLEEP      0
 #define APP_REC_RECORD 1
@@ -346,6 +354,57 @@ static bool keyVolUp() { return !keyTab() && (M5Cardputer.Keyboard.isKeyPressed(
 static bool keyVolDn() { return !keyTab() && (M5Cardputer.Keyboard.isKeyPressed('-') || M5Cardputer.Keyboard.isKeyPressed('_')); }
 static bool keyBrightUp() { return !keyTab() && (M5Cardputer.Keyboard.isKeyPressed(']') || M5Cardputer.Keyboard.isKeyPressed('}')); }
 static bool keyBrightDn() { return !keyTab() && (M5Cardputer.Keyboard.isKeyPressed('[') || M5Cardputer.Keyboard.isKeyPressed('{')); }
+
+static bool pressedRootKey(char c) {
+  return M5Cardputer.Keyboard.isKeyPressed(c) || M5Cardputer.Keyboard.isKeyPressed((char)(c + 32));
+}
+
+static int8_t semisForRoot(char root) {
+  switch (root) {
+    case 'A': return -3;
+    case 'B': return -1;
+    case 'C': return 0;
+    case 'D': return 2;
+    case 'E': return 4;
+    case 'F': return 5;
+    case 'G': return 7;
+    default: return 0;
+  }
+}
+
+static bool setShortcutKeyRoot(char root) {
+  if (root < 'A' || root > 'G') return false;
+  g_shortcutKeyRoot = root;
+  g_shortcutTransposeSemis = semisForRoot(root);
+  return true;
+}
+
+static bool handleShortcutKeyRootChord() {
+  if (!keyCtrl()) return false;
+  const char roots[] = {'A', 'B', 'C', 'D', 'E', 'F', 'G'};
+  for (char root : roots) {
+    if (pressedRootKey(root)) return setShortcutKeyRoot(root);
+  }
+  return false;
+}
+
+static const char *shortcutKeyRootLabel() {
+  static char label[6];
+  snprintf(label, sizeof(label), "KEY:%c", g_shortcutKeyRoot);
+  return label;
+}
+
+static uint32_t shortcutPlaybackRate(uint32_t baseRate, bool isHotkeyPlayback) {
+  if (!isHotkeyPlayback || g_shortcutTransposeSemis == 0) return baseRate;
+  static const uint16_t scaleQ10[] = {
+    724, 767, 813, 861, 912, 967, 1024, 1085, 1149, 1218, 1290, 1367, 1448, 1534
+  };
+  int idx = (int)g_shortcutTransposeSemis + 6;
+  if (idx < 0 || idx >= (int)(sizeof(scaleQ10) / sizeof(scaleQ10[0]))) return baseRate;
+  uint32_t rate = ((uint32_t)baseRate * scaleQ10[idx] + 512) / 1024;
+  return max((uint32_t)8000, min((uint32_t)48000, rate));
+}
+
 static const char *uploadStatusLabel(uint8_t status);
 static void drawUploadMode(const char *status, uint16_t col);
 static bool keyUploadAbort() {
@@ -422,7 +481,10 @@ static void adjustPlayVolume(int delta) {
   else if (delta < 0) level--;
   level = max(0, min(VOL_LEVELS, level));
   playVol = (level * 255 + VOL_LEVELS / 2) / VOL_LEVELS;
-  if (speakerOutputReady) M5Cardputer.Speaker.setVolume(playVol);
+  if (speakerOutputReady) {
+    speakerVolumeCurrent = playVol;
+    M5Cardputer.Speaker.setVolume(speakerVolumeCurrent);
+  }
 }
 
 static int globalVolumeLevel() {
@@ -441,7 +503,10 @@ static int effectiveVolumeLevelForRec(int recNum) {
 }
 
 static void applyPlaybackVolumeForRec(int recNum) {
-  if (speakerOutputReady) M5Cardputer.Speaker.setVolume(volumeFromLevel(effectiveVolumeLevelForRec(recNum)));
+  if (speakerOutputReady) {
+    speakerVolumeCurrent = volumeFromLevel(effectiveVolumeLevelForRec(recNum));
+    M5Cardputer.Speaker.setVolume(speakerVolumeCurrent);
+  }
 }
 
 static void applyBrightness() {
@@ -479,6 +544,7 @@ static bool prepareMicInput(bool force = false) {
   if (micInputReady) return true;
   M5Cardputer.Speaker.end();
   speakerOutputReady = false;
+  speakerVolumeCurrent = 0;
   M5Cardputer.In_I2C.writeRegister8(0x18, 0x13, 0x00, 400000);  // HP drive OFF
   M5Cardputer.In_I2C.writeRegister8(0x18, 0x12, 0xFC, 400000);  // DAC 掉电
   M5Cardputer.In_I2C.writeRegister8(0x18, 0x32, 0x00, 400000);  // DAC→HP 混音器断开
@@ -1083,7 +1149,7 @@ static char hotkeyOf(int idx) {  // 该录音编号是否已绑定某键, 返回
 
 // 当前是否按下了一个"已绑定的播放键"(非 Ctrl/Tab): 返回对应录音编号, 否则 -1
 static int pressedHotkeyRec() {
-  if (keyCtrl() || keyTab()) return -1;
+  if (keyCtrl() || keyTab() || keyAlt()) return -1;
   if (keyEnter() || keyDel() || keySpace() || keyUpload()) return -1;
   char bk = pressedBindKey();
   if (!bk) return -1;
@@ -1688,15 +1754,106 @@ static bool markRecordingShortcut(int recNum) {
   return ok;
 }
 
-static void speakerOn() {
+static void speakerSetVolume(int volume) {
+  speakerVolumeCurrent = max(0, min(255, volume));
+  if (speakerOutputReady) M5Cardputer.Speaker.setVolume(speakerVolumeCurrent);
+}
+
+static void speakerCancelIdleOff() {
+  speakerIdleOffAtMs = 0;
+}
+
+static void speakerFadeToVolume(int target, uint16_t durationMs = 24) {
+  if (!speakerOutputReady) return;
+  target = max(0, min(255, target));
+  int start = speakerVolumeCurrent;
+  if (start == target || durationMs == 0) {
+    speakerSetVolume(target);
+    return;
+  }
+  const uint8_t steps = 8;
+  uint16_t stepDelay = max((uint16_t)1, (uint16_t)(durationMs / steps));
+  for (uint8_t i = 1; i <= steps; i++) {
+    int v = start + (int)((long)(target - start) * i / steps);
+    speakerSetVolume(v);
+    delay(stepDelay);
+  }
+}
+
+static int playbackVolumeForRec(int recNum) {
+  return volumeFromLevel(effectiveVolumeLevelForRec(recNum));
+}
+
+static void fadeInPlaybackVolumeForRec(int recNum) {
+  speakerSetVolume(playbackVolumeForRec(recNum));
+}
+
+static void speakerSoftStop(uint16_t fadeMs = 24) {
+  if (!speakerOutputReady) {
+    M5Cardputer.Speaker.stop();
+    return;
+  }
+  speakerCancelIdleOff();
+  speakerFadeToVolume(0, fadeMs);
+  M5Cardputer.Speaker.stop();
+}
+
+static void speakerKeepAliveSilence() {
+  if (!speakerOutputReady) return;
+  if (M5Cardputer.Speaker.isPlaying(0) >= 2) return;
+  M5Cardputer.Speaker.playRaw(speakerSilenceBuf, PB_N, REC_RATE, false, 1, 0, false);
+}
+
+static void speakerQuietFlush(uint16_t fadeMs = 6) {
+  if (!speakerOutputReady) return;
+  speakerCancelIdleOff();
+  speakerFadeToVolume(0, fadeMs);
+  M5Cardputer.Speaker.stop();
+}
+
+static void speakerScheduleIdleOff(uint32_t delayMs = SPEAKER_IDLE_OFF_MS) {
+  if (!speakerOutputReady) return;
+  speakerSetVolume(0);
+  speakerIdleOffAtMs = millis() + delayMs;
+  speakerKeepAliveSilence();
+}
+
+static void speakerIdlePowerDown() {
+  if (!speakerOutputReady) return;
+  speakerCancelIdleOff();
+  speakerSetVolume(0);
+  const uint8_t ES = 0x18;
+  M5Cardputer.In_I2C.writeRegister8(ES, 0x32, 0x00, 400000);
+  delay(2);
+  M5Cardputer.In_I2C.writeRegister8(ES, 0x13, 0x00, 400000);
+  delay(5);
+  M5Cardputer.Speaker.stop();
+  M5Cardputer.Speaker.end();
+  speakerOutputReady = false;
+  speakerVolumeCurrent = 0;
+  speakerDrainBeforeNextPlayback = false;
+}
+
+static void speakerMaybeIdleOff() {
+  if (!speakerOutputReady || speakerIdleOffAtMs == 0) return;
+  if ((int32_t)(millis() - speakerIdleOffAtMs) >= 0) {
+    speakerIdlePowerDown();
+    return;
+  }
+  speakerKeepAliveSilence();
+}
+
+static void speakerOn(bool muted = false) {
+  speakerCancelIdleOff();
   if (speakerOutputReady) {
-    M5Cardputer.Speaker.setVolume(playVol);
+    speakerSetVolume(muted ? 0 : playVol);
     return;
   }
   micInputReady = false;
   M5Cardputer.Mic.end();       // 关麦(释放共用编解码器)
   M5Cardputer.Speaker.begin();
-  M5Cardputer.Speaker.setVolume(playVol);
+  speakerVolumeCurrent = muted ? 0 : playVol;
+  M5Cardputer.Speaker.setVolume(speakerVolumeCurrent);
   const uint8_t ES = 0x18;     // internal_spk=false 无自动 DAC 回调, 手动开(照官方扬声器寄存器)
   M5Cardputer.In_I2C.writeRegister8(ES, 0x00, 0x80, 400000);
   M5Cardputer.In_I2C.writeRegister8(ES, 0x01, 0xB5, 400000);
@@ -2094,13 +2251,14 @@ int playbackScreen(const char *path, int recNum, int prevRec, int nextRec) {
   pauseUploadForMedia();
   auto &d = M5Cardputer.Display;
   if (!sdMount()) { showMsg("播放", "SD 读取失败", COL_RED); return R_LIST; }
+  bool isHotkeyPlayback = hotkeyOf(recNum) != 0;
   File f = SD.open(path, FILE_READ);
   if (!f) { SD.end(); showMsg("播放", "打不开文件", COL_RED); return R_LIST; }
   uint32_t total = f.size();
   if (total <= 44) { f.close(); SD.end(); showMsg("播放", "文件为空", COL_RED); return R_LIST; }
   uint32_t dataSize = playableWavDataBytes(f);
   if (dataSize == 0) { f.close(); SD.end(); showMsg("播放", "文件无效", COL_RED); return R_LIST; }
-  bool isHotkeyPlayback = hotkeyOf(recNum) != 0;
+  uint32_t playbackRate = shortcutPlaybackRate(wavSampleRate(f), isHotkeyPlayback);
   f.seek(44);
   memset(waveBars, 0, sizeof(waveBars));
   memset(waveBarCounts, 0, sizeof(waveBarCounts));
@@ -2108,10 +2266,13 @@ int playbackScreen(const char *path, int recNum, int prevRec, int nextRec) {
 
   d.fillScreen(COL_BG);
   M5Canvas waveCv(&d);
+  waveCv.setColorDepth(8);
   bool useWaveSprite = waveCv.createSprite(CONTENT_W, WAVE_H) != nullptr;
   M5Canvas bottomCv(&d);
+  bottomCv.setColorDepth(8);
   bool useBottomSprite = useWaveSprite && bottomCv.createSprite(CONTENT_W, CHROME_H) != nullptr;
   M5Canvas cv(&d);
+  cv.setColorDepth(8);
   bool useSprite = !useWaveSprite && cv.createSprite(CONTENT_W, d.height()) != nullptr;
   const uint32_t pbFrameMs = (useWaveSprite || useSprite) ? PB_UI_FRAME_MS : DIRECT_UI_FRAME_MS;
   g_mediaBusy = true;
@@ -2130,6 +2291,9 @@ int playbackScreen(const char *path, int recNum, int prevRec, int nextRec) {
         snprintf(keyLabel, sizeof(keyLabel), "K:%c", dispKey(hk));
         drawDseg14Text(cv, dseg14TextWidth(title) + 10, 1, keyLabel, COL_GREEN);
       }
+      if (isHotkeyPlayback && g_shortcutKeyRoot != 'C') {
+        drawDseg14Text(cv, CONTENT_W - dseg14TextWidth(shortcutKeyRootLabel()) - 4, 1, shortcutKeyRootLabel(), COL_DIM);
+      }
       cv.drawFastHLine(0, WAVE_BOT + 1, CONTENT_W, 0x0820);
     } else {
       d.fillScreen(COL_BG);
@@ -2138,6 +2302,9 @@ int playbackScreen(const char *path, int recNum, int prevRec, int nextRec) {
         char keyLabel[8];
         snprintf(keyLabel, sizeof(keyLabel), "K:%c", dispKey(hk));
         drawDseg14Text(d, dseg14TextWidth(title) + 10, 1, keyLabel, COL_GREEN);
+      }
+      if (isHotkeyPlayback && g_shortcutKeyRoot != 'C') {
+        drawDseg14Text(d, CONTENT_W - dseg14TextWidth(shortcutKeyRootLabel()) - 4, 1, shortcutKeyRootLabel(), COL_DIM);
       }
       d.drawFastHLine(0, WAVE_BOT + 1, CONTENT_W, 0x0820);
     }
@@ -2200,15 +2367,17 @@ int playbackScreen(const char *path, int recNum, int prevRec, int nextRec) {
   uint32_t lastSeek = 0;
   uint32_t lastPreviewDraw = 0;
   uint32_t lastProgressDraw = 0;
-  uint32_t fadeBytesLeft = REC_RATE * 2 * 80 / 1000;
+  uint32_t fadeBytesLeft = PLAYBACK_EDGE_FADE_BYTES;
+  int32_t pbDc = 0;
   uint8_t previewBar = 0;
   int pi = 0;
 
   drawStatic();
   drawProgress(0);
   lastProgressDraw = millis();
-  speakerOn();
-  applyPlaybackVolumeForRec(recNum);
+  speakerDrainBeforeNextPlayback = false;
+  speakerOn(true);
+  fadeInPlaybackVolumeForRec(recNum);
   bool ignoreKeysUntilRelease = M5Cardputer.Keyboard.isPressed();
 
   while (!stop) {
@@ -2240,16 +2409,22 @@ int playbackScreen(const char *path, int recNum, int prevRec, int nextRec) {
       if (stop) break;
 
       if (M5Cardputer.Keyboard.isChange() && M5Cardputer.Keyboard.isPressed()) {
+        if (handleShortcutKeyRootChord()) {
+          drawPlaybackAction(cv, shortcutKeyRootLabel(), COL_GREEN);
+          waitRelease();
+        }
+        else {
         int hk = pressedHotkeyRec();
         if (hk > 0) {
           drawPlaybackAction(cv, "PLAY", COL_GREEN);
+          speakerQuietFlush(6);
           g_listMode = REC_SHORTCUT;
           g_nextPlay = hk; ret = R_PLAY; stop = true;
         }   // 按到别的绑定键=立刻覆盖播放
         else if (keyEsc()) { drawPlaybackAction(cv, "SLEEP", COL_DIM); ret = R_BACK; stop = true; }       // Esc=息屏
         else if (keySpace()) { drawPlaybackAction(cv, "REC", COL_RED); ret = R_RECORD; stop = true; }   // 空格=去录音
-        else if (keyUp() && prevRec > 0) { drawPlaybackAction(cv, "PREV", COL_GREEN); g_nextPlay = prevRec; ret = R_PLAY; stop = true; }
-        else if (keyDown() && nextRec > 0) { drawPlaybackAction(cv, "NEXT", COL_GREEN); g_nextPlay = nextRec; ret = R_PLAY; stop = true; }
+        else if (keyUp() && prevRec > 0) { drawPlaybackAction(cv, "PREV", COL_GREEN); speakerQuietFlush(6); g_nextPlay = prevRec; ret = R_PLAY; stop = true; }
+        else if (keyDown() && nextRec > 0) { drawPlaybackAction(cv, "NEXT", COL_GREEN); speakerQuietFlush(6); g_nextPlay = nextRec; ret = R_PLAY; stop = true; }
         else if (keyTab() && keyUpload()) {
           uint8_t status = UPSTAT_IDLE;
           bool cancelled = uploadCancelMounted(recNum);
@@ -2278,7 +2453,8 @@ int playbackScreen(const char *path, int recNum, int prevRec, int nextRec) {
         }
         else if (keyEnter()) {
           paused = !paused;
-          if (paused) M5Cardputer.Speaker.stop();
+          if (paused) speakerSetVolume(0);
+          else fadeInPlaybackVolumeForRec(recNum);
           drawProgress(played);
           lastProgressDraw = millis();
           drawPlaybackAction(cv, paused ? "PAUSE" : "PLAY", paused ? COL_DIM : COL_GREEN);
@@ -2318,6 +2494,7 @@ int playbackScreen(const char *path, int recNum, int prevRec, int nextRec) {
           if (useSprite) drawCanvasBrightnessToast(cv, COL_GREEN);
           else drawBrightnessToast(COL_GREEN);
         }
+        }
       }
     }
     if (stop) break;
@@ -2327,7 +2504,7 @@ int playbackScreen(const char *path, int recNum, int prevRec, int nextRec) {
     bool seekRight = keyRight();
     if ((seekLeft || seekRight) && millis() - lastSeek > 120) {
       lastSeek = millis();
-      M5Cardputer.Speaker.stop();
+      speakerSetVolume(0);
       uint32_t step = REC_RATE * 2;  // 约 1 秒 PCM 数据
       if (seekLeft) played = (played > step) ? (played - step) : 0;
       if (seekRight) played = (played + step < dataSize) ? (played + step) : dataSize;
@@ -2336,10 +2513,12 @@ int playbackScreen(const char *path, int recNum, int prevRec, int nextRec) {
       f.seek(44 + played);
       playbackVisualN = 0;
       memset(playbackLiveWave, 0, sizeof(playbackLiveWave));
-      fadeBytesLeft = REC_RATE * 2 * 80 / 1000;
+      fadeBytesLeft = PLAYBACK_EDGE_FADE_BYTES;
+      pbDc = 0;
       drawProgress(played);
       lastProgressDraw = millis();
       playSeekFeedback(seekRight && !seekLeft);
+      fadeInPlaybackVolumeForRec(recNum);
       delay(8);
       continue;
     }
@@ -2377,16 +2556,30 @@ int playbackScreen(const char *path, int recNum, int prevRec, int nextRec) {
     remaining -= got;
     int16_t *liveWave = pbBuf[pi];
     size_t liveN = got / 2;
-    if (fadeBytesLeft > 0) {
-      uint32_t fadeBytes = REC_RATE * 2 * 80 / 1000;
-      for (size_t i = 0; i < liveN && fadeBytesLeft > 0; i++) {
-        uint32_t done = fadeBytes - fadeBytesLeft;
-        int32_t gain = (int32_t)(done * 256 / fadeBytes);
-        liveWave[i] = (int16_t)(((int32_t)liveWave[i] * gain) >> 8);
+    uint32_t chunkStart = played;
+    for (size_t i = 0; i < liveN; i++) {
+      int32_t raw = liveWave[i];
+      pbDc += (raw - pbDc) >> 8;
+      int32_t sample = raw - pbDc;
+      int32_t gain = 256;
+      if (fadeBytesLeft > 0) {
+        uint32_t done = PLAYBACK_EDGE_FADE_BYTES - fadeBytesLeft;
+        int32_t inGain = (int32_t)(done * 256 / PLAYBACK_EDGE_FADE_BYTES);
+        if (inGain < gain) gain = inGain;
         fadeBytesLeft = (fadeBytesLeft > 2) ? (fadeBytesLeft - 2) : 0;
       }
+      uint32_t sampleByte = chunkStart + (uint32_t)i * 2;
+      uint32_t bytesToEnd = (sampleByte < dataSize) ? (dataSize - sampleByte) : 0;
+      if (bytesToEnd < PLAYBACK_EDGE_FADE_BYTES) {
+        int32_t outGain = (int32_t)(bytesToEnd * 256 / PLAYBACK_EDGE_FADE_BYTES);
+        if (outGain < gain) gain = outGain;
+      }
+      sample = (sample * gain) >> 8;
+      if (sample > 32767) sample = 32767;
+      if (sample < -32768) sample = -32768;
+      liveWave[i] = (int16_t)sample;
     }
-    M5Cardputer.Speaker.playRaw(liveWave, liveN, REC_RATE, false, 1, 0, false);
+    M5Cardputer.Speaker.playRaw(liveWave, liveN, playbackRate, false, 1, 0, false);
     pi ^= 1;
     played += got;
     uint32_t now = millis();
@@ -2398,7 +2591,14 @@ int playbackScreen(const char *path, int recNum, int prevRec, int nextRec) {
   if (useBottomSprite) bottomCv.deleteSprite();
   if (useWaveSprite) waveCv.deleteSprite();
   if (useSprite) cv.deleteSprite();
-  M5Cardputer.Speaker.stop();
+  if (ret == R_PLAY) {
+    speakerCancelIdleOff();
+    speakerDrainBeforeNextPlayback = false;
+  } else if (ret == R_LIST) {
+    speakerScheduleIdleOff();
+  } else {
+    speakerSoftStop(12);
+  }
   f.close();
   if (recVolumeDirty) saveRecVolumeStateMounted();
   SD.end();
@@ -3537,6 +3737,7 @@ static bool uploadModeHoldTriggered() {
 }
 
 static bool systemIdleTick() {
+  speakerMaybeIdleOff();
   return false;
 }
 
@@ -3873,9 +4074,12 @@ int recordingScreen() {
   memset(waveBarCounts, 0, sizeof(waveBarCounts));
   memset(recLiveWave, 0, sizeof(recLiveWave));
   M5Canvas cv(&d);
+  cv.setColorDepth(8);
   M5Canvas waveCv(&d);
+  waveCv.setColorDepth(8);
   bool useWaveSprite = waveCv.createSprite(CONTENT_W, WAVE_H) != nullptr;
   M5Canvas bottomCv(&d);
+  bottomCv.setColorDepth(8);
   bool useBottomSprite = useWaveSprite && bottomCv.createSprite(CONTENT_W, CHROME_H) != nullptr;
   bool useSprite = !useWaveSprite && cv.createSprite(CONTENT_W, d.height()) != nullptr;
   const uint32_t recFrameMs = (useWaveSprite || useSprite) ? REC_UI_FRAME_MS : DIRECT_UI_FRAME_MS;
@@ -4604,6 +4808,12 @@ int listScreen(int selectIdx) {
     }
     if (M5Cardputer.Keyboard.isChange() && M5Cardputer.Keyboard.isPressed()) {
       lastInputMs = millis();
+      if (handleShortcutKeyRootChord()) {
+        drawActionToast(shortcutKeyRootLabel(), COL_GREEN);
+        redraw = true;
+        waitRelease();
+        continue;
+      }
       int hk = pressedHotkeyRec();
       if (hk > 0) {                                     // 绑定键=最高优先级, 交给外层播放页
         rememberListSelection(g_listMode, sel);
