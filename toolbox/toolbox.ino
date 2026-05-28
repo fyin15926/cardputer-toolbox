@@ -447,6 +447,10 @@ static void applyBrightness() {
   M5Cardputer.Display.setBrightness(BRIGHT_VALUES[brightLevel]);
 }
 
+static void applyMinBrightness() {
+  M5Cardputer.Display.setBrightness(BRIGHT_VALUES[0]);
+}
+
 static void adjustBrightness(int delta) {
   int level = (int)brightLevel;
   if (delta > 0) level++;
@@ -6780,7 +6784,7 @@ static void goSleep() {
   }
 #endif
   d.fillScreen(COL_BG);
-  if (uploadBeforeSleep) applyBrightness();
+  if (uploadBeforeSleep) applyMinBrightness();
   else d.setBrightness(0);          // 关背光 = 最大省电点
   delay(10);
   bool cleanAborted = false;
