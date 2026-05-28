@@ -2247,40 +2247,29 @@ int playbackScreen(const char *path, int recNum, int prevRec, int nextRec) {
         else if (keyDown() && nextRec > 0) { drawPlaybackAction(cv, "NEXT", COL_GREEN); g_nextPlay = nextRec; ret = R_PLAY; stop = true; }
         else if (keyTab() && keyUpload()) {
           uint8_t status = UPSTAT_IDLE;
-          bool cancelled = false;
-          if (sdMount()) {
-            cancelled = uploadCancelMounted(recNum);
-            SD.end();
-          } else {
-            status = UPSTAT_NO_SD;
-          }
+          bool cancelled = uploadCancelMounted(recNum);
           if (cancelled) status = UPSTAT_ABORTED;
           g_uploadStatus = status;
           drawPlaybackAction(cv, cancelled ? "ABORT" : (status == UPSTAT_NO_SD ? "NO SD" : "NO WT"), cancelled ? COL_GREEN : COL_DIM);
-          waitRelease();
         }
         else if (keyUpload()) {
-          uint8_t status = UPSTAT_NO_SD;
-          if (sdMount()) {
-            if (uploadDone(recNum)) {
-              status = UPSTAT_DONE;
-            } else if (uploadPending(recNum) || uploadModelErr(recNum) || uploadJobErr(recNum)) {
-              uploadMarkDone(recNum);
-              status = UPSTAT_DONE;
-            } else {
-              bool queued = enqueueUploadMounted(recNum, recKindOf(recNum));
-              status = queued ? validateUploadConfigMounted() : UPSTAT_NO_SD;
-              if (status == UPSTAT_IDLE) {
-                status = UPSTAT_QUEUED;
-                g_uploadStatus = status;
-                lastUploadTickMs = millis();
-              }
+          uint8_t status = UPSTAT_IDLE;
+          if (uploadDone(recNum)) {
+            status = UPSTAT_DONE;
+          } else if (uploadPending(recNum) || uploadModelErr(recNum) || uploadJobErr(recNum)) {
+            uploadMarkDone(recNum);
+            status = UPSTAT_DONE;
+          } else {
+            bool queued = enqueueUploadMounted(recNum, recKindOf(recNum));
+            status = queued ? validateUploadConfigMounted() : UPSTAT_NO_SD;
+            if (status == UPSTAT_IDLE) {
+              status = UPSTAT_QUEUED;
+              g_uploadStatus = status;
+              lastUploadTickMs = millis();
             }
-            SD.end();
           }
           g_uploadStatus = status;
           drawPlaybackAction(cv, uploadStatusLabel(status), (status == UPSTAT_QUEUED || status == UPSTAT_DONE) ? COL_GREEN : COL_RED);
-          waitRelease();
         }
         else if (keyEnter()) {
           paused = !paused;
@@ -6783,8 +6772,16 @@ static void goSleep() {
   M5Cardputer.Speaker.end();
   speakerOutputReady = false;
 
+  bool uploadBeforeSleep = false;
+#if UPLOAD_WIFI_ENABLED
+  if (!g_mediaBusy && sdMount()) {
+    uploadBeforeSleep = uploadQueueHasJobMounted();
+    SD.end();
+  }
+#endif
   d.fillScreen(COL_BG);
-  d.setBrightness(0);          // 关背光 = 最大省电点
+  if (uploadBeforeSleep) applyBrightness();
+  else d.setBrightness(0);          // 关背光 = 最大省电点
   delay(10);
   bool cleanAborted = false;
   processPendingFrictionQueue(cleanAborted);
@@ -6800,7 +6797,8 @@ static void goSleep() {
   }
 
 #if UPLOAD_WIFI_ENABLED
-  if (!g_mediaBusy) runUploadBatchMounted(false);
+  if (uploadBeforeSleep) runUploadBatchMounted(true);
+  else if (!g_mediaBusy) runUploadBatchMounted(false);
   if (g_uploadExitRequested) {
     uint8_t app = g_uploadExitApp;
     g_uploadExitRequested = false;
