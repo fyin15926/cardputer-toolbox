@@ -106,8 +106,10 @@ int playVol = 200;                       // 回放音量(+/- 可调, 0..255)
 static char g_shortcutKeyRoot = 'C';
 static int8_t g_shortcutTransposeSemis = 0;
 static float g_shortcutBendNeutralX = 0.0f;
-static float g_shortcutBendNeutralY = 0.0f;
+static float g_shortcutVibNeutralY = 0.0f;
 static float g_shortcutBendSemis = 0.0f;
+static float g_shortcutVibDepthSemis = 0.0f;
+static uint32_t g_shortcutVibStartMs = 0;
 static const int VOL_LEVELS = 10;
 static const uint8_t BRIGHT_LEVELS = 5;
 static const uint8_t BRIGHT_VALUES[BRIGHT_LEVELS] = {25, 55, 90, 125, 170};
@@ -411,12 +413,14 @@ static uint32_t shortcutPlaybackRate(uint32_t baseRate, bool isHotkeyPlayback) {
 
 static bool beginShortcutPitchBend(bool isHotkeyPlayback) {
   g_shortcutBendSemis = 0.0f;
+  g_shortcutVibDepthSemis = 0.0f;
+  g_shortcutVibStartMs = millis();
   if (!isHotkeyPlayback || !M5.Imu.isEnabled()) return false;
   M5.Imu.update();
   float ax = 0.0f, ay = 0.0f, az = 0.0f;
   if (!M5.Imu.getAccel(&ax, &ay, &az)) return false;
   g_shortcutBendNeutralX = ax;
-  g_shortcutBendNeutralY = ay;
+  g_shortcutVibNeutralY = ay;
   return true;
 }
 
@@ -429,9 +433,7 @@ static uint32_t shortcutMotionRate(uint32_t baseRate, bool enabled) {
   static const float DEADZONE_G = 0.06f;
   static const float FULL_BEND_G = 0.55f;
   static const float MAX_BEND_SEMIS = 2.0f;
-  float xDelta = ax - g_shortcutBendNeutralX;
-  float yDelta = g_shortcutBendNeutralY - ay;
-  float delta = fabsf(yDelta) > fabsf(xDelta) ? yDelta : xDelta;
+  float delta = ax - g_shortcutBendNeutralX;
   float mag = fabsf(delta);
   float targetSemis = 0.0f;
   if (mag > DEADZONE_G) {
@@ -442,7 +444,23 @@ static uint32_t shortcutMotionRate(uint32_t baseRate, bool enabled) {
   g_shortcutBendSemis += (targetSemis - g_shortcutBendSemis) * 0.22f;
   if (fabsf(g_shortcutBendSemis) < 0.02f) g_shortcutBendSemis = 0.0f;
 
-  float scale = powf(2.0f, g_shortcutBendSemis / 12.0f);
+  static const float VIB_DEADZONE_G = 0.06f;
+  static const float VIB_FULL_G = 0.42f;
+  static const float MAX_VIB_DEPTH_SEMIS = 0.45f;
+  float forward = g_shortcutVibNeutralY - ay;
+  float targetVibDepth = 0.0f;
+  if (forward > VIB_DEADZONE_G) {
+    targetVibDepth = (forward - VIB_DEADZONE_G) / (VIB_FULL_G - VIB_DEADZONE_G);
+    if (targetVibDepth > 1.0f) targetVibDepth = 1.0f;
+    targetVibDepth *= MAX_VIB_DEPTH_SEMIS;
+  }
+  g_shortcutVibDepthSemis += (targetVibDepth - g_shortcutVibDepthSemis) * 0.16f;
+  if (g_shortcutVibDepthSemis < 0.015f) g_shortcutVibDepthSemis = 0.0f;
+
+  static const float VIB_RATE_HZ = 5.5f;
+  float vibPhase = ((float)(millis() - g_shortcutVibStartMs) * (VIB_RATE_HZ * 6.2831853f)) / 1000.0f;
+  float vibSemis = sinf(vibPhase) * g_shortcutVibDepthSemis;
+  float scale = powf(2.0f, (g_shortcutBendSemis + vibSemis) / 12.0f);
   uint32_t rate = (uint32_t)((float)baseRate * scale + 0.5f);
   return max((uint32_t)8000, min((uint32_t)48000, rate));
 }
