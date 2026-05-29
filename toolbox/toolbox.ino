@@ -109,6 +109,7 @@ static float g_shortcutBendNeutralX = 0.0f;
 static float g_shortcutVibNeutralY = 0.0f;
 static float g_shortcutBendSemis = 0.0f;
 static float g_shortcutVibDepthSemis = 0.0f;
+static float g_shortcutTailGain = 1.0f;
 static uint32_t g_shortcutVibStartMs = 0;
 static const int VOL_LEVELS = 10;
 static const uint8_t BRIGHT_LEVELS = 5;
@@ -414,6 +415,7 @@ static uint32_t shortcutPlaybackRate(uint32_t baseRate, bool isHotkeyPlayback) {
 static bool beginShortcutPitchBend(bool isHotkeyPlayback) {
   g_shortcutBendSemis = 0.0f;
   g_shortcutVibDepthSemis = 0.0f;
+  g_shortcutTailGain = 1.0f;
   g_shortcutVibStartMs = millis();
   if (!isHotkeyPlayback || !M5.Imu.isEnabled()) return false;
   M5.Imu.update();
@@ -448,6 +450,7 @@ static uint32_t shortcutMotionRate(uint32_t baseRate, bool enabled) {
   static const float VIB_FULL_G = 0.42f;
   static const float MAX_VIB_DEPTH_SEMIS = 0.45f;
   float forward = g_shortcutVibNeutralY - ay;
+  float backward = ay - g_shortcutVibNeutralY;
   float targetVibDepth = 0.0f;
   if (forward > VIB_DEADZONE_G) {
     targetVibDepth = (forward - VIB_DEADZONE_G) / (VIB_FULL_G - VIB_DEADZONE_G);
@@ -456,6 +459,17 @@ static uint32_t shortcutMotionRate(uint32_t baseRate, bool enabled) {
   }
   g_shortcutVibDepthSemis += (targetVibDepth - g_shortcutVibDepthSemis) * 0.16f;
   if (g_shortcutVibDepthSemis < 0.015f) g_shortcutVibDepthSemis = 0.0f;
+
+  static const float TAIL_DEADZONE_G = 0.06f;
+  static const float TAIL_FULL_G = 0.46f;
+  static const float MIN_TAIL_GAIN = 0.08f;
+  float targetTailGain = 1.0f;
+  if (backward > TAIL_DEADZONE_G) {
+    float fade = (backward - TAIL_DEADZONE_G) / (TAIL_FULL_G - TAIL_DEADZONE_G);
+    if (fade > 1.0f) fade = 1.0f;
+    targetTailGain = 1.0f - fade * (1.0f - MIN_TAIL_GAIN);
+  }
+  g_shortcutTailGain += (targetTailGain - g_shortcutTailGain) * 0.12f;
 
   static const float VIB_RATE_HZ = 5.5f;
   float vibPhase = ((float)(millis() - g_shortcutVibStartMs) * (VIB_RATE_HZ * 6.2831853f)) / 1000.0f;
@@ -2635,6 +2649,9 @@ int playbackScreen(const char *path, int recNum, int prevRec, int nextRec) {
       if (bytesToEnd < PLAYBACK_EDGE_FADE_BYTES) {
         int32_t outGain = (int32_t)(bytesToEnd * 256 / PLAYBACK_EDGE_FADE_BYTES);
         if (outGain < gain) gain = outGain;
+      }
+      if (pitchBendEnabled && g_shortcutTailGain < 0.995f) {
+        gain = (int32_t)((float)gain * g_shortcutTailGain);
       }
       sample = (sample * gain) >> 8;
       if (sample > 32767) sample = 32767;
