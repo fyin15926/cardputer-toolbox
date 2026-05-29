@@ -433,7 +433,7 @@ static uint32_t shortcutPitchBendRate(uint32_t baseRate, bool enabled) {
   if (mag > DEADZONE_G) {
     float bend = (mag - DEADZONE_G) / (FULL_BEND_G - DEADZONE_G);
     if (bend > 1.0f) bend = 1.0f;
-    targetSemis = (delta < 0.0f ? -bend : bend) * MAX_BEND_SEMIS;
+    targetSemis = (delta < 0.0f ? bend : -bend) * MAX_BEND_SEMIS;
   }
   g_shortcutBendSemis += (targetSemis - g_shortcutBendSemis) * 0.22f;
   if (fabsf(g_shortcutBendSemis) < 0.02f) g_shortcutBendSemis = 0.0f;
