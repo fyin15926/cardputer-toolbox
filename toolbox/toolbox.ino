@@ -443,7 +443,7 @@ static uint32_t shortcutMotionRate(uint32_t baseRate, bool enabled) {
   if (fabsf(g_shortcutBendSemis) < 0.02f) g_shortcutBendSemis = 0.0f;
 
   static const float TONE_DEADZONE_G = 0.06f;
-  static const float TONE_FULL_G = 0.50f;
+  static const float TONE_FULL_G = 0.38f;
   float toneDelta = g_shortcutToneNeutralY - ay;
   float toneMag = fabsf(toneDelta);
   float targetTone = 0.0f;
@@ -2614,6 +2614,7 @@ int playbackScreen(const char *path, int recNum, int prevRec, int nextRec) {
     int16_t *liveWave = pbBuf[pi];
     size_t liveN = got / 2;
     uint32_t chunkStart = played;
+    uint32_t livePlaybackRate = shortcutMotionRate(playbackRate, pitchBendEnabled);
     for (size_t i = 0; i < liveN; i++) {
       int32_t raw = liveWave[i];
       pbDc += (raw - pbDc) >> 8;
@@ -2622,10 +2623,10 @@ int playbackScreen(const char *path, int recNum, int prevRec, int nextRec) {
         toneLp += ((sample - toneLp) * 96) >> 8;
         int32_t hi = sample - toneLp;
         if (g_shortcutToneAmount < -0.02f) {
-          int32_t hiMix = 256 - (int32_t)(146.0f * -g_shortcutToneAmount);
+          int32_t hiMix = 256 - (int32_t)(218.0f * -g_shortcutToneAmount);
           sample = toneLp + ((hi * hiMix) >> 8);
         } else if (g_shortcutToneAmount > 0.02f) {
-          int32_t hiBoost = (int32_t)(70.0f * g_shortcutToneAmount);
+          int32_t hiBoost = (int32_t)(180.0f * g_shortcutToneAmount);
           sample += (hi * hiBoost) >> 8;
         }
       }
@@ -2647,7 +2648,6 @@ int playbackScreen(const char *path, int recNum, int prevRec, int nextRec) {
       if (sample < -32768) sample = -32768;
       liveWave[i] = (int16_t)sample;
     }
-    uint32_t livePlaybackRate = shortcutMotionRate(playbackRate, pitchBendEnabled);
     M5Cardputer.Speaker.playRaw(liveWave, liveN, livePlaybackRate, false, 1, 0, false);
     pi ^= 1;
     played += got;
