@@ -16,6 +16,7 @@
 #include <M5Cardputer.h>
 #include <SD.h>
 #include <SPI.h>
+#include <math.h>
 #include "esp_sleep.h"   // 轻睡眠(息屏省电)
 #include "driver/gpio.h" // 键盘中断唤醒(GPIO11)
 
@@ -104,6 +105,8 @@ int recGain = 36;                        // 录音软件增益默认值(W/S 现�
 int playVol = 200;                       // 回放音量(+/- 可调, 0..255)
 static char g_shortcutKeyRoot = 'C';
 static int8_t g_shortcutTransposeSemis = 0;
+static float g_shortcutBendNeutralX = 0.0f;
+static float g_shortcutBendSemis = 0.0f;
 static const int VOL_LEVELS = 10;
 static const uint8_t BRIGHT_LEVELS = 5;
 static const uint8_t BRIGHT_VALUES[BRIGHT_LEVELS] = {25, 55, 90, 125, 170};
@@ -402,6 +405,41 @@ static uint32_t shortcutPlaybackRate(uint32_t baseRate, bool isHotkeyPlayback) {
   int idx = (int)g_shortcutTransposeSemis + 6;
   if (idx < 0 || idx >= (int)(sizeof(scaleQ10) / sizeof(scaleQ10[0]))) return baseRate;
   uint32_t rate = ((uint32_t)baseRate * scaleQ10[idx] + 512) / 1024;
+  return max((uint32_t)8000, min((uint32_t)48000, rate));
+}
+
+static bool beginShortcutPitchBend(bool isHotkeyPlayback) {
+  g_shortcutBendSemis = 0.0f;
+  if (!isHotkeyPlayback || !M5.Imu.isEnabled()) return false;
+  M5.Imu.update();
+  float ax = 0.0f, ay = 0.0f, az = 0.0f;
+  if (!M5.Imu.getAccel(&ax, &ay, &az)) return false;
+  g_shortcutBendNeutralX = ax;
+  return true;
+}
+
+static uint32_t shortcutPitchBendRate(uint32_t baseRate, bool enabled) {
+  if (!enabled) return baseRate;
+  M5.Imu.update();
+  float ax = 0.0f, ay = 0.0f, az = 0.0f;
+  if (!M5.Imu.getAccel(&ax, &ay, &az)) return baseRate;
+
+  static const float DEADZONE_G = 0.06f;
+  static const float FULL_BEND_G = 0.55f;
+  static const float MAX_BEND_SEMIS = 2.0f;
+  float delta = ax - g_shortcutBendNeutralX;
+  float mag = fabsf(delta);
+  float targetSemis = 0.0f;
+  if (mag > DEADZONE_G) {
+    float bend = (mag - DEADZONE_G) / (FULL_BEND_G - DEADZONE_G);
+    if (bend > 1.0f) bend = 1.0f;
+    targetSemis = (delta < 0.0f ? -bend : bend) * MAX_BEND_SEMIS;
+  }
+  g_shortcutBendSemis += (targetSemis - g_shortcutBendSemis) * 0.22f;
+  if (fabsf(g_shortcutBendSemis) < 0.02f) g_shortcutBendSemis = 0.0f;
+
+  float scale = powf(2.0f, g_shortcutBendSemis / 12.0f);
+  uint32_t rate = (uint32_t)((float)baseRate * scale + 0.5f);
   return max((uint32_t)8000, min((uint32_t)48000, rate));
 }
 
@@ -2259,6 +2297,7 @@ int playbackScreen(const char *path, int recNum, int prevRec, int nextRec) {
   uint32_t dataSize = playableWavDataBytes(f);
   if (dataSize == 0) { f.close(); SD.end(); showMsg("播放", "文件无效", COL_RED); return R_LIST; }
   uint32_t playbackRate = shortcutPlaybackRate(wavSampleRate(f), isHotkeyPlayback);
+  bool pitchBendEnabled = beginShortcutPitchBend(isHotkeyPlayback);
   f.seek(44);
   memset(waveBars, 0, sizeof(waveBars));
   memset(waveBarCounts, 0, sizeof(waveBarCounts));
@@ -2579,7 +2618,8 @@ int playbackScreen(const char *path, int recNum, int prevRec, int nextRec) {
       if (sample < -32768) sample = -32768;
       liveWave[i] = (int16_t)sample;
     }
-    M5Cardputer.Speaker.playRaw(liveWave, liveN, playbackRate, false, 1, 0, false);
+    uint32_t livePlaybackRate = shortcutPitchBendRate(playbackRate, pitchBendEnabled);
+    M5Cardputer.Speaker.playRaw(liveWave, liveN, livePlaybackRate, false, 1, 0, false);
     pi ^= 1;
     played += got;
     uint32_t now = millis();
