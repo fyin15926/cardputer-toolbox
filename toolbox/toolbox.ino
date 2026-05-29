@@ -106,7 +106,9 @@ int playVol = 200;                       // 回放音量(+/- 可调, 0..255)
 static char g_shortcutKeyRoot = 'C';
 static int8_t g_shortcutTransposeSemis = 0;
 static float g_shortcutBendNeutralX = 0.0f;
+static float g_shortcutToneNeutralY = 0.0f;
 static float g_shortcutBendSemis = 0.0f;
+static float g_shortcutToneAmount = 0.0f;
 static const int VOL_LEVELS = 10;
 static const uint8_t BRIGHT_LEVELS = 5;
 static const uint8_t BRIGHT_VALUES[BRIGHT_LEVELS] = {25, 55, 90, 125, 170};
@@ -410,15 +412,17 @@ static uint32_t shortcutPlaybackRate(uint32_t baseRate, bool isHotkeyPlayback) {
 
 static bool beginShortcutPitchBend(bool isHotkeyPlayback) {
   g_shortcutBendSemis = 0.0f;
+  g_shortcutToneAmount = 0.0f;
   if (!isHotkeyPlayback || !M5.Imu.isEnabled()) return false;
   M5.Imu.update();
   float ax = 0.0f, ay = 0.0f, az = 0.0f;
   if (!M5.Imu.getAccel(&ax, &ay, &az)) return false;
   g_shortcutBendNeutralX = ax;
+  g_shortcutToneNeutralY = ay;
   return true;
 }
 
-static uint32_t shortcutPitchBendRate(uint32_t baseRate, bool enabled) {
+static uint32_t shortcutMotionRate(uint32_t baseRate, bool enabled) {
   if (!enabled) return baseRate;
   M5.Imu.update();
   float ax = 0.0f, ay = 0.0f, az = 0.0f;
@@ -437,6 +441,19 @@ static uint32_t shortcutPitchBendRate(uint32_t baseRate, bool enabled) {
   }
   g_shortcutBendSemis += (targetSemis - g_shortcutBendSemis) * 0.22f;
   if (fabsf(g_shortcutBendSemis) < 0.02f) g_shortcutBendSemis = 0.0f;
+
+  static const float TONE_DEADZONE_G = 0.06f;
+  static const float TONE_FULL_G = 0.50f;
+  float toneDelta = g_shortcutToneNeutralY - ay;
+  float toneMag = fabsf(toneDelta);
+  float targetTone = 0.0f;
+  if (toneMag > TONE_DEADZONE_G) {
+    targetTone = (toneMag - TONE_DEADZONE_G) / (TONE_FULL_G - TONE_DEADZONE_G);
+    if (targetTone > 1.0f) targetTone = 1.0f;
+    if (toneDelta < 0.0f) targetTone = -targetTone;
+  }
+  g_shortcutToneAmount += (targetTone - g_shortcutToneAmount) * 0.18f;
+  if (fabsf(g_shortcutToneAmount) < 0.02f) g_shortcutToneAmount = 0.0f;
 
   float scale = powf(2.0f, g_shortcutBendSemis / 12.0f);
   uint32_t rate = (uint32_t)((float)baseRate * scale + 0.5f);
@@ -2408,6 +2425,7 @@ int playbackScreen(const char *path, int recNum, int prevRec, int nextRec) {
   uint32_t lastProgressDraw = 0;
   uint32_t fadeBytesLeft = PLAYBACK_EDGE_FADE_BYTES;
   int32_t pbDc = 0;
+  int32_t toneLp = 0;
   uint8_t previewBar = 0;
   int pi = 0;
 
@@ -2600,6 +2618,17 @@ int playbackScreen(const char *path, int recNum, int prevRec, int nextRec) {
       int32_t raw = liveWave[i];
       pbDc += (raw - pbDc) >> 8;
       int32_t sample = raw - pbDc;
+      if (pitchBendEnabled) {
+        toneLp += ((sample - toneLp) * 96) >> 8;
+        int32_t hi = sample - toneLp;
+        if (g_shortcutToneAmount < -0.02f) {
+          int32_t hiMix = 256 - (int32_t)(146.0f * -g_shortcutToneAmount);
+          sample = toneLp + ((hi * hiMix) >> 8);
+        } else if (g_shortcutToneAmount > 0.02f) {
+          int32_t hiBoost = (int32_t)(70.0f * g_shortcutToneAmount);
+          sample += (hi * hiBoost) >> 8;
+        }
+      }
       int32_t gain = 256;
       if (fadeBytesLeft > 0) {
         uint32_t done = PLAYBACK_EDGE_FADE_BYTES - fadeBytesLeft;
@@ -2618,7 +2647,7 @@ int playbackScreen(const char *path, int recNum, int prevRec, int nextRec) {
       if (sample < -32768) sample = -32768;
       liveWave[i] = (int16_t)sample;
     }
-    uint32_t livePlaybackRate = shortcutPitchBendRate(playbackRate, pitchBendEnabled);
+    uint32_t livePlaybackRate = shortcutMotionRate(playbackRate, pitchBendEnabled);
     M5Cardputer.Speaker.playRaw(liveWave, liveN, livePlaybackRate, false, 1, 0, false);
     pi ^= 1;
     played += got;
