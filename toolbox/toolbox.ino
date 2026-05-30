@@ -1,64 +1,64 @@
-/*
- * 我的工具箱 (My Toolbox) for M5Stack Cardputer-Adv
- * 风格: 纯黑背景 + 黑客帝国荧光绿 + 线性 + 中文界面 + 横屏(240x135)
+﻿/*
+ * 鎴戠殑宸ュ叿绠?(My Toolbox) for M5Stack Cardputer-Adv
+ * 椋庢牸: 绾粦鑳屾櫙 + 榛戝甯濆浗鑽у厜缁?+ 绾挎€?+ 涓枃鐣岄潰 + 妯睆(240x135)
  *
- * 工具箱交互:
- *   开机: 自动开始录音; 息屏: 空格=录音, 回车=录音列表, F=番茄钟, Alt=应用列表
+ * 宸ュ叿绠变氦浜?
+ *   寮€鏈? 鑷姩寮€濮嬪綍闊? 鎭睆: 绌烘牸=褰曢煶, 鍥炶溅=褰曢煶鍒楄〃, F=鐣寗閽? Alt=搴旂敤鍒楄〃
  *
- * 录音应用交互:
- *   录制中: 空格=暂停/继续; 回车=结束(存盘并进入列表); Esc=存盘并息屏; 长按Del 1.2秒=取消并删除本条; W/S=音量
- *   录音列表: 左/右切 REC/KEY/IMP; ;/. 上下选; 回车=播放; Esc=息屏; 长按Del=删除; Tab+键=绑定快捷; Tab+Enter=标重要; Alt=降噪
- *   回放: 播放完自动回列表; 回车=暂停/继续; 退格=回列表; ;/.=上一条/下一条; Esc=息屏; +/- (= 与 - 键)=音量; 长按Del 1.2秒=删除当前录音; 空格=去录音
- *   绑定的播放键=最高优先级, 任意界面(录音中除外)即按即播, 且播放中按别的键可覆盖切换
+ * 褰曢煶搴旂敤浜や簰:
+ *   褰曞埗涓? 绌烘牸=鏆傚仠/缁х画; 鍥炶溅=缁撴潫(瀛樼洏骞惰繘鍏ュ垪琛?; Esc=瀛樼洏骞舵伅灞? 闀挎寜Del 1.2绉?鍙栨秷骞跺垹闄ゆ湰鏉? W/S=闊抽噺
+ *   褰曢煶鍒楄〃: 宸?鍙冲垏 REC/QCK/IMP; ;/. 涓婁笅閫? 鍥炶溅=鎾斁; Esc=鎭睆; 闀挎寜Del=鍒犻櫎; Tab+閿?缁戝畾蹇嵎; Tab+Enter=鏍囬噸瑕? Alt=闄嶅櫔
+ *   鍥炴斁: 鎾斁瀹岃嚜鍔ㄥ洖鍒楄〃; 鍥炶溅=鏆傚仠/缁х画; 閫€鏍?鍥炲垪琛? ;/.=涓婁竴鏉?涓嬩竴鏉? Esc=鎭睆; +/- (= 涓?- 閿?=闊抽噺; 闀挎寜Del 1.2绉?鍒犻櫎褰撳墠褰曢煶; 绌烘牸=鍘诲綍闊?
+ *   缁戝畾鐨勬挱鏀鹃敭=鏈€楂樹紭鍏堢骇, 浠绘剰鐣岄潰(褰曢煶涓櫎澶?鍗虫寜鍗虫挱, 涓旀挱鏀句腑鎸夊埆鐨勯敭鍙鐩栧垏鎹?
  *
- * 方向键(物理): ; = 上, . = 下, , = 左, / = 右
+ * 鏂瑰悜閿?鐗╃悊): ; = 涓? . = 涓? , = 宸? / = 鍙?
  */
 #include <M5Cardputer.h>
 #include <SD.h>
 #include <SPI.h>
 #include <math.h>
-#include "esp_sleep.h"   // 轻睡眠(息屏省电)
-#include "driver/gpio.h" // 键盘中断唤醒(GPIO11)
+#include "esp_sleep.h"   // 杞荤潯鐪?鎭睆鐪佺數)
+#include "driver/gpio.h" // 閿洏涓柇鍞ら啋(GPIO11)
 
-#define UPLOAD_WIFI_ENABLED 1  // 需要使用 8MB Flash + 3MB APP 分区编译
+#define UPLOAD_WIFI_ENABLED 1  // 闇€瑕佷娇鐢?8MB Flash + 3MB APP 鍒嗗尯缂栬瘧
 #if UPLOAD_WIFI_ENABLED
 #include <WiFi.h>
 #include "esp_wifi.h"
 #include <time.h>
 #endif
 
-// ---------- 屏幕方向 ----------
-// 横屏: 1 或 3. 若上下颠倒, 改另一个即可.
+// ---------- 灞忓箷鏂瑰悜 ----------
+// 妯睆: 1 鎴?3. 鑻ヤ笂涓嬮鍊? 鏀瑰彟涓€涓嵆鍙?
 #define SCREEN_ROT 1
 
-// ---------- 配色 ----------
-#define COL_BG    0x0000   // 纯黑
-#define COL_GREEN 0x07E0   // 荧光绿(亮)
-#define COL_DIM   0x0320   // 暗绿
-#define COL_RED   0xF800   // 录音红点
-#define COL_WHITE 0xFFFF   // 播放头白线
+// ---------- 閰嶈壊 ----------
+#define COL_BG    0x0000   // 绾粦
+#define COL_GREEN 0x07E0   // 鑽у厜缁?浜?
+#define COL_DIM   0x0320   // 鏆楃豢
+#define COL_RED   0xF800   // 褰曢煶绾㈢偣
+#define COL_WHITE 0xFFFF   // 鎾斁澶寸櫧绾?
 #define COL_GRAY  0x7BEF
 #define COL_DARK_GRAY 0x2104
 
-// ---------- 全屏 UI 布局常量 ----------
-// 屏幕 240×135; 不再绘制右侧标签栏, 所有界面使用全宽内容区
-#define CONTENT_W  240     // 内容区宽度 (x: 0..239)
-#define WAVE_TOP    20     // 波形区顶 y
-#define WAVE_BOT   109     // 波形区底 y  (余 26px 给计时器)
-#define WAVE_H      89     // 波形区高度
-#define WAVE_CY     50     // A/B 分界: 约 2:1, B线作为主视觉
+// ---------- 鍏ㄥ睆 UI 甯冨眬甯搁噺 ----------
+// 灞忓箷 240脳135; 涓嶅啀缁樺埗鍙充晶鏍囩鏍? 鎵€鏈夌晫闈娇鐢ㄥ叏瀹藉唴瀹瑰尯
+#define CONTENT_W  240     // 鍐呭鍖哄搴?(x: 0..239)
+#define WAVE_TOP    20     // 娉㈠舰鍖洪《 y
+#define WAVE_BOT   109     // 娉㈠舰鍖哄簳 y  (浣?26px 缁欒鏃跺櫒)
+#define WAVE_H      89     // 娉㈠舰鍖洪珮搴?
+#define WAVE_CY     50     // A/B 鍒嗙晫: 绾?2:1, B绾夸綔涓轰富瑙嗚
 #define CHROME_TOP  (WAVE_BOT + 1)
 #define CHROME_H    (135 - CHROME_TOP)
-static const int A_CY   = (WAVE_TOP + WAVE_CY) / 2;        // A线/轨道线中轴
-static const int A_HALF = (WAVE_CY - WAVE_TOP) / 2 - 2;    // A线最大半幅
-static const int B_CY   = (WAVE_CY + WAVE_BOT) / 2;        // B线/监听线中轴
-static const int B_HALF = (WAVE_BOT - WAVE_CY) / 2 - 2;    // B线最大半幅
-static const uint8_t REC_B_SMOOTH = 2;   // 录音 B线平滑: 越大越稳, 越小越灵敏
-static const uint8_t PB_B_SMOOTH  = REC_B_SMOOTH;   // 播放 B线跟录音页一致
-static const uint8_t B_DECAY      = 5;   // 无新音频时回中线速度: 越小回落越快
-static const int32_t A_RMS_FULL   = 18000; // A线满格阈值: 越大越不敏感
+static const int A_CY   = (WAVE_TOP + WAVE_CY) / 2;        // A绾?杞ㄩ亾绾夸腑杞?
+static const int A_HALF = (WAVE_CY - WAVE_TOP) / 2 - 2;    // A绾挎渶澶у崐骞?
+static const int B_CY   = (WAVE_CY + WAVE_BOT) / 2;        // B绾?鐩戝惉绾夸腑杞?
+static const int B_HALF = (WAVE_BOT - WAVE_CY) / 2 - 2;    // B绾挎渶澶у崐骞?
+static const uint8_t REC_B_SMOOTH = 2;   // 褰曢煶 B绾垮钩婊? 瓒婂ぇ瓒婄ǔ, 瓒婂皬瓒婄伒鏁?
+static const uint8_t PB_B_SMOOTH  = REC_B_SMOOTH;   // 鎾斁 B绾胯窡褰曢煶椤典竴鑷?
+static const uint8_t B_DECAY      = 5;   // 鏃犳柊闊抽鏃跺洖涓嚎閫熷害: 瓒婂皬鍥炶惤瓒婂揩
+static const int32_t A_RMS_FULL   = 18000; // A绾挎弧鏍奸槇鍊? 瓒婂ぇ瓒婁笉鏁忔劅
 
-// ---------- 录音参数 ----------
+// ---------- 褰曢煶鍙傛暟 ----------
 static const uint8_t REC_B_GAIN   = 5;
 static const uint8_t PB_B_GAIN    = 3;
 static const uint8_t PB_B_SMOOTH_FAST = 2;
@@ -76,34 +76,41 @@ enum Dseg14Seg : uint16_t {
 };
 
 static const uint32_t REC_RATE = 16000;  // 16kHz
-static const int32_t  SHORTCUT_TRIM_RMS = 900;   // 快捷音频切头去尾静音阈值
-static const uint32_t SHORTCUT_HEAD_PAD = REC_RATE / 50;  // 20ms, 防止开头被切硬
-static const uint32_t SHORTCUT_TAIL_PAD = REC_RATE / 10;  // 100ms, 留一点自然收尾
-static const int32_t  SHORTCUT_RETRIM_RMS = 1300; // 再次绑定时更强修边
+static const uint32_t SHORTCUT_RATE_MIN = 2000;
+static const uint32_t SHORTCUT_RATE_MAX = 48000;
+static const int32_t  SHORTCUT_TRIM_RMS = 900;   // 蹇嵎闊抽鍒囧ご鍘诲熬闈欓煶闃堝€?
+static const uint32_t SHORTCUT_HEAD_PAD = REC_RATE / 50;  // 20ms, 闃叉寮€澶磋鍒囩‖
+static const uint32_t SHORTCUT_TAIL_PAD = REC_RATE / 10;  // 100ms, 鐣欎竴鐐硅嚜鐒舵敹灏?
+static const int32_t  SHORTCUT_RETRIM_RMS = 1600;
 static const uint32_t SHORTCUT_RETRIM_HEAD_PAD = REC_RATE / 200; // 5ms
 static const uint32_t SHORTCUT_RETRIM_TAIL_PAD = REC_RATE / 40;  // 25ms
-static const uint32_t SHORTCUT_FADE_SAMPLES = REC_RATE / 125; // 8ms 淡入淡出
-static const size_t   REC_N    = 256;    // 每缓冲样本数 (~16ms, 小=波形更流畅)
-static const size_t   PB_N     = 256;    // 播放缓冲样本数 (~16ms, B线更贴近录音页)
+static const int32_t  SHORTCUT_SUPERTRIM_RMS = 2200;
+static const uint32_t SHORTCUT_SUPERTRIM_HEAD_PAD = REC_RATE / 1000; // 1ms
+static const uint32_t SHORTCUT_SUPERTRIM_TAIL_PAD = REC_RATE * 12 / 1000; // 12ms
+static const uint32_t SHORTCUT_FADE_SAMPLES = REC_RATE / 125; // 8ms 娣″叆娣″嚭
+static const size_t   REC_N    = 256;    // 姣忕紦鍐叉牱鏈暟 (~16ms, 灏?娉㈠舰鏇存祦鐣?
+static const size_t   PB_N     = 256;    // 鎾斁缂撳啿鏍锋湰鏁?(~16ms, B绾挎洿璐磋繎褰曢煶椤?
 static const uint32_t REC_UI_FRAME_MS = 33;  // Sprite path: about 30fps while keeping audio/SD priority.
 static const uint32_t PB_UI_FRAME_MS  = 33;  // Sprite path: smoother playback UI without pushing toward 60fps.
 static const uint32_t DIRECT_UI_FRAME_MS = 66;  // No-sprite fallback: about 15fps to avoid direct-draw flicker.
 static const uint32_t REC_AUTO_SEGMENT_MS = 30UL * 60UL * 1000UL;
+static const uint32_t ROLLBACK_KEEP_MS = 120UL * 1000UL;
+static const uint32_t ROLLBACK_KEEP_BYTES = REC_RATE * 2UL * (ROLLBACK_KEEP_MS / 1000UL);
 static const uint8_t  REC_WRITE_BATCH = 4;
 static const uint8_t  REC_REARM_SETTLE_BUFFERS = 6;
 static const uint32_t UPLOAD_IDLE_DELAY_MS = 3000;
 static const uint32_t SPEAKER_IDLE_OFF_MS = 3000;
 static const uint32_t PLAYBACK_EDGE_FADE_BYTES = REC_RATE * 2 * 80 / 1000;
-static const uint32_t HOTKEY_END_HOLD_MS = 650;
+static const uint32_t HOTKEY_END_HOLD_MS = 3000;
 static int16_t recBuf[2][REC_N];
-static int16_t pbBuf[2][PB_N];           // 播放双缓冲(放一块/读另一块, 避免覆盖破音)
+static int16_t pbBuf[2][PB_N];           // 鎾斁鍙岀紦鍐?鏀句竴鍧?璇诲彟涓€鍧? 閬垮厤瑕嗙洊鐮撮煶)
 static int16_t recWriteBuf[REC_WRITE_BATCH * REC_N];
 static int16_t recVisualBuf[REC_N];
 static int16_t playbackVisualBuf[PB_N];
 static int16_t speakerSilenceBuf[PB_N];
 static int16_t seekToneBuf[384];
-int recGain = 36;                        // 录音软件增益默认值(W/S 现场可调, 带削波保护)
-int playVol = 200;                       // 回放音量(+/- 可调, 0..255)
+int recGain = 36;                        // 褰曢煶杞欢澧炵泭榛樿鍊?W/S 鐜板満鍙皟, 甯﹀墛娉繚鎶?
+int playVol = 200;                       // 鍥炴斁闊抽噺(+/- 鍙皟, 0..255)
 static char g_shortcutKeyRoot = 'C';
 static int8_t g_shortcutTransposeSemis = 0;
 static bool g_scaleMode = false;
@@ -111,6 +118,10 @@ static int g_scaleCurrentRec = 0;
 static float g_shortcutSemisOverride = 127.0f;
 static int g_scalePitchCacheRec = 0;
 static float g_scalePitchCacheHz = 0.0f;
+static bool g_perfHudVisible = false;
+static char g_perfHudLastKey = 0;
+static char g_perfHudPendingKey = 0;
+static uint8_t g_perfHudLastKind = 255;
 static float g_shortcutBendNeutralX = 0.0f;
 static float g_shortcutVibNeutralY = 0.0f;
 static float g_shortcutBendSemis = 0.0f;
@@ -160,7 +171,7 @@ static uint8_t g_uploadBatchTotal = 0;
 static bool g_wifiSessionActive = false;
 static bool g_mediaBusy = false;
 
-// SD 引脚(运行时由 M5Unified 按机型给出, 失败则回退到 Adv 已知值)
+// SD 寮曡剼(杩愯鏃剁敱 M5Unified 鎸夋満鍨嬬粰鍑? 澶辫触鍒欏洖閫€鍒?Adv 宸茬煡鍊?
 int sdSCLK = 40, sdMISO = 39, sdMOSI = 14, sdCS = 12;
 
 static const char *REC_DIR = "/REC";
@@ -184,6 +195,7 @@ static const char *UPLOAD_JOB_ERR_PATH = "/UPLOAD/job_err.txt";
 static const char *UPLOAD_CONFIG_PATH = "/UPLOAD/net.txt";
 static const char *UPLOAD_RECORDED_AT_PATH = "/UPLOAD/recorded_at.txt";
 static const char *REC_VOLUME_PATH = "/REC/volume.txt";
+static const char *ROLLBACK_TMP_PATH = "/REC/.rollback.pcm";
 static const size_t UPLOAD_CHUNK_BYTES = 4096;
 static const uint32_t UPLOAD_ADPCM_THRESHOLD_BYTES = 3UL * 1024UL * 1024UL;
 static const uint8_t UPLOAD_BATCH_MAX_JOBS = 40;
@@ -223,7 +235,7 @@ static void recordingPath(int recNum, bool important, char *p, size_t n) {
   recordingPathKind(recNum, important ? REC_IMPORTANT : REC_NORMAL, p, n);
 }
 
-// ---------- 快捷键绑定 (字母键 -> 录音编号), 存到 SD 卡 /SHORTCUT/keys.txt ----------
+// ---------- 蹇嵎閿粦瀹?(瀛楁瘝閿?-> 褰曢煶缂栧彿), 瀛樺埌 SD 鍗?/SHORTCUT/keys.txt ----------
 struct HotKey { char key; int idx; };
 static const int MAX_HOTKEY = 36;
 static const uint8_t HOTKEY_GROUPS = 3;
@@ -233,7 +245,7 @@ static uint8_t hotkeyGroup = 0;
 static bool hotkeysLoaded = false;
 
 static bool micInputReady = false;
-static bool forceMicRearm = true;  // 开机/唤醒后的第一次正式录音要强制重建输入链路
+static bool forceMicRearm = true;  // 寮€鏈?鍞ら啋鍚庣殑绗竴娆℃寮忓綍闊宠寮哄埗閲嶅缓杈撳叆閾捐矾
 static bool autoRecordPending = true;
 static bool speakerOutputReady = false;
 static int speakerVolumeCurrent = 0;
@@ -248,10 +260,11 @@ static bool speakerColdStarted = false;
 #define APP_POMODORO   4
 #define APP_WIFI       5
 #define APP_CHAT       6
+#define APP_ROLLBACK   7
 
 static uint8_t wakeApp = APP_REC_LIST;
 
-// ---------- SD 辅助 ----------
+// ---------- SD 杈呭姪 ----------
 static bool sdMount() {
   SPI.begin(sdSCLK, sdMISO, sdMOSI, sdCS);
   return SD.begin(sdCS, SPI, 25000000);
@@ -270,7 +283,7 @@ static int parseRecordingNumber(const char *name) {
   return (base[4] - '0') * 1000 + (base[5] - '0') * 100 + (base[6] - '0') * 10 + (base[7] - '0');
 }
 
-// ---------- WAV 头 ----------
+// ---------- WAV 澶?----------
 static void wr32(File &f, uint32_t v) {
   uint8_t b[4] = {(uint8_t)v, (uint8_t)(v >> 8), (uint8_t)(v >> 16), (uint8_t)(v >> 24)};
   f.write(b, 4);
@@ -287,7 +300,7 @@ static void writeWavHeader(File &f, uint32_t rate, uint32_t dataBytes) {
   f.write((const uint8_t *)"fmt ", 4);
   wr32(f, 16);
   wr16(f, 1);          // PCM
-  wr16(f, 1);          // 单声道
+  wr16(f, 1);          // 鍗曞０閬?
   wr32(f, rate);
   wr32(f, rate * 2);   // byteRate
   wr16(f, 2);          // blockAlign
@@ -296,28 +309,29 @@ static void writeWavHeader(File &f, uint32_t rate, uint32_t dataBytes) {
   wr32(f, dataBytes);
 }
 
-// ---------- 界面返回码 ----------
-#define R_BACK   0   // 退格: 返回上一层
-#define R_RECORD 1   // 空格: 去开始录音
-#define R_PLAY   2   // 按下某个已绑定的播放键: 立刻去播放(可覆盖当前播放)
-#define R_LIST   3   // 列表键: 进入录音列表
-#define R_NOISE  4   // Alt: 对最近/当前录音降噪
-#define R_DELETE 5   // Del长按确认后删除当前录音
-int g_nextPlay = 0;  // 配合 R_PLAY: 要切换去播放的录音编号
-int g_afterRecord = R_LIST;  // 录音结束后跳转目标
+// ---------- 鐣岄潰杩斿洖鐮?----------
+#define R_BACK   0   // 閫€鏍? 杩斿洖涓婁竴灞?
+#define R_RECORD 1   // 绌烘牸: 鍘诲紑濮嬪綍闊?
+#define R_PLAY   2   // 鎸変笅鏌愪釜宸茬粦瀹氱殑鎾斁閿? 绔嬪埢鍘绘挱鏀?鍙鐩栧綋鍓嶆挱鏀?
+#define R_LIST   3   // 鍒楄〃閿? 杩涘叆褰曢煶鍒楄〃
+#define R_NOISE  4   // Alt: 瀵规渶杩?褰撳墠褰曢煶闄嶅櫔
+#define R_DELETE 5   // Del long-press delete
+#define R_ROLLBACK 6 // Tab rollback mode
+int g_nextPlay = 0;  // 閰嶅悎 R_PLAY: 瑕佸垏鎹㈠幓鎾斁鐨勫綍闊崇紪鍙?
+int g_afterRecord = R_LIST;  // 褰曢煶缁撴潫鍚庤烦杞洰鏍?
 static bool g_uploadAfterRecord = false;
 static bool g_seamlessHotkeySwitch = false;
-int g_listReturnRec = 0;     // 播放页返回列表时应重新选中的录音
+int g_listReturnRec = 0;     // 鎾斁椤佃繑鍥炲垪琛ㄦ椂搴旈噸鏂伴€変腑鐨勫綍闊?
 int g_carryDeleteRec = 0;
 uint32_t g_carryDeleteStart = 0;
-uint8_t g_listMode = REC_NORMAL;  // 0普通 / 1快捷 / 2重要
+uint8_t g_listMode = REC_NORMAL;  // 0鏅€?/ 1蹇嵎 / 2閲嶈
 static int g_listModeSelectedRec[3] = {0, 0, 0};
-static int nextRecHint = 0;  // 下一个录音编号缓存, 避免每次从 REC_0001 顺序探测
+static int nextRecHint = 0;  // 涓嬩竴涓綍闊崇紪鍙风紦瀛? 閬垮厤姣忔浠?REC_0001 椤哄簭鎺㈡祴
 static const uint32_t DELETE_HOLD_MS = 1200;
-static const uint32_t DELETE_HINT_MS = 280;  // 短按 Del 不显示删除提示, 长按后才出现
+static const uint32_t DELETE_HINT_MS = 280;  // 鐭寜 Del 涓嶆樉绀哄垹闄ゆ彁绀? 闀挎寜鍚庢墠鍑虹幇
 
-// ---------- 按键小工具 ----------
-// 取当前按下的第一个可绑定键(字母转小写, 或数字); 没有则返回 0
+// ---------- 鎸夐敭灏忓伐鍏?----------
+// 鍙栧綋鍓嶆寜涓嬬殑绗竴涓彲缁戝畾閿?瀛楁瘝杞皬鍐? 鎴栨暟瀛?; 娌℃湁鍒欒繑鍥?0
 static char normalizeBindKey(char c) {
   if (c >= 'A' && c <= 'Z') return c + 32;
   if ((c >= 'a' && c <= 'z') || (c >= '0' && c <= '9')) return c;
@@ -354,7 +368,7 @@ static char pressedBindKey() {
   }
   return 0;
 }
-static char dispKey(char k) { return (k >= 'a' && k <= 'z') ? (k - 32) : k; }  // 显示用(字母转大写)
+static char dispKey(char k) { return (k >= 'a' && k <= 'z') ? (k - 32) : k; }  // 鏄剧ず鐢?瀛楁瘝杞ぇ鍐?
 static char pressedBindKeyExcept(char ignored) {
   ignored = normalizeBindKey(ignored);
   for (char c = '0'; c <= '9'; c++) {
@@ -379,12 +393,14 @@ static char pressedBindKeyExcept(char ignored) {
 
 static bool keyCtrl()  { return M5Cardputer.Keyboard.keysState().ctrl; }
 static bool keyAlt()   { return M5Cardputer.Keyboard.keysState().alt; }
+static bool keyFn()    { return M5Cardputer.Keyboard.keysState().fn; }
 static bool keyGo()    { return M5Cardputer.BtnA.isPressed(); }
 static bool keySpace() { return M5Cardputer.Keyboard.isKeyPressed(' '); }
-static bool keyEsc()   { return M5Cardputer.Keyboard.isKeyPressed('`'); }  // Cardputer 物理 Esc 键映射为左上角 `
+static bool keyEsc()   { return M5Cardputer.Keyboard.isKeyPressed('`'); }  // Cardputer 鐗╃悊 Esc 閿槧灏勪负宸︿笂瑙?`
 static bool keyDel()   { return M5Cardputer.Keyboard.keysState().del; }
 static bool keyEnter() { return M5Cardputer.Keyboard.keysState().enter; }
 static bool keyTab()   { return M5Cardputer.Keyboard.keysState().tab; }
+static bool keyRollback() { return keyTab(); }
 static bool keyUp()    { return M5Cardputer.Keyboard.isKeyPressed(';'); }
 static bool keyDown()  { return M5Cardputer.Keyboard.isKeyPressed('.'); }
 static bool keyLeft()  { return M5Cardputer.Keyboard.isKeyPressed(','); }
@@ -423,7 +439,7 @@ static bool setShortcutKeyRoot(char root) {
 static uint32_t shortcutRateForSemis(uint32_t baseRate, float semis) {
   float scale = powf(2.0f, semis / 12.0f);
   uint32_t rate = (uint32_t)((float)baseRate * scale + 0.5f);
-  return max((uint32_t)8000, min((uint32_t)48000, rate));
+  return max(SHORTCUT_RATE_MIN, min(SHORTCUT_RATE_MAX, rate));
 }
 
 static float activeShortcutSemis() {
@@ -538,7 +554,7 @@ static bool isScaleSampleKey(char k) {
 }
 
 static bool scaleModeCanHandleKey() {
-  if (!g_scaleMode || keyCtrl() || keyTab() || keyAlt()) return false;
+  if (!g_scaleMode || keyCtrl() || keyTab() || keyFn() || keyAlt()) return false;
   if (keyEnter() || keyDel() || keySpace() || keyEsc() || keyUpload()) return false;
   if (keyVolUp() || keyVolDn() || keyBrightUp() || keyBrightDn()) return false;
   if (keyUp() || keyDown() || keyLeft() || keyRight()) return false;
@@ -618,7 +634,7 @@ static uint32_t shortcutMotionRate(uint32_t baseRate, bool enabled) {
   vibSemis += sinf(wowPhase) * 0.045f;
   float scale = powf(2.0f, (g_shortcutBendSemis + vibSemis) / 12.0f);
   uint32_t rate = (uint32_t)((float)baseRate * scale + 0.5f);
-  return max((uint32_t)8000, min((uint32_t)48000, rate));
+  return max(SHORTCUT_RATE_MIN, min(SHORTCUT_RATE_MAX, rate));
 }
 
 static const char *uploadStatusLabel(uint8_t status);
@@ -663,11 +679,15 @@ static bool keyUploadAbort() {
     return false;
   }
   g_uploadPausedForInput = true;
-  if (keyTab() && keyUpload()) g_uploadCancelRequested = true;
+  if (keyFn() && keyUpload()) g_uploadCancelRequested = true;
   return true;
 }
 
 static bool wakeAppFromPressedKeys(uint8_t &app) {
+  if (keyRollback()) {
+    app = APP_ROLLBACK;
+    return true;
+  }
   if (keySpace()) {
     app = APP_REC_RECORD;
     return true;
@@ -751,7 +771,7 @@ static void adjustBrightness(int delta) {
   applyBrightness();
 }
 
-// 等所有键松开
+// 绛夋墍鏈夐敭鏉惧紑
 static void waitRelease() {
   do { M5Cardputer.update(); delay(8); } while (M5Cardputer.Keyboard.isPressed());
 }
@@ -773,8 +793,8 @@ static bool prepareMicInput(bool force = false) {
   speakerColdStarted = false;
   speakerVolumeCurrent = 0;
   M5Cardputer.In_I2C.writeRegister8(0x18, 0x13, 0x00, 400000);  // HP drive OFF
-  M5Cardputer.In_I2C.writeRegister8(0x18, 0x12, 0xFC, 400000);  // DAC 掉电
-  M5Cardputer.In_I2C.writeRegister8(0x18, 0x32, 0x00, 400000);  // DAC→HP 混音器断开
+  M5Cardputer.In_I2C.writeRegister8(0x18, 0x12, 0xFC, 400000);  // DAC 鎺夌數
+  M5Cardputer.In_I2C.writeRegister8(0x18, 0x32, 0x00, 400000);  // DAC鈫扝P 娣烽煶鍣ㄦ柇寮€
   {
     auto mc = M5Cardputer.Mic.config();
     mc.magnification = 1; mc.noise_filter_level = 3;
@@ -787,12 +807,12 @@ static bool prepareMicInput(bool force = false) {
     delay(3);
   }
   delay(8);
-  M5Cardputer.In_I2C.writeRegister8(0x18, 0x14, 0x17, 400000);  // 开机首次偶发低增益, 重写一次确保生效
+  M5Cardputer.In_I2C.writeRegister8(0x18, 0x14, 0x17, 400000);  // 寮€鏈洪娆″伓鍙戜綆澧炵泭, 閲嶅啓涓€娆＄‘淇濈敓鏁?
   micInputReady = ok;
   return ok;
 }
 
-static void processMicBuffer(int16_t *buf, size_t n, int32_t &dc, int32_t &hum, int32_t &lpf, int32_t &noiseRms, int32_t &softGateQ8) {
+static void processMicBuffer(int16_t *buf, size_t n, int32_t &dc, int32_t &hum, int32_t &lpf, int32_t &noiseRms, int32_t &softGateQ8, int gain = recGain) {
   if (!buf || n == 0) return;
 
   int64_t sumSq = 0;
@@ -840,7 +860,7 @@ static void processMicBuffer(int16_t *buf, size_t n, int32_t &dc, int32_t &hum, 
     int32_t hp = raw - dc;
     hum += (hp - hum) >> humShift;
     int32_t cleaned = hp - ((hum * humMixQ8) >> 8);
-    int32_t x = (int32_t)(((int64_t)cleaned * recGain * softGateQ8) >> 8);
+    int32_t x = (int32_t)(((int64_t)cleaned * gain * softGateQ8) >> 8);
     lpf += (int32_t)(((int64_t)(x - lpf) * lpfCoef) >> 8);
     int32_t y = lpf;
     if (hiMixQ8 < 256) {
@@ -875,11 +895,11 @@ static int8_t calcTrackAmp(const int16_t *buf, size_t n) {
   return (int8_t)amp;
 }
 
-// ---------- 通用 UI (横屏 240x135) ----------
-// 顶栏: 标题(亮绿16) + 左侧小竖条点缀 + 下分隔线
+// ---------- 閫氱敤 UI (妯睆 240x135) ----------
+// 椤舵爮: 鏍囬(浜豢16) + 宸︿晶灏忕珫鏉＄偣缂€ + 涓嬪垎闅旂嚎
 static void drawHeader(const char *title) {
   auto &d = M5Cardputer.Display;
-  d.fillRect(2, 5, 3, 13, COL_GREEN);          // 标题前的荧光绿小竖条(点缀)
+  d.fillRect(2, 5, 3, 13, COL_GREEN);          // 鏍囬鍓嶇殑鑽у厜缁垮皬绔栨潯(鐐圭紑)
   FONT_CN_16(d);
   d.setTextColor(COL_GREEN, COL_BG);
   d.setCursor(10, 3);
@@ -887,8 +907,9 @@ static void drawHeader(const char *title) {
   d.drawFastHLine(0, 21, d.width(), COL_DIM);
 }
 
-// 电量: 内容区右上角小字
+// 鐢甸噺: 鍐呭鍖哄彸涓婅灏忓瓧
 static uint16_t dseg14Mask(char c) {
+  if (c == 'o') return DS_C | DS_D | DS_E | DS_G;
   if (c >= 'a' && c <= 'z') c -= 32;
   switch (c) {
     case '0': return DS_A | DS_B | DS_C | DS_D | DS_E | DS_F;
@@ -950,6 +971,11 @@ static void dsegLine(M5Canvas &g, int x1, int y1, int x2, int y2, uint16_t col) 
   if (_c == ':') { \
     (g).fillRect((x) + 2, (y) + 4, 2, 2, (col)); \
     (g).fillRect((x) + 2, (y) + 10, 2, 2, (col)); \
+  } else if (_c == '#') { \
+    dsegLine((g), (x) + 2, (y) + 3, (x) + 2, (y) + 13, (col)); \
+    dsegLine((g), (x) + 6, (y) + 3, (x) + 6, (y) + 13, (col)); \
+    dsegLine((g), (x), (y) + 6, (x) + 8, (y) + 6, (col)); \
+    dsegLine((g), (x), (y) + 10, (x) + 8, (y) + 10, (col)); \
   } else if (_c == '_') { \
     dsegLine((g), (x) + 1, (y) + 15, (x) + 7, (y) + 15, (col)); \
   } else if (_c == '+') { \
@@ -980,6 +1006,7 @@ static void dsegLine(M5Canvas &g, int x1, int y1, int x2, int y2, uint16_t col) 
 static int dseg14CharWidth(char c) {
   if (c == ' ') return 5;
   if (c == ':') return 7;
+  if (c == '#') return 11;
   if (c == '_') return 11;
   if (c == '+') return 10;
   if (c == '%' || c == '/') return 8;
@@ -1008,6 +1035,65 @@ static void drawDseg14Text(m5gfx::M5GFX &g, int x, int y, const char *text, uint
 
 static void drawDseg14Text(M5Canvas &g, int x, int y, const char *text, uint16_t col) {
   while (*text) x += drawDseg14Char(g, x, y, *text++, col);
+}
+
+static void dsegLineScaled(m5gfx::M5GFX &g, int x1, int y1, int x2, int y2, uint16_t col, int scale) {
+  if (scale < 1) scale = 1;
+  x1 *= scale; y1 *= scale; x2 *= scale; y2 *= scale;
+  for (int ox = 0; ox < scale; ox++) {
+    for (int oy = 0; oy < scale; oy++) {
+      g.drawLine(x1 + ox, y1 + oy, x2 + ox, y2 + oy, col);
+    }
+  }
+}
+
+static int drawDseg14CharScaled(m5gfx::M5GFX &g, int x, int y, char c, uint16_t col, int scale) {
+  if (scale < 1) scale = 1;
+  auto seg = [&](int x1, int y1, int x2, int y2) {
+    dsegLineScaled(g, x / scale + x1, y / scale + y1, x / scale + x2, y / scale + y2, col, scale);
+  };
+  if (c == ':') {
+    g.fillRect(x + 2 * scale, y + 4 * scale, 2 * scale, 2 * scale, col);
+    g.fillRect(x + 2 * scale, y + 10 * scale, 2 * scale, 2 * scale, col);
+  } else if (c == '#') {
+    seg(2, 3, 2, 13);
+    seg(6, 3, 6, 13);
+    seg(0, 6, 8, 6);
+    seg(0, 10, 8, 10);
+  } else if (c == '_') {
+    seg(1, 15, 7, 15);
+  } else if (c == '+') {
+    seg(1, 8, 7, 8);
+    seg(4, 4, 4, 12);
+  } else if (c == '%' || c == '/') {
+    g.fillRect(x + 1 * scale, y + 2 * scale, 2 * scale, 2 * scale, col);
+    g.fillRect(x + 6 * scale, y + 12 * scale, 2 * scale, 2 * scale, col);
+    seg(7, 1, 1, 14);
+  } else {
+    uint16_t m = dseg14Mask(c);
+    if (m & DS_A) seg(2, 0, 7, 0);
+    if (m & DS_B) seg(8, 1, 8, 6);
+    if (m & DS_C) seg(8, 9, 8, 14);
+    if (m & DS_D) seg(2, 15, 7, 15);
+    if (m & DS_E) seg(0, 9, 0, 14);
+    if (m & DS_F) seg(0, 1, 0, 6);
+    if (m & DS_G) seg(2, 8, 7, 8);
+    if (m & DS_H) seg(1, 1, 3, 7);
+    if (m & DS_I) seg(7, 1, 5, 7);
+    if (m & DS_J) seg(3, 9, 1, 14);
+    if (m & DS_K) seg(5, 9, 7, 14);
+    if (m & DS_M) seg(4, 1, 4, 7);
+    if (m & DS_N) seg(4, 9, 4, 14);
+  }
+  return dseg14CharWidth(c) * scale;
+}
+
+static int dseg14TextWidthScaled(const char *text, int scale) {
+  return dseg14TextWidth(text) * ((scale < 1) ? 1 : scale);
+}
+
+static void drawDseg14TextScaled(m5gfx::M5GFX &g, int x, int y, const char *text, uint16_t col, int scale) {
+  while (*text) x += drawDseg14CharScaled(g, x, y, *text++, col, scale);
 }
 
 static int filteredBatteryLevel() {
@@ -1145,7 +1231,7 @@ static void drawStatusTab(M5Canvas &g, const char *label, int x, bool active) {
 #define DRAW_STATUS_TABS_BODY(g, mode, count) do { \
   drawStatusBase(g); \
   drawStatusTab(g, "NOR", 4, (mode) == REC_NORMAL); \
-  drawStatusTab(g, "KEY", 48, (mode) == REC_SHORTCUT); \
+  drawStatusTab(g, "QCK", 48, (mode) == REC_SHORTCUT); \
   drawStatusTab(g, "IMP", 92, (mode) == REC_IMPORTANT); \
   (g).setTextColor(COL_GREEN, COL_BG); \
   char _cnt[8]; snprintf(_cnt, sizeof(_cnt), "%d", count); \
@@ -1162,7 +1248,7 @@ static void drawStatusTabs(M5Canvas &g, uint8_t mode, int count) {
   DRAW_STATUS_TABS_BODY(g, mode, count);
 }
 
-// 底栏提示(小字, 上方一条分隔线)
+// 搴曟爮鎻愮ず(灏忓瓧, 涓婃柟涓€鏉″垎闅旂嚎)
 static void drawFooter(const char *hint, uint16_t col = COL_DIM) {
   auto &d = M5Cardputer.Display;
   int y = d.height() - 15;
@@ -1285,7 +1371,7 @@ static void showMsg(const char *title, const char *msg, uint16_t col) {
   d.setTextColor(col, COL_BG);
   d.setCursor(12, 56);
   d.print(msg);
-  drawFooter("按任意键返回");
+  drawFooter("鎸変换鎰忛敭杩斿洖");
   waitRelease();
   while (true) {
     M5Cardputer.update();
@@ -1294,7 +1380,7 @@ static void showMsg(const char *title, const char *msg, uint16_t col) {
   }
 }
 
-// ---------- 快捷键绑定: 读/写 SD ----------
+// ---------- 蹇嵎閿粦瀹? 璇?鍐?SD ----------
 static void saveHotkeys();
 
 static void readHotkeyFile(File &f, uint8_t group) {
@@ -1329,7 +1415,7 @@ static void loadHotkeys() {
     while (f.available() && hotkeyCount[0] < MAX_HOTKEY) {
       String line = f.readStringUntil('\n');
       line.trim();
-      if (line.length() < 3) continue;        // 格式: "<键> <编号>"
+      if (line.length() < 3) continue;        // 鏍煎紡: "<閿? <缂栧彿>"
       char k = normalizeBindKey(line.charAt(0));
       int idx = line.substring(2).toInt();
       if (k && idx > 0) { hotkeys[0][hotkeyCount[0]].key = k; hotkeys[0][hotkeyCount[0]].idx = idx; hotkeyCount[0]++; }
@@ -1411,21 +1497,21 @@ static void setHotkey(char k, int idx) {
   saveHotkeys();
 }
 
-static char hotkeyOf(int idx) {  // 该录音编号是否已绑定某键, 返回键(0=无)
+static char hotkeyOf(int idx) {  // 璇ュ綍闊崇紪鍙锋槸鍚﹀凡缁戝畾鏌愰敭, 杩斿洖閿?0=鏃?
   for (int i = 0; i < hotkeyCount[hotkeyGroup]; i++) if (hotkeys[hotkeyGroup][i].idx == idx) return hotkeys[hotkeyGroup][i].key;
   return 0;
 }
 
-// 当前是否按下了一个"已绑定的播放键"(非 Ctrl/Tab): 返回对应录音编号, 否则 -1
+// 褰撳墠鏄惁鎸変笅浜嗕竴涓?宸茬粦瀹氱殑鎾斁閿?(闈?Ctrl/Tab): 杩斿洖瀵瑰簲褰曢煶缂栧彿, 鍚﹀垯 -1
 static int pressedHotkeyRec() {
-  if (keyCtrl() || keyTab() || keyAlt()) return -1;
+  if (keyCtrl() || keyTab() || keyFn() || keyAlt()) return -1;
   if (keyEnter() || keyDel() || keySpace() || keyUpload()) return -1;
   char bk = pressedBindKey();
   if (!bk) return -1;
-  return findHotkey(bk);             // >0 已绑定; -1 未绑定
+  return findHotkey(bk);             // >0 宸茬粦瀹? -1 鏈粦瀹?
 }
 
-// ---------- 列出录音编号 ----------
+// ---------- 鍒楀嚭褰曢煶缂栧彿 ----------
 int recList[MAX_REC];
 int recCount = 0;
 static uint8_t shortcutBits[(MAX_REC + 8) / 8];
@@ -1437,6 +1523,7 @@ static uint8_t uploadDoneBits[(MAX_REC + 8) / 8];
 static uint8_t uploadPendingBits[(MAX_REC + 8) / 8];
 static uint8_t uploadModelErrBits[(MAX_REC + 8) / 8];
 static uint8_t uploadJobErrBits[(MAX_REC + 8) / 8];
+static uint8_t shortcutTrimTier[MAX_REC];
 static uint16_t recDurationSec[MAX_REC];
 
 static void clearImportantBits() {
@@ -1607,7 +1694,10 @@ static void setShortcutRec(int recNum, bool shortcut) {
   if (recNum <= 0 || recNum > MAX_REC) return;
   int bit = recNum - 1;
   if (shortcut) shortcutBits[bit >> 3] |= (1 << (bit & 7));
-  else shortcutBits[bit >> 3] &= ~(1 << (bit & 7));
+  else {
+    shortcutBits[bit >> 3] &= ~(1 << (bit & 7));
+    shortcutTrimTier[recNum - 1] = 0;
+  }
 }
 
 static void setImportantRec(int recNum, bool important) {
@@ -1935,10 +2025,10 @@ static void scanRecordings(bool compactNext = false) {
   if (hotkeyChanged) saveHotkeys();
 }
 
-// ---------- 提示音 "滴" (淡入淡出) ----------
-// (保留: 暂未使用; 需要时可在切到扬声器后调用以遮爆音)
+// ---------- 鎻愮ず闊?"婊? (娣″叆娣″嚭) ----------
+// (淇濈暀: 鏆傛湭浣跨敤; 闇€瑕佹椂鍙湪鍒囧埌鎵０鍣ㄥ悗璋冪敤浠ラ伄鐖嗛煶)
 
-// ---------- 切换编解码器到扬声器(含手动开 DAC) ----------
+// ---------- 鍒囨崲缂栬В鐮佸櫒鍒版壃澹板櫒(鍚墜鍔ㄥ紑 DAC) ----------
 static bool copyFileOnSD(const char *from, const char *to) {
   File in = SD.open(from, FILE_READ);
   if (!in) return false;
@@ -2094,14 +2184,26 @@ static bool trimSilenceInWav(const char *path, int32_t threshold, uint32_t headP
   return replaceFileWithTemp(path, tmp);
 }
 
-static bool trimShortcutSilenceForRec(int recNum, bool strong = false) {
+static bool trimShortcutSilenceForRec(int recNum, uint8_t tier = 1) {
   if (recNum <= 0) return false;
   if (!sdMount()) return false;
   char p[40];
   recordingPathKind(recNum, REC_SHORTCUT, p, sizeof(p));
-  bool ok = strong
-    ? trimSilenceInWav(p, SHORTCUT_RETRIM_RMS, SHORTCUT_RETRIM_HEAD_PAD, SHORTCUT_RETRIM_TAIL_PAD)
-    : trimSilenceInWav(p, SHORTCUT_TRIM_RMS, SHORTCUT_HEAD_PAD, SHORTCUT_TAIL_PAD);
+  if (tier < 1) tier = 1;
+  if (tier > 3) tier = 3;
+  int32_t threshold = SHORTCUT_TRIM_RMS;
+  uint32_t headPad = SHORTCUT_HEAD_PAD;
+  uint32_t tailPad = SHORTCUT_TAIL_PAD;
+  if (tier == 2) {
+    threshold = SHORTCUT_RETRIM_RMS;
+    headPad = SHORTCUT_RETRIM_HEAD_PAD;
+    tailPad = SHORTCUT_RETRIM_TAIL_PAD;
+  } else if (tier >= 3) {
+    threshold = SHORTCUT_SUPERTRIM_RMS;
+    headPad = SHORTCUT_SUPERTRIM_HEAD_PAD;
+    tailPad = SHORTCUT_SUPERTRIM_TAIL_PAD;
+  }
+  bool ok = trimSilenceInWav(p, threshold, headPad, tailPad);
   if (ok) {
     File f = SD.open(p, FILE_READ);
     if (f) { setRecDuration(recNum, f.size()); f.close(); }
@@ -2110,10 +2212,22 @@ static bool trimShortcutSilenceForRec(int recNum, bool strong = false) {
   return ok;
 }
 
-static bool markRecordingShortcut(int recNum) {
+static uint8_t nextShortcutTrimTier(int recNum, bool alreadyShortcut) {
+  if (recNum <= 0 || recNum > MAX_REC) return 1;
+  uint8_t &tier = shortcutTrimTier[recNum - 1];
+  if (!alreadyShortcut) tier = 1;
+  else if (tier < 2) tier = 2;
+  else if (tier < 3) tier++;
+  else tier = 3;
+  return tier;
+}
+
+static bool markRecordingShortcut(int recNum, uint8_t *trimTierOut = nullptr) {
   bool alreadyShortcut = isShortcutRec(recNum);
   bool ok = moveRecordingToKind(recNum, REC_SHORTCUT);
-  if (ok) trimShortcutSilenceForRec(recNum, alreadyShortcut);
+  uint8_t tier = nextShortcutTrimTier(recNum, alreadyShortcut);
+  if (ok) trimShortcutSilenceForRec(recNum, tier);
+  if (trimTierOut) *trimTierOut = tier;
   return ok;
 }
 
@@ -2242,12 +2356,12 @@ static void speakerOn(bool muted = false) {
     return;
   }
   micInputReady = false;
-  M5Cardputer.Mic.end();       // 关麦(释放共用编解码器)
+  M5Cardputer.Mic.end();       // 鍏抽害(閲婃斁鍏辩敤缂栬В鐮佸櫒)
   M5Cardputer.Speaker.begin();
   speakerVolumeCurrent = muted ? 0 : playVol;
   M5Cardputer.Speaker.setVolume(speakerVolumeCurrent);
   speakerApplyOutputRoute();
-  const uint8_t ES = 0x18;     // internal_spk=false 无自动 DAC 回调, 手动开(照官方扬声器寄存器)
+  const uint8_t ES = 0x18;     // internal_spk=false 鏃犺嚜鍔?DAC 鍥炶皟, 鎵嬪姩寮€(鐓у畼鏂规壃澹板櫒瀵勫瓨鍣?
   M5Cardputer.In_I2C.writeRegister8(ES, 0x00, 0x80, 400000);
   M5Cardputer.In_I2C.writeRegister8(ES, 0x01, 0xB5, 400000);
   M5Cardputer.In_I2C.writeRegister8(ES, 0x02, 0x18, 400000);
@@ -2275,11 +2389,11 @@ static void playSeekFeedback(bool forward) {
   M5Cardputer.Speaker.playRaw(seekToneBuf, n, forward ? 24000 : 12000, false, 1, 0, false);
 }
 
-static const int WAVE_BARS = 60;   // 60 × 4px = 240px (CONTENT_W)
-static int8_t waveBars[WAVE_BARS]; // A线采样点: -A_HALF..+A_HALF
+static const int WAVE_BARS = 60;   // 60 脳 4px = 240px (CONTENT_W)
+static int8_t waveBars[WAVE_BARS]; // A绾块噰鏍风偣: -A_HALF..+A_HALF
 static uint8_t waveBarCounts[WAVE_BARS];
-static int8_t recLiveWave[CONTENT_W];      // B线视觉缓存: 录音监听线
-static int8_t playbackLiveWave[CONTENT_W]; // B线视觉缓存: 播放监听线
+static int8_t recLiveWave[CONTENT_W];      // B绾胯瑙夌紦瀛? 褰曢煶鐩戝惉绾?
+static int8_t playbackLiveWave[CONTENT_W]; // B绾胯瑙夌紦瀛? 鎾斁鐩戝惉绾?
 
 static void mergePlaybackWaveBar(int idx, int amp) {
   if (idx < 0 || idx >= WAVE_BARS) return;
@@ -2341,7 +2455,7 @@ static void drawDeleteProgress(M5Canvas &cv, uint32_t heldMs) {
   FONT_CN_12(cv);
   cv.setTextColor(COL_RED, COL_BG);
   cv.setCursor(112, 120);
-  cv.print("删除中");
+  cv.print("DEL");
   cv.drawRect(168, 125, 70, 7, COL_RED);
   cv.fillRect(168, 125, deleteProgressW(heldMs), 7, COL_RED);
 }
@@ -2352,7 +2466,7 @@ static void drawDeleteProgress(m5gfx::M5GFX &g, uint32_t heldMs) {
   FONT_CN_12(g);
   g.setTextColor(COL_RED, COL_BG);
   g.setCursor(112, 120);
-  g.print("删除中");
+  g.print("DEL");
   g.drawRect(168, 125, 70, 7, COL_RED);
   g.fillRect(168, 125, deleteProgressW(heldMs), 7, COL_RED);
 }
@@ -2364,7 +2478,7 @@ static void drawDeleteProgressOnDisplay(uint32_t heldMs) {
   FONT_CN_12(d);
   d.setTextColor(COL_RED, COL_BG);
   d.setCursor(112, 120);
-  d.print("删除中");
+  d.print("DEL");
   d.drawRect(168, 125, 70, 7, COL_RED);
   d.fillRect(168, 125, deleteProgressW(heldMs), 7, COL_RED);
 }
@@ -2520,7 +2634,7 @@ static void drawLiveWaveVisual(m5gfx::M5GFX &g, const int8_t *src, int cy) {
   }
 }
 
-// 播放画面: A线=轨道线/Timeline A, B线=监听线/Monitor B(播放缓冲)
+// 鎾斁鐢婚潰: A绾?杞ㄩ亾绾?Timeline A, B绾?鐩戝惉绾?Monitor B(鎾斁缂撳啿)
 static void drawPlaybackCanvas(M5Canvas &g, uint32_t played, uint32_t dataSize, int16_t *liveWave, size_t liveN, bool paused = false, uint32_t deleteHeldMs = 0) {
   (void)paused;
   updateLiveWaveVisual(playbackLiveWave, liveWave, liveN, B_HALF, PB_B_SMOOTH_FAST, B_DECAY, PB_B_GAIN);
@@ -2633,31 +2747,263 @@ static void drawPlaybackAction(M5Canvas &cv, const char *msg, uint16_t col = COL
   (void)col;
 }
 
+static uint8_t perfHudKindForKey(char key) {
+  int8_t semis = 0;
+  if (scaleNoteSemisForKey(key, semis)) return 1;
+  if (isScaleSampleKey(key)) return 2;
+  return 0;
+}
+
+static int perfHudSampleIndex(char key) {
+  key = normalizeBindKey(key);
+  const char *keys = "asdfghjklzxcvbnm";
+  const char *p = strchr(keys, key);
+  return p ? (int)(p - keys) : -1;
+}
+
+static int perfHudNoteIndex(char key) {
+  key = normalizeBindKey(key);
+  const char *keys = "qwertyu1234567890iop";
+  const char *p = strchr(keys, key);
+  return p ? (int)(p - keys) : -1;
+}
+
+static void perfHudNoteLabel(char key, char *out, size_t n) {
+  if (!out || n == 0) return;
+  int8_t semis = 0;
+  if (!scaleNoteSemisForKey(key, semis)) {
+    strlcpy(out, "---", n);
+    return;
+  }
+  int total = (int)semis + (int)g_shortcutTransposeSemis;
+  int octave = 4 + ((total >= 0) ? (total / 12) : -(((-total) + 11) / 12));
+  int pc = total % 12;
+  if (pc < 0) pc += 12;
+  const char *names[] = {"C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"};
+  snprintf(out, n, "%s%d", names[pc], octave);
+}
+
+static void perfHudLabelForKey(char key, int recNum, char *out, size_t n) {
+  if (!out || n == 0) return;
+  if (perfHudKindForKey(key) == 1) perfHudNoteLabel(key, out, n);
+  else snprintf(out, n, "R%04d", recNum);
+}
+
+static void perfHudSourceLabel(int recNum, char *out, size_t n) {
+  if (!out || n == 0) return;
+  char hk = hotkeyOf(recNum);
+  if (!hk && g_scaleCurrentRec > 0) hk = hotkeyOf(g_scaleCurrentRec);
+  if (hk) snprintf(out, n, "SRC:%c", dispKey(hk));
+  else strlcpy(out, "SRC:-", n);
+}
+
+static void perfHudKeyLabel(char *out, size_t n) {
+  if (!out || n == 0) return;
+  char root = g_shortcutKeyRoot ? g_shortcutKeyRoot : 'C';
+  snprintf(out, n, "KEY:%c", root);
+}
+
+static void perfHudOctaveRootLabel(uint8_t band, char *out, size_t n) {
+  if (!out || n == 0) return;
+  char root = g_shortcutKeyRoot ? g_shortcutKeyRoot : 'C';
+  snprintf(out, n, "%c%d", root, 3 + (int)band);
+}
+
+static bool perfHudScaleInfo(char key, const char **solfegeOut, const char **degreeOut, uint8_t *octaveBandOut, uint8_t *degreeIndexOut = nullptr) {
+  key = normalizeBindKey(key);
+  const char *solfege = nullptr;
+  const char *degree = nullptr;
+  uint8_t band = 1;
+  uint8_t degreeIndex = 0;
+  switch (key) {
+    case 'q': case '1': case '8': solfege = "Do"; degree = "1"; degreeIndex = 0; break;
+    case 'w': case '2': case '9': solfege = "Re"; degree = "2"; degreeIndex = 1; break;
+    case 'e': case '3': case '0': solfege = "Mi"; degree = "3"; degreeIndex = 2; break;
+    case 'r': case '4': case 'i': solfege = "Fa"; degree = "4"; degreeIndex = 3; break;
+    case 't': case '5': case 'o': solfege = "So"; degree = "5"; degreeIndex = 4; break;
+    case 'y': case '6': case 'p': solfege = "La"; degree = "6"; degreeIndex = 5; break;
+    case 'u': case '7': solfege = "Ti"; degree = "7"; degreeIndex = 6; break;
+    default: return false;
+  }
+  switch (key) {
+    case 'q': case 'w': case 'e': case 'r': case 't': case 'y': case 'u':
+      band = 0;
+      break;
+    case '1': case '2': case '3': case '4': case '5': case '6': case '7':
+      band = 1;
+      break;
+    default:
+      band = 2;
+      break;
+  }
+  if (solfegeOut) *solfegeOut = solfege;
+  if (degreeOut) *degreeOut = degree;
+  if (octaveBandOut) *octaveBandOut = band;
+  if (degreeIndexOut) *degreeIndexOut = degreeIndex;
+  return true;
+}
+
+static void drawPerfHudOctaveBand(m5gfx::M5GFX &g, int idx, bool active) {
+  if (idx < 0 || idx > 2) return;
+  const int w = 58;
+  const int h = 8;
+  const int gap = 9;
+  const int x = 24 + idx * (w + gap);
+  const int y = 120;
+  char label[5];
+  perfHudNoteLabel(idx == 0 ? 'q' : (idx == 1 ? '1' : '8'), label, sizeof(label));
+  g.fillRect(x, y - 15, w, h + 15, COL_BG);
+  int tw = (int)strlen(label) * 6;
+  FONT_ASCII(g);
+  g.setTextSize(1);
+  g.setTextColor(COL_GREEN, COL_BG);
+  g.setCursor(x + (w - tw) / 2, y - 15);
+  g.print(label);
+  g.drawRect(x, y, w, h, COL_GREEN);
+  if (active) g.fillRect(x + 2, y + 2, w - 4, h - 4, COL_GREEN);
+}
+
+static void drawPerfHudScaleDetails(m5gfx::M5GFX &g, char key) {
+  const char *solfege = "--";
+  const char *degree = "-";
+  uint8_t octaveBand = 1;
+  uint8_t degreeIndex = 0;
+  perfHudScaleInfo(key, &solfege, &degree, &octaveBand, &degreeIndex);
+  g.fillRect(0, 40, CONTENT_W, 88, COL_BG);
+
+  const int sideY = 58;
+  drawDseg14TextScaled(g, 20, sideY, solfege, COL_GREEN, 1);
+  int degreeX = CONTENT_W - dseg14TextWidthScaled(degree, 1) - 26;
+  drawDseg14TextScaled(g, degreeX, sideY, degree, COL_GREEN, 1);
+
+  const int groupCenters[3] = {39, 120, 201};
+  const int dotGap = 9;
+  const int dotY = 123;
+  for (int band = 0; band < 3; band++) {
+    char label[5];
+    perfHudOctaveRootLabel((uint8_t)band, label, sizeof(label));
+    int labelW = dseg14TextWidthScaled(label, 1);
+    drawDseg14TextScaled(g, groupCenters[band] - labelW / 2, 98, label, COL_GREEN, 1);
+    int startX = groupCenters[band] - dotGap * 3;
+    for (int note = 0; note < 7; note++) {
+      bool active = (band == octaveBand && note == degreeIndex);
+      int x = startX + note * dotGap;
+      if (active) g.fillCircle(x, dotY, 3, COL_GREEN);
+      else g.fillCircle(x, dotY, 1, COL_GREEN);
+    }
+  }
+}
+
+static void drawPerfHudSampleCell(m5gfx::M5GFX &g, int idx, bool on) {
+  if (idx < 0 || idx >= 16) return;
+  const char *keys = "ASDFGHJKLZXCVBNM";
+  int row = (idx < 9) ? 0 : 1;
+  int col = (idx < 9) ? idx : (idx - 9);
+  const int cellW = 24;
+  const int row0X = 12;
+  const int row1X = row0X + cellW;
+  const int x = (row == 0 ? row0X : row1X) + col * cellW;
+  const int y = 84 + row * 22;
+  char label[2] = {keys[idx], 0};
+  char bindKey = normalizeBindKey(keys[idx]);
+  bool bound = bindKey && findHotkey(bindKey) > 0;
+  uint16_t colText = on ? COL_GREEN : (bound ? COL_DIM : COL_DARK_GRAY);
+  int w = dseg14TextWidthScaled(label, 1);
+  g.fillRect(x, y, cellW, 18, COL_BG);
+  drawDseg14TextScaled(g, x + (cellW - w) / 2, y + 1, label, colText, 1);
+}
+
+static void drawPerfHudNoteCell(m5gfx::M5GFX &g, int idx, bool on) {
+  if (idx < 0 || idx >= 20) return;
+  int x = 8 + idx * 11;
+  int y = 111;
+  g.fillRect(x, y, 8, on ? 14 : 8, on ? COL_GREEN : COL_DARK_GRAY);
+}
+
+static void drawPerfHudBase(m5gfx::M5GFX &g, uint8_t kind) {
+  g.fillScreen(COL_BG);
+  if (g_scaleMode) {
+    drawDseg14TextScaled(g, CONTENT_W - dseg14TextWidthScaled("SCALE", 1) - 4, 1, "SCALE", COL_GREEN, 1);
+  } else {
+    drawDseg14TextScaled(g, 4, 1, shortcutGroupLabel(), COL_GREEN, 1);
+  }
+  if (kind == 1) {
+    if (!g_scaleMode) drawDseg14TextScaled(g, CONTENT_W - dseg14TextWidthScaled("NOTES", 1) - 4, 1, "NOTES", COL_GREEN, 1);
+    g.fillRect(18, 40, 204, 90, COL_BG);
+  } else {
+    for (int i = 0; i < 16; i++) drawPerfHudSampleCell(g, i, false);
+    if (!g_scaleMode) drawDseg14TextScaled(g, CONTENT_W - dseg14TextWidthScaled("KEYS", 1) - 4, 1, "KEYS", COL_GREEN, 1);
+  }
+}
+
+static void drawPerfHudKey(m5gfx::M5GFX &g, char key, int recNum) {
+  key = normalizeBindKey(key);
+  if (!key) return;
+  uint8_t kind = perfHudKindForKey(key);
+  if (!g_perfHudVisible || g_perfHudLastKind != kind) {
+    drawPerfHudBase(g, kind);
+    g_perfHudVisible = true;
+    g_perfHudLastKey = 0;
+    g_perfHudLastKind = kind;
+  }
+  if (g_perfHudLastKey && g_perfHudLastKey != key) {
+    if (g_perfHudLastKind == 2) drawPerfHudSampleCell(g, perfHudSampleIndex(g_perfHudLastKey), false);
+  }
+  if (kind == 2) drawPerfHudSampleCell(g, perfHudSampleIndex(key), true);
+
+  if (g_scaleMode) {
+    char source[8];
+    perfHudSourceLabel(recNum, source, sizeof(source));
+    g.fillRect(0, 0, 72, 18, COL_BG);
+    drawDseg14TextScaled(g, 4, 1, source, COL_GREEN, 1);
+  }
+
+  if (g_scaleMode && kind == 1) drawPerfHudScaleDetails(g, key);
+
+  char label[8];
+  perfHudLabelForKey(key, recNum, label, sizeof(label));
+  const int labelScale = 2;
+  int w = dseg14TextWidthScaled(label, labelScale);
+  int x = ((CONTENT_W - w) / 2);
+  x -= x % labelScale;
+  int labelY = (g_scaleMode && kind == 1) ? 42 : 34;
+  if (g_scaleMode && kind == 1) g.fillRect(70, 26, 100, 42, COL_BG);
+  else g.fillRect(30, 26, 180, 48, COL_BG);
+  drawDseg14TextScaled(g, x, labelY, label, COL_GREEN, labelScale);
+
+  g_perfHudLastKey = key;
+}
+
 static bool enqueueUploadMounted(int recNum, uint8_t kind);
 static bool uploadCancelMounted(int recNum = 0);
 static uint8_t validateUploadConfigMounted();
 static const char *uploadStatusLabel(uint8_t status);
 static bool extractJsonStringValue(const String &json, const char *key, char *out, size_t n);
 
-// ---------- 回放界面: 播放完自动回列表, 回车暂停/继续, 退格回列表, ;/.切换, +/- 音量, 长按Del删除, 空格去录音 ----------
-// 返回 R_BACK(返回上一层), R_LIST(回列表), R_RECORD(去录音) 或 R_DELETE(删除当前录音)
+// ---------- 鍥炴斁鐣岄潰: 鎾斁瀹岃嚜鍔ㄥ洖鍒楄〃, 鍥炶溅鏆傚仠/缁х画, 閫€鏍煎洖鍒楄〃, ;/.鍒囨崲, +/- 闊抽噺, 闀挎寜Del鍒犻櫎, 绌烘牸鍘诲綍闊?----------
+// 杩斿洖 R_BACK(杩斿洖涓婁竴灞?, R_LIST(鍥炲垪琛?, R_RECORD(鍘诲綍闊? 鎴?R_DELETE(鍒犻櫎褰撳墠褰曢煶)
 int playbackScreen(const char *path, int recNum, int prevRec, int nextRec) {
   pauseUploadForMedia();
   auto &d = M5Cardputer.Display;
-  if (!sdMount()) { showMsg("播放", "SD 读取失败", COL_RED); return R_LIST; }
+  if (!sdMount()) { showMsg("鎾斁", "SD 璇诲彇澶辫触", COL_RED); return R_LIST; }
   bool isHotkeyPlayback = hotkeyOf(recNum) != 0 || (g_scaleMode && recNum == g_scaleCurrentRec);
   File f = SD.open(path, FILE_READ);
-  if (!f) { SD.end(); showMsg("播放", "打不开文件", COL_RED); return R_LIST; }
+  if (!f) { SD.end(); showMsg("鎾斁", "鎵撲笉寮€鏂囦欢", COL_RED); return R_LIST; }
   uint32_t total = f.size();
-  if (total <= 44) { f.close(); SD.end(); showMsg("播放", "文件为空", COL_RED); return R_LIST; }
+  if (total <= 44) { f.close(); SD.end(); showMsg("鎾斁", "鏂囦欢涓虹┖", COL_RED); return R_LIST; }
   uint32_t dataSize = playableWavDataBytes(f);
-  if (dataSize == 0) { f.close(); SD.end(); showMsg("播放", "文件无效", COL_RED); return R_LIST; }
+  if (dataSize == 0) { f.close(); SD.end(); showMsg("鎾斁", "鏂囦欢鏃犳晥", COL_RED); return R_LIST; }
   uint32_t sourceRate = wavSampleRate(f);
   float shortcutRootSemis = activeShortcutSemis();
   uint32_t playbackRate = shortcutPlaybackRate(sourceRate, isHotkeyPlayback);
   bool hotkeyShortBoost = isHotkeyPlayback && dataSize < (REC_RATE * 2);
   bool pitchBendEnabled = beginShortcutPitchBend(isHotkeyPlayback);
   bool hotkeyPerfMode = isHotkeyPlayback;
+  char perfHudKey = g_perfHudPendingKey;
+  g_perfHudPendingKey = 0;
+  if (!perfHudKey) perfHudKey = pressedBindKey();
+  if (!perfHudKey) perfHudKey = hotkeyOf(recNum);
+  if (!hotkeyPerfMode) g_perfHudVisible = false;
   f.seek(44);
   memset(waveBars, 0, sizeof(waveBars));
   memset(waveBarCounts, 0, sizeof(waveBarCounts));
@@ -2676,10 +3022,10 @@ int playbackScreen(const char *path, int recNum, int prevRec, int nextRec) {
   const uint32_t pbFrameMs = (useWaveSprite || useSprite) ? PB_UI_FRAME_MS : DIRECT_UI_FRAME_MS;
   g_mediaBusy = true;
 
-  // 静态部分(画一次): 顶栏
+  // 闈欐€侀儴鍒?鐢讳竴娆?: 椤舵爮
   auto drawStatic = [&]() {
     if (hotkeyPerfMode) return;
-    // 文件编号 (左上小字)
+    // 鏂囦欢缂栧彿 (宸︿笂灏忓瓧)
     char title[16];
     snprintf(title, sizeof(title), "REC_%04d", recNum);
     char hk = hotkeyOf(recNum);
@@ -2804,10 +3150,11 @@ int playbackScreen(const char *path, int recNum, int prevRec, int nextRec) {
     if (isHotkeyPlayback) speakerPrimeAfterColdStart();
     speakerSetVolume(playbackVolumeForRecMode(recNum, isHotkeyPlayback));
   }
+  if (hotkeyPerfMode) drawPerfHudKey(d, perfHudKey, recNum);
   bool ignoreKeysUntilRelease = M5Cardputer.Keyboard.isPressed();
   char ignoreStartBindKey = pressedBindKey();
   auto handleFastPlaybackKey = [&]() -> bool {
-    if (keyCtrl() || keyTab() || keyAlt() || keyEnter() || keyDel() || keySpace() || keyUpload()) return false;
+    if (keyCtrl() || keyTab() || keyFn() || keyAlt() || keyEnter() || keyDel() || keySpace() || keyUpload()) return false;
     char currentBind = ignoreKeysUntilRelease ? pressedBindKeyExcept(ignoreStartBindKey) : pressedBindKey();
     if (!currentBind) return false;
     if (scaleModeCanHandleKey()) {
@@ -2816,6 +3163,7 @@ int playbackScreen(const char *path, int recNum, int prevRec, int nextRec) {
         g_scaleCurrentRec = recNum;
         if (prepareScaleNoteForRec(recNum, noteSemis)) {
           g_seamlessHotkeySwitch = true;
+          g_perfHudPendingKey = currentBind;
           g_nextPlay = recNum;
           ret = R_PLAY;
           stop = true;
@@ -2828,6 +3176,7 @@ int playbackScreen(const char *path, int recNum, int prevRec, int nextRec) {
           clearShortcutSemisOverride();
           selectHotkeyPreviewRec(sampleRec);
           g_seamlessHotkeySwitch = true;
+          g_perfHudPendingKey = currentBind;
           g_nextPlay = sampleRec;
           ret = R_PLAY;
           stop = true;
@@ -2839,6 +3188,7 @@ int playbackScreen(const char *path, int recNum, int prevRec, int nextRec) {
     if (hk > 0) {
       g_seamlessHotkeySwitch = true;
       g_listMode = REC_SHORTCUT;
+      g_perfHudPendingKey = currentBind;
       g_nextPlay = hk;
       ret = R_PLAY;
       stop = true;
@@ -2877,11 +3227,12 @@ int playbackScreen(const char *path, int recNum, int prevRec, int nextRec) {
           lastPbChromeHeldBucket = 0xFFFFFFFFUL;
         }
         drawPlaybackAction(cv, "BACK", COL_DIM);
-        ret = R_LIST; stop = true;                         // 退格短按=回上一层
+        ret = R_LIST; stop = true;                         // 閫€鏍肩煭鎸?鍥炰笂涓€灞?
       }
       if (stop) break;
 
       if (M5Cardputer.Keyboard.isChange() && M5Cardputer.Keyboard.isPressed()) {
+        if (keyRollback()) { drawPlaybackAction(cv, "ROLL", COL_GREEN); ret = R_ROLLBACK; stop = true; waitRelease(); break; }
         if (handleScaleModeChord()) {
           drawPlaybackAction(cv, g_scaleMode ? "SCALE" : "NORM", g_scaleMode ? COL_GREEN : COL_DIM);
           waitRelease();
@@ -2901,6 +3252,7 @@ int playbackScreen(const char *path, int recNum, int prevRec, int nextRec) {
             g_scaleCurrentRec = recNum;
             if (prepareScaleNoteForRec(recNum, noteSemis)) {
               g_seamlessHotkeySwitch = true;
+              g_perfHudPendingKey = pressedBindKey();
               g_nextPlay = recNum;
               ret = R_PLAY;
               stop = true;
@@ -2914,6 +3266,7 @@ int playbackScreen(const char *path, int recNum, int prevRec, int nextRec) {
                 clearShortcutSemisOverride();
                 selectHotkeyPreviewRec(sampleRec);
                 g_seamlessHotkeySwitch = true;
+                g_perfHudPendingKey = scaleKey;
                 g_nextPlay = sampleRec;
                 ret = R_PLAY;
                 stop = true;
@@ -2930,13 +3283,14 @@ int playbackScreen(const char *path, int recNum, int prevRec, int nextRec) {
           drawPlaybackAction(cv, "PLAY", COL_GREEN);
           g_seamlessHotkeySwitch = true;
           g_listMode = REC_SHORTCUT;
+          g_perfHudPendingKey = pressedBindKey();
           g_nextPlay = hk; ret = R_PLAY; stop = true;
-        }   // 按到别的绑定键=立刻覆盖播放
-        else if (keyEsc()) { drawPlaybackAction(cv, "SLEEP", COL_DIM); ret = R_BACK; stop = true; }       // Esc=息屏
-        else if (keySpace()) { drawPlaybackAction(cv, "REC", COL_RED); ret = R_RECORD; stop = true; }   // 空格=去录音
+        }   // 鎸夊埌鍒殑缁戝畾閿?绔嬪埢瑕嗙洊鎾斁
+        else if (keyEsc()) { drawPlaybackAction(cv, "SLEEP", COL_DIM); ret = R_BACK; stop = true; }       // Esc=鎭睆
+        else if (keySpace()) { drawPlaybackAction(cv, "REC", COL_RED); ret = R_RECORD; stop = true; }   // 绌烘牸=鍘诲綍闊?
         else if (keyUp() && prevRec > 0) { drawPlaybackAction(cv, "PREV", COL_GREEN); speakerQuietFlush(6); g_nextPlay = prevRec; ret = R_PLAY; stop = true; }
         else if (keyDown() && nextRec > 0) { drawPlaybackAction(cv, "NEXT", COL_GREEN); speakerQuietFlush(6); g_nextPlay = nextRec; ret = R_PLAY; stop = true; }
-        else if (keyTab() && keyUpload()) {
+        else if (keyFn() && keyUpload()) {
           uint8_t status = UPSTAT_IDLE;
           bool cancelled = uploadCancelMounted(recNum);
           if (cancelled) status = UPSTAT_ABORTED;
@@ -3016,7 +3370,7 @@ int playbackScreen(const char *path, int recNum, int prevRec, int nextRec) {
     if ((seekLeft || seekRight) && millis() - lastSeek > 120) {
       lastSeek = millis();
       speakerSetVolume(0);
-      uint32_t step = REC_RATE * 2;  // 约 1 秒 PCM 数据
+      uint32_t step = REC_RATE * 2;  // 绾?1 绉?PCM 鏁版嵁
       if (seekLeft) played = (played > step) ? (played - step) : 0;
       if (seekRight) played = (played + step < dataSize) ? (played + step) : dataSize;
       played &= ~1U;
@@ -3042,7 +3396,7 @@ int playbackScreen(const char *path, int recNum, int prevRec, int nextRec) {
       if (M5Cardputer.Speaker.isPlaying(0) == 0) {
         if (!playDone) {
           playDone = true;
-          drawProgress(dataSize);   // 显示 100% 最终状态
+          drawProgress(dataSize);   // 鏄剧ず 100% 鏈€缁堢姸鎬?
         }
         if (isHotkeyPlayback) {
           uint32_t waitStart = millis();
@@ -3150,8 +3504,10 @@ int playbackScreen(const char *path, int recNum, int prevRec, int nextRec) {
     speakerDrainBeforeNextPlayback = false;
   } else if (ret == R_LIST) {
     speakerScheduleIdleOff();
+    if (hotkeyPerfMode) g_perfHudVisible = false;
   } else {
     speakerSoftStop(12);
+    if (hotkeyPerfMode) g_perfHudVisible = false;
   }
   f.close();
   if (recVolumeDirty) saveRecVolumeStateMounted();
@@ -3164,9 +3520,10 @@ void noiseReduce(const char *path);
 static bool suppressKeyFriction(const char *path, uint32_t dataBytes, bool abortOnKey = false);
 void listFlow(int sel);
 int recordingScreen();
+static int rollbackRecordScreen();
 static void deleteRecording(int recNum);
 
-// 播放流程: 支持"播放中按别的绑定键 -> 立刻切到那条"(覆盖). 返回 R_BACK/R_LIST/R_RECORD.
+// 鎾斁娴佺▼: 鏀寔"鎾斁涓寜鍒殑缁戝畾閿?-> 绔嬪埢鍒囧埌閭ｆ潯"(瑕嗙洊). 杩斿洖 R_BACK/R_LIST/R_RECORD.
 int playFlow(int recNum) {
   while (true) {
     if (recCount <= 0 || recListIndexOf(recNum) < 0) scanRecordings();
@@ -3187,6 +3544,7 @@ int playFlow(int recNum) {
     int r = playbackScreen(p, recNum, prevRec, nextRec);
     if (r == R_PLAY) { recNum = g_nextPlay; continue; }
     if (r == R_DELETE) { g_listReturnRec = 0; deleteRecording(recNum); return R_LIST; }
+    if (r == R_ROLLBACK) return R_ROLLBACK;
     if (r == R_LIST) g_listReturnRec = recNum;
     return r;
   }
@@ -3211,7 +3569,7 @@ void afterRecordingFlow(int recNum) {
   }
 }
 
-// ---------- 系统层上传服务: 录音应用只入队, 盒子负责 Wi-Fi / 调度 / 重试 ----------
+// ---------- 绯荤粺灞備笂浼犳湇鍔? 褰曢煶搴旂敤鍙叆闃? 鐩掑瓙璐熻矗 Wi-Fi / 璋冨害 / 閲嶈瘯 ----------
 struct UploadConfig {
   char ssid[33];
   char password[65];
@@ -4282,7 +4640,7 @@ static bool runUploadBatchMounted(bool visible) {
 
 static bool uploadModeHoldTriggered() {
   uint32_t start = millis();
-  while (keyUpload() && !keyTab()) {
+  while (keyUpload() && !keyTab() && !keyFn()) {
     M5Cardputer.update();
     if (millis() - start >= UPLOAD_MODE_HOLD_MS) return true;
     delay(10);
@@ -4295,7 +4653,7 @@ static bool systemIdleTick() {
   return false;
 }
 
-// ---------- 按键摩擦后处理: 只压低低能量、高变化率的细碎刮擦声 ----------
+// ---------- 鎸夐敭鎽╂摝鍚庡鐞? 鍙帇浣庝綆鑳介噺銆侀珮鍙樺寲鐜囩殑缁嗙鍒摝澹?----------
 static bool suppressKeyFriction(const char *path, uint32_t dataBytes, bool abortOnKey) {
   if (dataBytes < REC_N * 2) return false;
   char tmp[48];
@@ -4409,7 +4767,7 @@ static bool processPendingFrictionQueue(bool &abortedByKey) {
   return didWork;
 }
 
-// ---------- 降噪: FFT 谱减法(后处理) ----------
+// ---------- 闄嶅櫔: FFT 璋卞噺娉?鍚庡鐞? ----------
 static void nr_fft(float *re, float *im, int n, bool inv) {
   for (int i = 1, j = 0; i < n; i++) {
     int bit = n >> 1;
@@ -4442,11 +4800,11 @@ void noiseReduce(const char *path) {
   static int16_t hopbuf[128];
 
   d.fillScreen(COL_BG);
-  drawHeader("降噪处理中...");
+  drawHeader("闄嶅櫔澶勭悊涓?..");
 
-  if (!sdMount()) { showMsg("降噪", "SD 读取失败", COL_RED); return; }
+  if (!sdMount()) { showMsg("闄嶅櫔", "SD 璇诲彇澶辫触", COL_RED); return; }
   File in = SD.open(path, FILE_READ);
-  if (!in || in.size() <= 44) { if (in) in.close(); SD.end(); showMsg("降噪", "文件无效", COL_RED); return; }
+  if (!in || in.size() <= 44) { if (in) in.close(); SD.end(); showMsg("闄嶅櫔", "鏂囦欢鏃犳晥", COL_RED); return; }
   uint32_t dataBytes = in.size() - 44;
 
   for (int i = 0; i < N; i++) win[i] = 0.5f * (1.0f - cosf(2.0f * PI * i / N));
@@ -4467,7 +4825,7 @@ void noiseReduce(const char *path) {
   char tmp[48]; snprintf(tmp, sizeof(tmp), "%s.t", path);
   SD.remove(tmp);
   File out = SD.open(tmp, FILE_WRITE);
-  if (!out) { in.close(); SD.end(); showMsg("降噪", "无法写临时文件", COL_RED); return; }
+  if (!out) { in.close(); SD.end(); showMsg("DENOISE", "WRITE ERR", COL_RED); return; }
   writeWavHeader(out, REC_RATE, 0);
   for (int i = 0; i < N; i++) { frame[i] = 0; ola[i] = 0; }
   in.seek(44);
@@ -4517,14 +4875,14 @@ void noiseReduce(const char *path) {
   SD.end();
 }
 
-// ---------- 录音画面 (canvas: CONTENT_W × 135, 推送到 x=0) ----------
-// A线: waveBars[] 小柱轨道(上半区)  B线: wave[]实时示波器(下半区)
+// ---------- 褰曢煶鐢婚潰 (canvas: CONTENT_W 脳 135, 鎺ㄩ€佸埌 x=0) ----------
+// A绾? waveBars[] 灏忔煴杞ㄩ亾(涓婂崐鍖?  B绾? wave[]瀹炴椂绀烘尝鍣?涓嬪崐鍖?
 void drawRecCanvas(M5Canvas &cv, uint32_t elapsedMs, bool blink, int16_t *wave, bool ready = false, bool paused = false, uint32_t deleteHeldMs = 0) {
   updateLiveWaveVisual(recLiveWave, wave, REC_N, B_HALF, REC_B_SMOOTH, B_DECAY);
 
   cv.fillScreen(COL_BG);
 
-  // ── 顶栏 ────────────────────────────────────────────────────────
+  // 鈹€鈹€ 椤舵爮 鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€
   const char *status = ready ? "READY" : (paused ? "PAUSE" : "REC");
   uint16_t statusCol = (ready || paused) ? COL_DIM : COL_GREEN;
   drawStatusTitleNoLine(cv, status, statusCol);
@@ -4532,17 +4890,17 @@ void drawRecCanvas(M5Canvas &cv, uint32_t elapsedMs, bool blink, int16_t *wave, 
     if (blink) cv.fillCircle(48, 9, 5, COL_RED);
     else cv.drawCircle(48, 9, 5, 0x2000);
   }
-  // 电量 (亮绿, 黑底确保可读)
+  // 鐢甸噺 (浜豢, 榛戝簳纭繚鍙)
 
-  // ── A线: 滚动历史 (上半区, 中轴 y=39) ──────────────────────────
+  // 鈹€鈹€ A绾? 婊氬姩鍘嗗彶 (涓婂崐鍖? 涓酱 y=39) 鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€
   cv.drawFastHLine(0, A_CY, CONTENT_W, 0x0440);
   drawTrackBars(cv);
 
-  // ── B线: 实时示波器 (下半区, 中轴 y=85) ─────────────────────────
+  // 鈹€鈹€ B绾? 瀹炴椂绀烘尝鍣?(涓嬪崐鍖? 涓酱 y=85) 鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€
   cv.drawFastHLine(0, B_CY, CONTENT_W, 0x0440);
   drawLiveWaveVisual(cv, recLiveWave, B_CY);
 
-  // ── 计时器 (底部左侧) ───────────────────────────────────────────
+  // 鈹€鈹€ 璁℃椂鍣?(搴曢儴宸︿晶) 鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€
   uint32_t s = elapsedMs / 1000;
   cv.setTextColor(COL_GREEN, COL_BG);
   char recTime[8];
@@ -4615,7 +4973,7 @@ static void drawRecChrome(m5gfx::M5GFX &g, uint32_t elapsedMs, bool blink, bool 
   drawDeleteProgress(g, deleteHeldMs);
 }
 
-// 录制. 开机自动进入; 调用此函数后创建文件并开始写入
+// 褰曞埗. 寮€鏈鸿嚜鍔ㄨ繘鍏? 璋冪敤姝ゅ嚱鏁板悗鍒涘缓鏂囦欢骞跺紑濮嬪啓鍏?
 int recordingScreen() {
   pauseUploadForMedia();
   g_mediaBusy = true;
@@ -4623,7 +4981,7 @@ int recordingScreen() {
   g_afterRecord = R_LIST;
   g_uploadAfterRecord = false;
 
-  // 准备阶段仍显示 READY, 真正开始采样后才亮 REC 红点
+  // 鍑嗗闃舵浠嶆樉绀?READY, 鐪熸寮€濮嬮噰鏍峰悗鎵嶄寒 REC 绾㈢偣
   memset(waveBars, 0, sizeof(waveBars));
   memset(waveBarCounts, 0, sizeof(waveBarCounts));
   memset(recLiveWave, 0, sizeof(recLiveWave));
@@ -4742,20 +5100,20 @@ int recordingScreen() {
   };
   drawRecFrame(0, false, nullptr, true);
 
-  if (!sdMount()) { cleanupRecSprite(); showMsg("录音机", "未检测到 SD 卡", COL_RED); return 0; }
+  if (!sdMount()) { cleanupRecSprite(); showMsg("REC", "NO SD", COL_RED); return 0; }
   if (!SD.exists(REC_DIR)) SD.mkdir(REC_DIR);
   int idx = nextRecordingIndex();
   uploadForgetRecordMounted(idx);
   char path[40];
   recordingPathKind(idx, REC_NORMAL, path, sizeof(path));
   File f = SD.open(path, FILE_WRITE);
-  if (!f) { cleanupRecSprite(); SD.end(); showMsg("录音机", "无法写入文件", COL_RED); return 0; }
+  if (!f) { cleanupRecSprite(); SD.end(); showMsg("REC", "WRITE ERR", COL_RED); return 0; }
   nextRecHint = (idx < 9999) ? idx + 1 : 9999;
   writeWavHeader(f, REC_RATE, 0);
 
   bool mustRearm = forceMicRearm;
   bool micWasReady = micInputReady && !mustRearm;
-  if (!prepareMicInput(mustRearm)) { cleanupRecSprite(); f.close(); SD.end(); showMsg("录音机", "麦克风启动失败", COL_RED); return 0; }
+  if (!prepareMicInput(mustRearm)) { cleanupRecSprite(); f.close(); SD.end(); showMsg("REC", "MIC ERR", COL_RED); return 0; }
   if (!micWasReady && !mustRearm) delay(20);
   if (mustRearm) {
     for (int i = 0; i < REC_REARM_SETTLE_BUFFERS; i++) {
@@ -4862,7 +5220,7 @@ int recordingScreen() {
   int32_t recLpf = 0;
   int32_t recNoiseRms = 90;
   int32_t recSoftGateQ8 = 256;
-  uint32_t skipBuffers = micWasReady ? 4 : 8;   // 准备阶段已热机, 只短掐头防按键声
+  uint32_t skipBuffers = micWasReady ? 4 : 8;   // 鍑嗗闃舵宸茬儹鏈? 鍙煭鎺愬ご闃叉寜閿０
 
   while (!stop) {
     while (true) {
@@ -4989,8 +5347,8 @@ int recordingScreen() {
   return lastSavedIdx;
 }
 
-// ---------- 录音列表: ;/.选, 回车放, Tab+键绑定, Alt降噪, 空格录音, Esc退出, 长按Del删除 ----------
-// 返回 R_BACK(退出列表并息屏) 或 R_RECORD(去录音)
+// ---------- 褰曢煶鍒楄〃: ;/.閫? 鍥炶溅鏀? Tab+閿粦瀹? Alt闄嶅櫔, 绌烘牸褰曢煶, Esc閫€鍑? 闀挎寜Del鍒犻櫎 ----------
+// 杩斿洖 R_BACK(閫€鍑哄垪琛ㄥ苟鎭睆) 鎴?R_RECORD(鍘诲綍闊?
 static void deleteRecording(int recNum) {
   if (!sdMount()) return;
   char p[40];
@@ -5055,16 +5413,16 @@ static int deleteUnmarkedRecordings() {
 static bool confirmDeleteUnmarked() {
   auto &d = M5Cardputer.Display;
   d.fillScreen(COL_BG);
-  drawHeader("清理录音");
+  drawHeader("娓呯悊褰曢煶");
   FONT_CN_16(d);
   d.setTextColor(COL_RED, COL_BG);
   d.setCursor(12, 38);
-  d.print("删除所有普通录音?");
+  d.print("鍒犻櫎鎵€鏈夋櫘閫氬綍闊?");
   FONT_CN_12(d);
   d.setTextColor(COL_DIM, COL_BG);
   d.setCursor(12, 66);
-  d.print("保留 KEY / IMP");
-  drawFooter("回车确认  退格取消");
+  d.print("淇濈暀 QCK / IMP");
+  drawFooter("Enter OK  Esc Cancel");
   waitRelease();
   while (true) {
     M5Cardputer.update();
@@ -5079,16 +5437,16 @@ static bool confirmDeleteUnmarked() {
 static bool confirmNoiseReduce(int recNum) {
   auto &d = M5Cardputer.Display;
   d.fillScreen(COL_BG);
-  drawHeader("降噪确认");
+  drawHeader("闄嶅櫔纭");
   FONT_CN_16(d);
   d.setTextColor(COL_GREEN, COL_BG);
   d.setCursor(18, 42);
-  d.printf("降噪 REC_%04d ?", recNum);
+  d.printf("闄嶅櫔 REC_%04d ?", recNum);
   FONT_CN_12(d);
   d.setTextColor(COL_DIM, COL_BG);
   d.setCursor(18, 66);
-  d.print("会覆盖原文件");
-  drawFooter("回车确认  退格取消");
+  d.print("浼氳鐩栧師鏂囦欢");
+  drawFooter("Enter OK  Esc Cancel");
   waitRelease();
   while (true) {
     M5Cardputer.update();
@@ -5170,20 +5528,21 @@ int listScreen(int selectIdx) {
   auto &d = M5Cardputer.Display;
   if (recCount <= 0 || (selectIdx > 0 && recListIndexOf(selectIdx) < 0)) scanRecordings();
 
-  // 空列表
+  // 绌哄垪琛?
   if (recCount == 0) {
     d.fillScreen(COL_BG);
     drawBattery();
     FONT_CN_16(d); d.setTextColor(COL_DIM, COL_BG);
-    d.setCursor(12, 56); d.print("还没有录音");
+    d.setCursor(12, 56); d.print("NO REC");
     FONT_CN_12(d); d.setTextColor(COL_DIM, COL_BG);
-    d.setCursor(4, 120); d.print("空格录音  Esc息屏");
+    d.setCursor(4, 120); d.print("绌烘牸褰曢煶  Esc鎭睆");
     waitRelease();
     uint32_t lastInputMs = millis();
     while (true) {
       M5Cardputer.update();
       if (M5Cardputer.Keyboard.isChange() && M5Cardputer.Keyboard.isPressed()) {
         lastInputMs = millis();
+        if (keyRollback()) return R_ROLLBACK;
         if (keyVolUp()) { adjustPlayVolume(25); drawVolumeToast(COL_GREEN); waitRelease(); continue; }
         if (keyVolDn()) { adjustPlayVolume(-25); drawVolumeToast(COL_GREEN); waitRelease(); continue; }
         if (keyBrightUp()) { adjustBrightness(1); drawBrightnessToast(COL_GREEN); waitRelease(); continue; }
@@ -5198,7 +5557,7 @@ int listScreen(int selectIdx) {
     }
   }
 
-  int sel = recCount - 1;   // 默认选最新录音(列表末尾)
+  int sel = recCount - 1;   // 榛樿閫夋渶鏂板綍闊?鍒楄〃鏈熬)
   sel = selectIndexForMode(g_listMode, recCount - 1);
   if (selectIdx > 0) {
     for (int i = 0; i < recCount; i++) {
@@ -5231,7 +5590,7 @@ int listScreen(int selectIdx) {
       const int tagX = 76;
       const int uploadX = 118;
       const int durX = CONTENT_W - 72;
-  int visRows = (d.height() - top - 18) / rowH;   // 底部留 18px 给提示
+  int visRows = (d.height() - top - 18) / rowH;   // 搴曢儴鐣?18px 缁欐彁绀?
   if (visRows < 1) visRows = 1;
 
   if (!(g_carryDeleteRec > 0 && keyDel())) waitRelease();
@@ -5251,13 +5610,13 @@ int listScreen(int selectIdx) {
       if (firstOrdinal > visibleTotal - visRows) firstOrdinal = visibleTotal - visRows;
       if (firstOrdinal < 0) firstOrdinal = 0;
       redraw = false;
-      // 重绘全屏列表内容
+      // 閲嶇粯鍏ㄥ睆鍒楄〃鍐呭
       d.fillRect(0, 0, CONTENT_W, 135, COL_BG);
 
-      // 标题行
+      // 鏍囬琛?
       drawStatusTabs(d, g_listMode, visibleTotal);
 
-      // 列表行
+      // 鍒楄〃琛?
       if (visibleTotal == 0) {
         d.setTextColor(COL_DIM, COL_BG);
         d.setCursor(28, 58);
@@ -5272,7 +5631,7 @@ int listScreen(int selectIdx) {
         bool on = (i == sel);
         uint16_t bg = on ? 0x0180 : COL_BG;
         if (on) d.fillRect(0, y - 2, CONTENT_W, rowH - 1, bg);
-        // 选中游标
+        // 閫変腑娓告爣
         if (on) { d.setTextColor(COL_GREEN, bg); d.setCursor(2, y); d.print(">"); }
         d.setTextColor(on ? COL_GREEN : COL_DIM, bg);
         char recName[8];
@@ -5302,13 +5661,13 @@ int listScreen(int selectIdx) {
         drawDseg14Text(d, durX, y, dur, on ? COL_GREEN : COL_DIM);
         if (frictionPending(recList[i])) d.drawFastHLine(CONTENT_W - 16, y + 15, 6, on ? COL_GREEN : COL_DIM);
       }
-      // 更多项箭头
+      // 鏇村椤圭澶?
       FONT_CN_12(d); d.setTextColor(COL_DIM, COL_BG);
       if (firstOrdinal > 0)                    { d.setCursor(CONTENT_W - 10, top); d.print("^"); }
       if (firstOrdinal + visRows < visibleTotal) { d.setCursor(CONTENT_W - 10, top + (visRows - 1) * rowH); d.print("v"); }
-      // 底部操作提示
+      // 搴曢儴鎿嶄綔鎻愮ず
       d.drawFastHLine(0, 120, CONTENT_W, COL_DIM);
-      d.setCursor(4, 122); d.print(";/.选 回车放 Esc退 长Del删");
+      d.setCursor(4, 122); d.print(";/. SEL Enter PLAY Esc BACK Del DEL");
     }
 
     M5Cardputer.update();
@@ -5332,7 +5691,7 @@ int listScreen(int selectIdx) {
         g_carryDeleteStart = 0;
       }
     }
-    if (keyDel() && !keyTab() && sel >= 0) {
+    if (keyDel() && !keyTab() && !keyFn() && sel >= 0) {
       if (delHoldStart == 0) delHoldStart = millis();
       uint32_t held = millis() - delHoldStart;
       if (held >= DELETE_HOLD_MS) {
@@ -5364,6 +5723,7 @@ int listScreen(int selectIdx) {
     }
     if (M5Cardputer.Keyboard.isChange() && M5Cardputer.Keyboard.isPressed()) {
       lastInputMs = millis();
+      if (keyRollback()) { waitRelease(); return R_ROLLBACK; }
       if (handleScaleModeChord()) {
         drawActionToast(g_scaleMode ? "SCALE" : "NORM", g_scaleMode ? COL_GREEN : COL_DIM);
         redraw = true;
@@ -5391,6 +5751,7 @@ int listScreen(int selectIdx) {
             g_scaleCurrentRec = recNum;
             if (prepareScaleNoteForRec(recNum, noteSemis)) {
               rememberListSelection(g_listMode, sel);
+              g_perfHudPendingKey = pressedBindKey();
               g_nextPlay = recNum;
               return R_PLAY;
             }
@@ -5403,6 +5764,7 @@ int listScreen(int selectIdx) {
             g_scaleCurrentRec = recNum;
             clearShortcutSemisOverride();
             selectHotkeyPreviewRec(recNum);
+            g_perfHudPendingKey = scaleKey;
             g_nextPlay = recNum;
             return R_PLAY;
           } else {
@@ -5414,10 +5776,11 @@ int listScreen(int selectIdx) {
         }
       }
       int hk = pressedHotkeyRec();
-      if (hk > 0) {                                     // 绑定键=最高优先级, 交给外层播放页
+      if (hk > 0) {                                     // 缁戝畾閿?鏈€楂樹紭鍏堢骇, 浜ょ粰澶栧眰鎾斁椤?
         rememberListSelection(g_listMode, sel);
         g_listMode = REC_SHORTCUT;
         g_listModeSelectedRec[REC_SHORTCUT] = hk;
+        g_perfHudPendingKey = pressedBindKey();
         g_nextPlay = hk;
         return R_PLAY;
       }
@@ -5425,7 +5788,7 @@ int listScreen(int selectIdx) {
       else if (keyVolDn()) { adjustPlayVolume(-25); drawVolumeToast(COL_GREEN); waitRelease(); }
       else if (keyBrightUp()) { adjustBrightness(1); drawBrightnessToast(COL_GREEN); waitRelease(); }
       else if (keyBrightDn()) { adjustBrightness(-1); drawBrightnessToast(COL_GREEN); waitRelease(); }
-      else if (keyTab() && keyDel()) {
+      else if (keyFn() && keyDel()) {
         if (confirmDeleteUnmarked()) {
           int deleted = deleteUnmarkedRecordings();
           sel = recCount - 1;
@@ -5434,7 +5797,7 @@ int listScreen(int selectIdx) {
         }
         redraw = true; waitRelease();
       }
-      else if (keyTab() && sel >= 0 && !keyUpload()) {
+      else if (keyFn() && sel >= 0 && !keyUpload()) {
         if (keyAlt()) {
           int recNum = recList[sel];
           cleanFrictionForRec(recNum, false);
@@ -5452,16 +5815,20 @@ int listScreen(int selectIdx) {
         }
         char bk = pressedBindKey();
         if (bk) {
-          bool ok = markRecordingShortcut(recList[sel]);
+          uint8_t trimTier = 1;
+          bool ok = markRecordingShortcut(recList[sel], &trimTier);
           if (ok) setHotkey(bk, recList[sel]);
           if (ok) {
             g_listMode = REC_SHORTCUT;
             rememberListSelection(g_listMode, sel);
+            char msg[8];
+            snprintf(msg, sizeof(msg), "TRIM%d", trimTier);
+            drawActionToast(msg, COL_GREEN);
           }
           redraw = true; waitRelease();
         }
       }
-      else if (keyTab() && keyUpload()) {
+      else if (keyFn() && keyUpload()) {
         uint8_t status = UPSTAT_IDLE;
         bool cancelled = false;
         if (sdMount()) {
@@ -5515,8 +5882,8 @@ int listScreen(int selectIdx) {
         redraw = true;
         if (M5Cardputer.Keyboard.isPressed()) waitRelease();
       }
-      else if (keySpace()) { return R_RECORD; }         // 空格=去录音
-      else if (keyEsc())   { return R_BACK; }           // Esc=退出列表并息屏
+      else if (keySpace()) { return R_RECORD; }         // 绌烘牸=鍘诲綍闊?
+      else if (keyEsc())   { return R_BACK; }           // Esc=閫€鍑哄垪琛ㄥ苟鎭睆
       else if (keyEsc())   { return R_BACK; }
       else if (keyLeft())  { rememberListSelection(g_listMode, sel); g_listMode = (g_listMode + 2) % 3; sel = selectIndexForMode(g_listMode, sel); redraw = true; waitRelease(); }
       else if (keyRight()) { rememberListSelection(g_listMode, sel); g_listMode = (g_listMode + 1) % 3; sel = selectIndexForMode(g_listMode, sel); redraw = true; waitRelease(); }
@@ -5542,7 +5909,7 @@ int listScreen(int selectIdx) {
   }
 }
 
-// 列表流程: 列表 <-> 录音 循环; Esc退出到息屏
+// 鍒楄〃娴佺▼: 鍒楄〃 <-> 褰曢煶 寰幆; Esc閫€鍑哄埌鎭睆
 void listFlow(int sel) {
   ensureHotkeysLoaded();
   while (true) {
@@ -5571,6 +5938,14 @@ void listFlow(int sel) {
         g_listReturnRec = 0;
         continue;
       }
+      if (pr == R_ROLLBACK) {
+        int rolled = rollbackRecordScreen();
+        if (rolled > 0) {
+          selectRecordedInNormalList(rolled);
+          sel = rolled;
+        }
+        continue;
+      }
       return;
     }
     if (r == R_RECORD) {
@@ -5586,6 +5961,14 @@ void listFlow(int sel) {
       }
       afterRecordingFlow(n);
       return;
+    }
+    if (r == R_ROLLBACK) {
+      int rolled = rollbackRecordScreen();
+      if (rolled > 0) {
+        selectRecordedInNormalList(rolled);
+        sel = rolled;
+      }
+      continue;
     }
     return;
   }
@@ -5651,10 +6034,10 @@ static bool popTextChar(char *dst) {
 
 static uint8_t wifiSettingsScreen() {
   if (!sdMount()) {
-    showMsg("Wi-Fi", "未检测到 SD 卡", COL_RED);
+    showMsg("Wi-Fi", "NO SD", COL_RED);
     return APP_LAUNCHER;
   }
-  loadUploadConfig();  // 即使 url/token 不完整，也会尽量读入已有字段。
+  loadUploadConfig();  // 鍗充娇 url/token 涓嶅畬鏁达紝涔熶細灏介噺璇诲叆宸叉湁瀛楁銆?
   SD.end();
 
   int sel = 0;
@@ -5733,6 +6116,11 @@ static uint8_t wifiSettingsScreen() {
 
     if (M5Cardputer.Keyboard.isChange() && M5Cardputer.Keyboard.isPressed()) {
       lastInputMs = millis();
+      if (keyRollback()) {
+        waitRelease();
+        cleanupWifiSprite();
+        return APP_ROLLBACK;
+      }
       if (keyEsc()) {
         waitRelease();
         cleanupWifiSprite();
@@ -5808,10 +6196,10 @@ static uint8_t launcherScreen() {
   static const uint16_t LAUNCHER_BG_ON = COL_DARK_GRAY;
   struct LauncherEntry { const char *key; const char *name; uint8_t app; };
   static const LauncherEntry apps[] = {
-    {"SPC", "录音", APP_REC_RECORD},
-    {"ENT", "列表", APP_REC_LIST},
+    {"SPC", "褰曢煶", APP_REC_RECORD},
+    {"ENT", "鍒楄〃", APP_REC_LIST},
     {"C",   "CHAT", APP_CHAT},
-    {"F",   "番茄钟", APP_POMODORO},
+    {"F",   "TIMER", APP_POMODORO},
     {"W",   "Wi-Fi", APP_WIFI},
   };
   const int appCount = sizeof(apps) / sizeof(apps[0]);
@@ -5830,7 +6218,7 @@ static uint8_t launcherScreen() {
       FONT_CN_16(d);
       d.setTextColor(LAUNCHER_COL, COL_BG);
       d.setCursor(8, 3);
-      d.print("工具箱");
+      d.print("TOOLS");
       drawStatusBatteryColor(d, LAUNCHER_COL);
       d.drawFastHLine(0, 21, d.width(), LAUNCHER_COL);
       FONT_ASCII(d);
@@ -5849,12 +6237,13 @@ static uint8_t launcherScreen() {
         d.print(apps[i].name);
         FONT_ASCII(d);
       }
-      drawFooter(";/.选择  回车进入  Esc息屏", LAUNCHER_DIM);
+      drawFooter(";/.閫夋嫨  鍥炶溅杩涘叆  Esc鎭睆", LAUNCHER_DIM);
       redraw = false;
     }
 
     if (M5Cardputer.Keyboard.isChange() && M5Cardputer.Keyboard.isPressed()) {
       lastInputMs = millis();
+      if (keyRollback()) { waitRelease(); return APP_ROLLBACK; }
       if (keyEsc()) { waitRelease(); return APP_LAUNCHER; }
       if (keySpace()) { waitRelease(); return APP_REC_RECORD; }
       if (keyEnter()) { uint8_t app = apps[sel].app; waitRelease(); return app; }
@@ -5922,7 +6311,7 @@ static void drawChatHome(const char *status, const char *reply = nullptr) {
   FONT_CN_12(d);
   d.setTextColor(dim, COL_BG);
   d.setCursor(8, 53);
-  d.print(status && status[0] ? status : "回车开始说话");
+  d.print(status && status[0] ? status : "ENTER TALK");
   if (reply && reply[0]) {
     d.setTextColor(accent, COL_BG);
     char line[64];
@@ -5936,11 +6325,11 @@ static void drawChatHome(const char *status, const char *reply = nullptr) {
   } else {
     d.setTextColor(dim, COL_BG);
     d.setCursor(8, 74);
-    d.print("ASR-only 快速返回");
+    d.print("ASR ONLY");
     d.setCursor(8, 94);
-    d.print("不等待 DeepSeek");
+    d.print("涓嶇瓑寰?DeepSeek");
   }
-  drawFooter("回车说话  Space录音  Esc返回", dim);
+  drawFooter("鍥炶溅璇磋瘽  Space褰曢煶  Esc杩斿洖", dim);
 }
 
 static bool chatRecordOnceMounted(const char *path, uint32_t maxMs = 30000) {
@@ -5990,7 +6379,7 @@ static bool chatRecordOnceMounted(const char *path, uint32_t maxMs = 30000) {
   M5Cardputer.Mic.record(recBuf[1], REC_N, REC_RATE);
   d.fillScreen(COL_BG);
   drawChatHeader("CHAT REC");
-  drawFooter("回车发送  Esc取消", chatDimColor());
+  drawFooter("鍥炶溅鍙戦€? Esc鍙栨秷", chatDimColor());
 
   while (!stop) {
     while (true) {
@@ -6028,7 +6417,7 @@ static bool chatRecordOnceMounted(const char *path, uint32_t maxMs = 30000) {
       FONT_CN_12(d);
       d.setTextColor(chatDimColor(), COL_BG);
       d.setCursor(8, 76);
-      d.print("说完按回车发送");
+      d.print("ENTER SEND");
     }
   }
 
@@ -7339,6 +7728,16 @@ static uint8_t chatStreamScreen() {
     }
     if (M5Cardputer.Keyboard.isChange() && M5Cardputer.Keyboard.isPressed()) {
       lastInputMs = millis();
+      if (keyRollback()) {
+        chatStopUplink(client);
+        chatStopPlaybackTask();
+        M5Cardputer.Speaker.stop();
+        chatPcmFree();
+        client.stop();
+        wifiPowerDown();
+        waitRelease();
+        return APP_ROLLBACK;
+      }
       if (keyEsc()) {
         chatStopUplink(client);
         chatStopPlaybackTask();
@@ -7392,17 +7791,18 @@ static uint8_t chatHttpScreen() {
   while (true) {
     M5Cardputer.update();
     if (redraw) {
-      drawChatHome("回车开始说话", reply);
+      drawChatHome("ENTER TALK", reply);
       redraw = false;
     }
 
     if (M5Cardputer.Keyboard.isChange() && M5Cardputer.Keyboard.isPressed()) {
       lastInputMs = millis();
+      if (keyRollback()) { waitRelease(); return APP_ROLLBACK; }
       if (keyEsc()) { waitRelease(); return APP_LAUNCHER; }
       if (keySpace()) { waitRelease(); return APP_REC_RECORD; }
       if (keyEnter()) {
         if (!sdMount()) {
-          showMsg("CHAT", "未检测到 SD 卡", COL_RED);
+          showMsg("CHAT", "NO SD", COL_RED);
           waitRelease();
           redraw = true;
           continue;
@@ -7410,14 +7810,14 @@ static uint8_t chatHttpScreen() {
         bool ok = chatRecordOnceMounted(CHAT_LAST_PATH);
         SD.end();
         if (!ok) {
-          showMsg("CHAT", "录音取消或失败", COL_RED);
+          showMsg("CHAT", "REC ERR", COL_RED);
           waitRelease();
           redraw = true;
           continue;
         }
-        drawChatHome("正在上传并识别...", nullptr);
+        drawChatHome("姝ｅ湪涓婁紶骞惰瘑鍒?..", nullptr);
         if (!sdMount()) {
-          showMsg("CHAT", "SD 读取失败", COL_RED);
+          showMsg("CHAT", "SD 璇诲彇澶辫触", COL_RED);
           waitRelease();
           redraw = true;
           continue;
@@ -7429,9 +7829,9 @@ static uint8_t chatHttpScreen() {
           snprintf(reply, sizeof(reply), "%s", uploadStatusLabel(status));
           showMsg("CHAT", uploadStatusLabel(status), COL_RED);
         } else if (!reply[0]) {
-          snprintf(reply, sizeof(reply), "已收到, 但没有返回文字");
+          snprintf(reply, sizeof(reply), "OK, NO TEXT");
         } else if (audioUrl[0] && sdMount()) {
-          drawChatHome(reply, "正在播放语音...");
+          drawChatHome(reply, "姝ｅ湪鎾斁璇煶...");
           if (downloadHttpToFileMounted(audioUrl, CHAT_REPLY_PATH)) {
             playWavQuickMounted(CHAT_REPLY_PATH);
           }
@@ -7474,7 +7874,7 @@ static uint8_t pomodoroScreen() {
       char buf[8];
       snprintf(buf, sizeof(buf), "%02lu:%02lu", (unsigned long)(remainSec / 60), (unsigned long)(remainSec % 60));
       d.fillScreen(COL_BG);
-      drawHeader("番茄钟");
+      drawHeader("TIMER");
       FONT_TIMER(d);
       d.setTextColor(remainSec == 0 ? COL_RED : COL_GREEN, COL_BG);
       d.setCursor(40, 52);
@@ -7482,13 +7882,14 @@ static uint8_t pomodoroScreen() {
       FONT_CN_12(d);
       d.setTextColor(running ? COL_GREEN : COL_DIM, COL_BG);
       d.setCursor(76, 88);
-      d.print(running ? "工作中" : (remainSec == 0 ? "已完成" : "暂停"));
-      drawFooter("回车开始/暂停  Del重置  Esc返回");
+      d.print(running ? "RUN" : (remainSec == 0 ? "DONE" : "PAUSE"));
+      drawFooter("鍥炶溅寮€濮?鏆傚仠  Del閲嶇疆  Esc杩斿洖");
       redraw = false;
     }
 
     if (M5Cardputer.Keyboard.isChange() && M5Cardputer.Keyboard.isPressed()) {
       lastInputMs = millis();
+      if (keyRollback()) { waitRelease(); return APP_ROLLBACK; }
       if (keyEsc()) { waitRelease(); return APP_LAUNCHER; }
       if (keySpace()) { waitRelease(); return APP_REC_RECORD; }
       if (keyEnter()) {
@@ -7510,9 +7911,213 @@ static uint8_t pomodoroScreen() {
   }
 }
 
+static void drawRollbackScreen(const char *status, uint32_t sec = 0, int recNum = 0) {
+  auto &d = M5Cardputer.Display;
+  d.fillScreen(COL_BG);
+  drawStatusTitle(d, "ROLL", COL_GREEN);
+
+  const int bigScale = 2;
+  int bigW = dseg14TextWidthScaled(status, bigScale);
+  int bigX = (CONTENT_W - bigW) / 2;
+  if (bigX < 0) bigX = 0;
+  drawDseg14TextScaled(d, bigX, 34, status, COL_GREEN, bigScale);
+
+  char t[16];
+  snprintf(t, sizeof(t), "%02lu:%02lu", (unsigned long)(sec / 60), (unsigned long)(sec % 60));
+  int timeX = (CONTENT_W - dseg14TextWidth(t)) / 2;
+  drawDseg14Text(d, timeX, 78, t, COL_DIM);
+
+  if (recNum > 0) {
+    char name[16];
+    snprintf(name, sizeof(name), "REC_%04d", recNum);
+    int nameX = (CONTENT_W - dseg14TextWidth(name)) / 2;
+    drawDseg14Text(d, nameX, 98, name, COL_GREEN);
+  }
+
+  drawDseg14Text(d, 4, 116, "TAB END", COL_DIM);
+}
+
+static int rollbackRecordScreen() {
+  pauseUploadForMedia();
+  g_mediaBusy = true;
+  applyBrightness();
+  drawRollbackScreen("START", 0);
+  delay(650);
+  waitRelease();
+
+  if (!sdMount()) {
+    g_mediaBusy = false;
+    showMsg("ROLLBACK", "NO SD", COL_RED);
+    return 0;
+  }
+  if (!SD.exists(REC_DIR)) SD.mkdir(REC_DIR);
+  SD.remove(ROLLBACK_TMP_PATH);
+  File ring = SD.open(ROLLBACK_TMP_PATH, FILE_WRITE);
+  if (!ring) {
+    SD.end();
+    g_mediaBusy = false;
+    showMsg("ROLLBACK", "WRITE ERR", COL_RED);
+    return 0;
+  }
+
+  bool mustRearm = forceMicRearm;
+  bool micWasReady = micInputReady && !mustRearm;
+  if (!prepareMicInput(mustRearm)) {
+    ring.close();
+    SD.remove(ROLLBACK_TMP_PATH);
+    SD.end();
+    g_mediaBusy = false;
+    showMsg("ROLLBACK", "MIC ERR", COL_RED);
+    return 0;
+  }
+  if (!micWasReady && !mustRearm) delay(20);
+  if (mustRearm) {
+    for (int i = 0; i < REC_REARM_SETTLE_BUFFERS; i++) {
+      M5Cardputer.Mic.record(recBuf[0], REC_N, REC_RATE);
+      while (M5Cardputer.Mic.isRecording() > 0) delay(1);
+    }
+    forceMicRearm = false;
+  }
+
+  drawRollbackScreen("START", 0);
+  delay(350);
+  M5Cardputer.Display.setBrightness(0);
+
+  int b = 0;
+  uint32_t ringWrite = 0;
+  uint32_t capturedBytes = 0;
+  uint32_t lastHiddenStatusMs = millis();
+  uint32_t skipBuffers = micWasReady ? 4 : 8;
+  bool stop = false;
+  bool save = false;
+  int savedIdx = 0;
+  int rollbackGain = max(recGain, 84);
+  int32_t recDc = 0, recHum = 0, recLpf = 0, recNoiseRms = 90, recSoftGateQ8 = 256;
+
+  M5Cardputer.Mic.record(recBuf[0], REC_N, REC_RATE);
+  M5Cardputer.Mic.record(recBuf[1], REC_N, REC_RATE);
+
+  while (!stop) {
+    while (true) {
+      M5Cardputer.update();
+      if (M5Cardputer.Keyboard.isChange() && M5Cardputer.Keyboard.isPressed()) {
+        if (keyRollback()) {
+          save = true;
+          stop = true;
+          applyBrightness();
+          drawRollbackScreen("END", min(capturedBytes, ROLLBACK_KEEP_BYTES) / (REC_RATE * 2UL));
+          waitRelease();
+          break;
+        }
+        stop = true;
+        applyBrightness();
+        drawRollbackScreen("END", min(capturedBytes, ROLLBACK_KEEP_BYTES) / (REC_RATE * 2UL));
+        waitRelease();
+        break;
+      }
+      if (M5Cardputer.Mic.isRecording() < 2) break;
+      delay(1);
+    }
+    if (stop) break;
+
+    int16_t *filled = recBuf[b];
+    processMicBuffer(filled, REC_N, recDc, recHum, recLpf, recNoiseRms, recSoftGateQ8, rollbackGain);
+    if (skipBuffers > 0) {
+      skipBuffers--;
+    } else {
+      const uint32_t bytes = REC_N * sizeof(int16_t);
+      ring.seek(ringWrite);
+      ring.write((uint8_t *)filled, bytes);
+      ringWrite += bytes;
+      if (ringWrite >= ROLLBACK_KEEP_BYTES) ringWrite = 0;
+      if (capturedBytes <= UINT32_MAX - bytes) capturedBytes += bytes;
+      if (millis() - lastHiddenStatusMs > 2000) {
+        lastHiddenStatusMs = millis();
+        ring.flush();
+      }
+    }
+    M5Cardputer.Mic.record(filled, REC_N, REC_RATE);
+    b ^= 1;
+  }
+
+  while (M5Cardputer.Mic.isRecording() > 0) delay(1);
+  micInputReady = false;
+  forceMicRearm = true;
+  M5Cardputer.Mic.end();
+  const uint8_t ES = 0x18;
+  M5Cardputer.In_I2C.writeRegister8(ES, 0x0D, 0x01, 400000);
+  M5Cardputer.In_I2C.writeRegister8(ES, 0x00, 0x80, 400000);
+
+  ring.flush();
+  ring.close();
+
+  uint32_t dataBytes = min(capturedBytes, ROLLBACK_KEEP_BYTES);
+  dataBytes &= ~1UL;
+  if (save && dataBytes >= REC_RATE) {
+    int idx = nextRecordingIndex();
+    uploadForgetRecordMounted(idx);
+    char path[40];
+    recordingPathKind(idx, REC_NORMAL, path, sizeof(path));
+    File in = SD.open(ROLLBACK_TMP_PATH, FILE_READ);
+    File out = SD.open(path, FILE_WRITE);
+    if (in && out) {
+      writeWavHeader(out, REC_RATE, 0);
+      uint32_t start = (capturedBytes > ROLLBACK_KEEP_BYTES) ? ringWrite : 0;
+      uint32_t remaining = dataBytes;
+      static uint8_t copyBuf[512];
+      while (remaining > 0) {
+        uint32_t chunk = min((uint32_t)sizeof(copyBuf), remaining);
+        uint32_t untilWrap = ROLLBACK_KEEP_BYTES - start;
+        if (chunk > untilWrap) chunk = untilWrap;
+        in.seek(start);
+        int got = in.read(copyBuf, chunk);
+        if (got <= 0) break;
+        out.write(copyBuf, got);
+        remaining -= got;
+        start += got;
+        if (start >= ROLLBACK_KEEP_BYTES) start = 0;
+      }
+      uint32_t written = dataBytes - remaining;
+      written &= ~1UL;
+      writeWavHeader(out, REC_RATE, written);
+      out.flush();
+      if (written >= REC_RATE) {
+        savedIdx = idx;
+        setRecDuration(idx, 44 + written);
+        appendRecordingOrderMounted(idx);
+        boxSaveRecordedAtMounted(idx);
+        insertRecListAtEnd(idx);
+        nextRecHint = (idx < 9999) ? idx + 1 : 9999;
+        writeNextIndexCache(nextRecHint);
+      }
+    }
+    if (in) in.close();
+    if (out) out.close();
+    if (savedIdx <= 0) SD.remove(path);
+  }
+
+  SD.remove(ROLLBACK_TMP_PATH);
+  SD.end();
+  g_mediaBusy = false;
+
+  if (save) {
+    if (savedIdx > 0) drawRollbackScreen("END", dataBytes / (REC_RATE * 2UL), savedIdx);
+    else drawRollbackScreen("END", 0);
+    delay(900);
+  } else {
+    delay(450);
+  }
+  return savedIdx;
+}
+
 static void runApp(uint8_t app) {
   while (true) {
     if (app == APP_SLEEP) return;
+    if (app == APP_ROLLBACK) {
+      int n = rollbackRecordScreen();
+      if (n > 0) listFlow(n);
+      return;
+    }
     if (app == APP_REC_RECORD) {
       int n = recordingScreen();
       afterRecordingFlow(n);
@@ -7544,9 +8149,9 @@ static void runApp(uint8_t app) {
   }
 }
 
-// ---------- 麦克风预热(开机 / 唤醒后调用): 空跑消耗冷启动不稳定, 之后保持常开 ----------
+// ---------- 楹﹀厠椋庨鐑?寮€鏈?/ 鍞ら啋鍚庤皟鐢?: 绌鸿窇娑堣€楀喎鍚姩涓嶇ǔ瀹? 涔嬪悗淇濇寔甯稿紑 ----------
 static void micWarmup(bool rearmAfterWarmup = true, int warmBuffers = 24) {
-  // 开机/唤醒的第一条录音也必须走完整输入链路配置; 否则首次录音增益会偏低。
+  // 寮€鏈?鍞ら啋鐨勭涓€鏉″綍闊充篃蹇呴』璧板畬鏁磋緭鍏ラ摼璺厤缃? 鍚﹀垯棣栨褰曢煶澧炵泭浼氬亸浣庛€?
   micInputReady = false;
   if (!prepareMicInput()) return;
   forceMicRearm = rearmAfterWarmup;
@@ -7555,13 +8160,13 @@ static void micWarmup(bool rearmAfterWarmup = true, int warmBuffers = 24) {
     M5Cardputer.Mic.record(warm, REC_N, REC_RATE);
     while (M5Cardputer.Mic.isRecording() > 0) delay(1);
   }
-  // 不 Mic.end(): 保持常开
+  // 涓?Mic.end(): 淇濇寔甯稿紑
 }
 
-// ---------- 息屏(轻睡眠): 关背光; 一直睡到"键盘中断/Go键"才醒; 空格=录音, 回车=列表, C=CHAT, F=番茄钟, Go=应用列表 ----------
-// 核心思路: 不调 Mic.end() → ES8311 模拟段保持通电, 没有掉电瞬态, 没有爆音.
-// CONFIG_PM_ENABLE 未启用: I2S 不持有阻止轻睡眠的电源锁, 可直接 esp_light_sleep_start().
-// I2S 任务在睡眠期间被 RTOS 暂停, APB 时钟门控; 唤醒后自动续跑.
+// ---------- 鎭睆(杞荤潯鐪?: 鍏宠儗鍏? 涓€鐩寸潯鍒?閿洏涓柇/Go閿?鎵嶉啋; 绌烘牸=褰曢煶, 鍥炶溅=鍒楄〃, C=CHAT, F=鐣寗閽? Go=搴旂敤鍒楄〃 ----------
+// 鏍稿績鎬濊矾: 涓嶈皟 Mic.end() 鈫?ES8311 妯℃嫙娈典繚鎸侀€氱數, 娌℃湁鎺夌數鐬€? 娌℃湁鐖嗛煶.
+// CONFIG_PM_ENABLE 鏈惎鐢? I2S 涓嶆寔鏈夐樆姝㈣交鐫＄湢鐨勭數婧愰攣, 鍙洿鎺?esp_light_sleep_start().
+// I2S 浠诲姟鍦ㄧ潯鐪犳湡闂磋 RTOS 鏆傚仠, APB 鏃堕挓闂ㄦ帶; 鍞ら啋鍚庤嚜鍔ㄧ画璺?
 static void goSleep() {
   auto &d = M5Cardputer.Display;
 
@@ -7576,12 +8181,12 @@ static void goSleep() {
     delay(8);
   }
 
-  // 静音 ES8311 输出路径(不掉电 0x0D/0x12): 防止睡眠瞬态被无 mute 脚功放放大
+  // 闈欓煶 ES8311 杈撳嚭璺緞(涓嶆帀鐢?0x0D/0x12): 闃叉鐫＄湢鐬€佽鏃?mute 鑴氬姛鏀炬斁澶?
   const uint8_t ES = 0x18;
   if (speakerOutputReady) M5Cardputer.Speaker.setVolume(0);
-  M5Cardputer.In_I2C.writeRegister8(ES, 0x32, 0x00, 400000);  // 先断开 DAC->HP mixer
+  M5Cardputer.In_I2C.writeRegister8(ES, 0x32, 0x00, 400000);  // 鍏堟柇寮€ DAC->HP mixer
   delay(2);
-  M5Cardputer.In_I2C.writeRegister8(ES, 0x13, 0x00, 400000);  // 关 HP drive
+  M5Cardputer.In_I2C.writeRegister8(ES, 0x13, 0x00, 400000);  // 鍏?HP drive
   delay(5);
   M5Cardputer.Speaker.end();
   speakerOutputReady = false;
@@ -7596,7 +8201,7 @@ static void goSleep() {
 #endif
   d.fillScreen(COL_BG);
   if (uploadBeforeSleep) applyMinBrightness();
-  else d.setBrightness(0);          // 关背光 = 最大省电点
+  else d.setBrightness(0);          // 鍏宠儗鍏?= 鏈€澶х渷鐢电偣
   delay(10);
   bool cleanAborted = false;
   processPendingFrictionQueue(cleanAborted);
@@ -7633,16 +8238,16 @@ static void goSleep() {
   }
 #endif
 
-  // 打开键盘芯片(TCA8418 @0x34)的按键中断 -> 按键时拉低 GPIO11; Go/BtnA 是 GPIO0 低有效
+  // 鎵撳紑閿洏鑺墖(TCA8418 @0x34)鐨勬寜閿腑鏂?-> 鎸夐敭鏃舵媺浣?GPIO11; Go/BtnA 鏄?GPIO0 浣庢湁鏁?
   M5Cardputer.In_I2C.writeRegister8(0x34, 0x01, 0x01, 400000);   // CFG: KE_IEN=1
   gpio_wakeup_enable(GPIO_NUM_11, GPIO_INTR_LOW_LEVEL);
   gpio_wakeup_enable(GPIO_NUM_0, GPIO_INTR_LOW_LEVEL);
   esp_sleep_enable_gpio_wakeup();
 
   while (true) {
-    M5Cardputer.update();                                          // 排空键盘事件
-    M5Cardputer.In_I2C.writeRegister8(0x34, 0x02, 0x03, 400000);  // 清中断标志 -> INT 线复位为高
-    esp_light_sleep_start();                                       // 一直睡到 GPIO11 或 GPIO0 变低
+    M5Cardputer.update();                                          // 鎺掔┖閿洏浜嬩欢
+    M5Cardputer.In_I2C.writeRegister8(0x34, 0x02, 0x03, 400000);  // 娓呬腑鏂爣蹇?-> INT 绾垮浣嶄负楂?
+    esp_light_sleep_start();                                       // 涓€鐩寸潯鍒?GPIO11 鎴?GPIO0 鍙樹綆
     bool recognized = false;
     for (int i = 0; i < 10; i++) {
       delay(8);
@@ -7657,30 +8262,30 @@ static void goSleep() {
     if (recognized) break;
   }
 
-  // 唤醒: 关掉唤醒源 + 键盘中断
+  // 鍞ら啋: 鍏虫帀鍞ら啋婧?+ 閿洏涓柇
   gpio_wakeup_disable(GPIO_NUM_11);
   gpio_wakeup_disable(GPIO_NUM_0);
   M5Cardputer.In_I2C.writeRegister8(0x34, 0x01, 0x00, 400000);
   applyBrightness();
   applyBrightness();
-  if (wakeApp == APP_REC_RECORD) micWarmup(false, 16);  // 息屏唤醒复用预热链路, 减少开始爆音和等待
+  if (wakeApp == APP_REC_RECORD) micWarmup(false, 16);  // 鎭睆鍞ら啋澶嶇敤棰勭儹閾捐矾, 鍑忓皯寮€濮嬬垎闊冲拰绛夊緟
   autoRecordPending = true;
   waitRelease();
 }
 
 void setup() {
   auto cfg = M5.config();
-  cfg.internal_spk = false;  // 开机不自动开扬声器(消除开机功放上电"爆音"), 播放时再手动开
+  cfg.internal_spk = false;  // 寮€鏈轰笉鑷姩寮€鎵０鍣?娑堥櫎寮€鏈哄姛鏀句笂鐢?鐖嗛煶"), 鎾斁鏃跺啀鎵嬪姩寮€
   M5Cardputer.begin(cfg, true);
   M5Cardputer.Display.setRotation(SCREEN_ROT);
   applyBrightness();
-  M5Cardputer.Display.setTextWrap(false);   // 关闭自动换行: 过长文字右侧截断, 不会换行掉出屏幕
+  M5Cardputer.Display.setTextWrap(false);   // 鍏抽棴鑷姩鎹㈣: 杩囬暱鏂囧瓧鍙充晶鎴柇, 涓嶄細鎹㈣鎺夊嚭灞忓箷
 #if UPLOAD_WIFI_ENABLED
   WiFi.persistent(false);
   WiFi.setAutoReconnect(false);
   WiFi.mode(WIFI_OFF);
 #endif
-  {                          // internal_spk=false 跳过扬声器配置, 手动补上 Adv 扬声器引脚
+  {                          // internal_spk=false 璺宠繃鎵０鍣ㄩ厤缃? 鎵嬪姩琛ヤ笂 Adv 鎵０鍣ㄥ紩鑴?
     auto sc = M5Cardputer.Speaker.config();
     sc.pin_bck = 41; sc.pin_ws = 43; sc.pin_data_out = 42;
     sc.i2s_port = I2S_NUM_1; sc.magnification = 16;
