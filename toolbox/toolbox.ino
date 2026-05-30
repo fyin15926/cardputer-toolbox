@@ -94,6 +94,7 @@ static const uint8_t  REC_REARM_SETTLE_BUFFERS = 6;
 static const uint32_t UPLOAD_IDLE_DELAY_MS = 3000;
 static const uint32_t SPEAKER_IDLE_OFF_MS = 3000;
 static const uint32_t PLAYBACK_EDGE_FADE_BYTES = REC_RATE * 2 * 80 / 1000;
+static const uint32_t HOTKEY_END_HOLD_MS = 650;
 static int16_t recBuf[2][REC_N];
 static int16_t pbBuf[2][PB_N];           // 播放双缓冲(放一块/读另一块, 避免覆盖破音)
 static int16_t recWriteBuf[REC_WRITE_BATCH * REC_N];
@@ -354,6 +355,28 @@ static char pressedBindKey() {
   return 0;
 }
 static char dispKey(char k) { return (k >= 'a' && k <= 'z') ? (k - 32) : k; }  // 显示用(字母转大写)
+static char pressedBindKeyExcept(char ignored) {
+  ignored = normalizeBindKey(ignored);
+  for (char c = '0'; c <= '9'; c++) {
+    if (c != ignored && M5Cardputer.Keyboard.isKeyPressed(c)) return c;
+  }
+  const char shiftedDigits[] = ")!@#$%^&*(";
+  for (int i = 0; i < 10; i++) {
+    char normalized = (char)('0' + i);
+    if (normalized != ignored && M5Cardputer.Keyboard.isKeyPressed(shiftedDigits[i])) return normalized;
+  }
+  for (char c = 'a'; c <= 'z'; c++) {
+    if (c == ignored) continue;
+    if (M5Cardputer.Keyboard.isKeyPressed(c)) return c;
+    if (M5Cardputer.Keyboard.isKeyPressed((char)(c - 32))) return c;
+  }
+  for (char c : M5Cardputer.Keyboard.keysState().word) {
+    char normalized = normalizeBindKey(c);
+    if (normalized && normalized != ignored) return normalized;
+  }
+  return 0;
+}
+
 static bool keyCtrl()  { return M5Cardputer.Keyboard.keysState().ctrl; }
 static bool keyAlt()   { return M5Cardputer.Keyboard.keysState().alt; }
 static bool keyGo()    { return M5Cardputer.BtnA.isPressed(); }
@@ -481,6 +504,33 @@ static bool scaleNoteSemis(int8_t &semis) {
     }
   }
   return false;
+}
+
+static bool scaleNoteSemisForKey(char k, int8_t &semis) {
+  k = normalizeBindKey(k);
+  switch (k) {
+    case 'q': semis = -12; return true;
+    case 'w': semis = -10; return true;
+    case 'e': semis = -8; return true;
+    case 'r': semis = -7; return true;
+    case 't': semis = -5; return true;
+    case 'y': semis = -3; return true;
+    case 'u': semis = -1; return true;
+    case '1': semis = 0; return true;
+    case '2': semis = 2; return true;
+    case '3': semis = 4; return true;
+    case '4': semis = 5; return true;
+    case '5': semis = 7; return true;
+    case '6': semis = 9; return true;
+    case '7': semis = 11; return true;
+    case '8': semis = 12; return true;
+    case '9': semis = 14; return true;
+    case '0': semis = 16; return true;
+    case 'i': semis = 17; return true;
+    case 'o': semis = 19; return true;
+    case 'p': semis = 21; return true;
+    default: return false;
+  }
 }
 
 static bool isScaleSampleKey(char k) {
@@ -2607,26 +2657,28 @@ int playbackScreen(const char *path, int recNum, int prevRec, int nextRec) {
   uint32_t playbackRate = shortcutPlaybackRate(sourceRate, isHotkeyPlayback);
   bool hotkeyShortBoost = isHotkeyPlayback && dataSize < (REC_RATE * 2);
   bool pitchBendEnabled = beginShortcutPitchBend(isHotkeyPlayback);
+  bool hotkeyPerfMode = isHotkeyPlayback;
   f.seek(44);
   memset(waveBars, 0, sizeof(waveBars));
   memset(waveBarCounts, 0, sizeof(waveBarCounts));
   memset(playbackLiveWave, 0, sizeof(playbackLiveWave));
 
-  d.fillScreen(COL_BG);
+  if (!hotkeyPerfMode) d.fillScreen(COL_BG);
   M5Canvas waveCv(&d);
   waveCv.setColorDepth(8);
-  bool useWaveSprite = waveCv.createSprite(CONTENT_W, WAVE_H) != nullptr;
+  bool useWaveSprite = !hotkeyPerfMode && waveCv.createSprite(CONTENT_W, WAVE_H) != nullptr;
   M5Canvas bottomCv(&d);
   bottomCv.setColorDepth(8);
-  bool useBottomSprite = useWaveSprite && bottomCv.createSprite(CONTENT_W, CHROME_H) != nullptr;
+  bool useBottomSprite = !hotkeyPerfMode && useWaveSprite && bottomCv.createSprite(CONTENT_W, CHROME_H) != nullptr;
   M5Canvas cv(&d);
   cv.setColorDepth(8);
-  bool useSprite = !useWaveSprite && cv.createSprite(CONTENT_W, d.height()) != nullptr;
+  bool useSprite = !hotkeyPerfMode && !useWaveSprite && cv.createSprite(CONTENT_W, d.height()) != nullptr;
   const uint32_t pbFrameMs = (useWaveSprite || useSprite) ? PB_UI_FRAME_MS : DIRECT_UI_FRAME_MS;
   g_mediaBusy = true;
 
   // 静态部分(画一次): 顶栏
   auto drawStatic = [&]() {
+    if (hotkeyPerfMode) return;
     // 文件编号 (左上小字)
     char title[16];
     snprintf(title, sizeof(title), "REC_%04d", recNum);
@@ -2675,6 +2727,12 @@ int playbackScreen(const char *path, int recNum, int prevRec, int nextRec) {
     return held > DELETE_HOLD_MS ? DELETE_HOLD_MS : held;
   };
   auto drawProgress = [&](uint32_t played, int16_t *liveWave = nullptr, size_t liveN = 0) {
+    if (hotkeyPerfMode) {
+      (void)played;
+      (void)liveWave;
+      (void)liveN;
+      return;
+    }
     if (useWaveSprite) {
       if (liveWave && liveN > 0) {
         if (liveN > PB_N) liveN = PB_N;
@@ -2749,11 +2807,12 @@ int playbackScreen(const char *path, int recNum, int prevRec, int nextRec) {
   bool ignoreKeysUntilRelease = M5Cardputer.Keyboard.isPressed();
   char ignoreStartBindKey = pressedBindKey();
   auto handleFastPlaybackKey = [&]() -> bool {
-    char currentBind = pressedBindKey();
-    if (!currentBind || currentBind == ignoreStartBindKey) return false;
+    if (keyCtrl() || keyTab() || keyAlt() || keyEnter() || keyDel() || keySpace() || keyUpload()) return false;
+    char currentBind = ignoreKeysUntilRelease ? pressedBindKeyExcept(ignoreStartBindKey) : pressedBindKey();
+    if (!currentBind) return false;
     if (scaleModeCanHandleKey()) {
       int8_t noteSemis = 0;
-      if (scaleNoteSemis(noteSemis)) {
+      if (scaleNoteSemisForKey(currentBind, noteSemis)) {
         g_scaleCurrentRec = recNum;
         if (prepareScaleNoteForRec(recNum, noteSemis)) {
           g_seamlessHotkeySwitch = true;
@@ -2776,7 +2835,7 @@ int playbackScreen(const char *path, int recNum, int prevRec, int nextRec) {
         }
       }
     }
-    int hk = pressedHotkeyRec();
+    int hk = findHotkey(currentBind);
     if (hk > 0) {
       g_seamlessHotkeySwitch = true;
       g_listMode = REC_SHORTCUT;
@@ -2798,6 +2857,7 @@ int playbackScreen(const char *path, int recNum, int prevRec, int nextRec) {
         if (currentBind && currentBind != ignoreStartBindKey) ignoreKeysUntilRelease = false;
       }
     } else {
+      if (handleFastPlaybackKey()) break;
       if (keyDel()) {
         if (isHotkeyPlayback) {
           drawPlaybackAction(cv, "STOP", COL_DIM);
@@ -2984,7 +3044,18 @@ int playbackScreen(const char *path, int recNum, int prevRec, int nextRec) {
           playDone = true;
           drawProgress(dataSize);   // 显示 100% 最终状态
         }
-        delay(80);
+        if (isHotkeyPlayback) {
+          uint32_t waitStart = millis();
+          while (millis() - waitStart < HOTKEY_END_HOLD_MS) {
+            M5Cardputer.update();
+            if (handleFastPlaybackKey()) break;
+            if (!M5Cardputer.Keyboard.isPressed()) ignoreKeysUntilRelease = false;
+            delay(1);
+          }
+          if (stop) break;
+        } else {
+          delay(80);
+        }
         if (delHoldStart != 0 && keyDel()) {
           g_carryDeleteRec = recNum;
           g_carryDeleteStart = delHoldStart;
