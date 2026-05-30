@@ -105,6 +105,11 @@ int recGain = 36;                        // 录音软件增益默认值(W/S 现�
 int playVol = 200;                       // 回放音量(+/- 可调, 0..255)
 static char g_shortcutKeyRoot = 'C';
 static int8_t g_shortcutTransposeSemis = 0;
+static bool g_scaleMode = false;
+static int g_scaleCurrentRec = 0;
+static float g_shortcutSemisOverride = 127.0f;
+static int g_scalePitchCacheRec = 0;
+static float g_scalePitchCacheHz = 0.0f;
 static float g_shortcutBendNeutralX = 0.0f;
 static float g_shortcutVibNeutralY = 0.0f;
 static float g_shortcutBendSemis = 0.0f;
@@ -398,6 +403,16 @@ static uint32_t shortcutRateForSemis(uint32_t baseRate, float semis) {
   return max((uint32_t)8000, min((uint32_t)48000, rate));
 }
 
+static float activeShortcutSemis() {
+  return (g_shortcutSemisOverride < 126.5f) ? g_shortcutSemisOverride : (float)g_shortcutTransposeSemis;
+}
+
+static void clearShortcutSemisOverride() {
+  g_shortcutSemisOverride = 127.0f;
+}
+
+static bool prepareScaleNoteForRec(int recNum, int8_t targetSemis);
+
 static bool handleShortcutKeyRootChord() {
   if (!keyCtrl()) return false;
   const char roots[] = {'A', 'B', 'C', 'D', 'E', 'F', 'G'};
@@ -427,15 +442,63 @@ static bool setShortcutGroup(uint8_t group) {
 
 static bool handleShortcutGroupChord() {
   if (!keyCtrl()) return false;
-  if (M5Cardputer.Keyboard.isKeyPressed('1') || M5Cardputer.Keyboard.isKeyPressed('!')) return setShortcutGroup(0);
-  if (M5Cardputer.Keyboard.isKeyPressed('2') || M5Cardputer.Keyboard.isKeyPressed('@')) return setShortcutGroup(1);
-  if (M5Cardputer.Keyboard.isKeyPressed('3') || M5Cardputer.Keyboard.isKeyPressed('#')) return setShortcutGroup(2);
+  if (M5Cardputer.Keyboard.isKeyPressed('1') || M5Cardputer.Keyboard.isKeyPressed('!')) { g_scaleMode = false; clearShortcutSemisOverride(); return setShortcutGroup(0); }
+  if (M5Cardputer.Keyboard.isKeyPressed('2') || M5Cardputer.Keyboard.isKeyPressed('@')) { g_scaleMode = false; clearShortcutSemisOverride(); return setShortcutGroup(1); }
+  if (M5Cardputer.Keyboard.isKeyPressed('3') || M5Cardputer.Keyboard.isKeyPressed('#')) { g_scaleMode = false; clearShortcutSemisOverride(); return setShortcutGroup(2); }
   return false;
 }
 
+static bool handleScaleModeChord() {
+  if (!keyCtrl()) return false;
+  if (!M5Cardputer.Keyboard.isKeyPressed('0') && !M5Cardputer.Keyboard.isKeyPressed(')')) return false;
+  g_scaleMode = true;
+  clearShortcutSemisOverride();
+  return true;
+}
+
+static bool scaleNoteSemis(int8_t &semis) {
+  const char *midKeys = "1234567";
+  const int8_t midSemis[] = {0, 2, 4, 5, 7, 9, 11};
+  for (uint8_t i = 0; i < 7; i++) {
+    if (M5Cardputer.Keyboard.isKeyPressed(midKeys[i])) { semis = midSemis[i]; return true; }
+  }
+  const char *hiKeys = "890iop";
+  const int8_t hiSemis[] = {12, 14, 16, 17, 19, 21};
+  for (uint8_t i = 0; i < 6; i++) {
+    char k = hiKeys[i];
+    if (M5Cardputer.Keyboard.isKeyPressed(k) || (k >= 'a' && k <= 'z' && M5Cardputer.Keyboard.isKeyPressed((char)(k - 32)))) {
+      semis = hiSemis[i];
+      return true;
+    }
+  }
+  const char *lowKeys = "qwertyu";
+  const int8_t lowSemis[] = {-12, -10, -8, -7, -5, -3, -1};
+  for (uint8_t i = 0; i < 7; i++) {
+    char k = lowKeys[i];
+    if (M5Cardputer.Keyboard.isKeyPressed(k) || M5Cardputer.Keyboard.isKeyPressed((char)(k - 32))) {
+      semis = lowSemis[i];
+      return true;
+    }
+  }
+  return false;
+}
+
+static bool isScaleSampleKey(char k) {
+  return strchr("asdfghjklzxcvbnm", k) != nullptr;
+}
+
+static bool scaleModeCanHandleKey() {
+  if (!g_scaleMode || keyCtrl() || keyTab() || keyAlt()) return false;
+  if (keyEnter() || keyDel() || keySpace() || keyEsc() || keyUpload()) return false;
+  if (keyVolUp() || keyVolDn() || keyBrightUp() || keyBrightDn()) return false;
+  if (keyUp() || keyDown() || keyLeft() || keyRight()) return false;
+  return true;
+}
+
 static uint32_t shortcutPlaybackRate(uint32_t baseRate, bool isHotkeyPlayback) {
-  if (!isHotkeyPlayback || g_shortcutTransposeSemis == 0) return baseRate;
-  return shortcutRateForSemis(baseRate, (float)g_shortcutTransposeSemis);
+  float semis = activeShortcutSemis();
+  if (!isHotkeyPlayback || semis == 0.0f) return baseRate;
+  return shortcutRateForSemis(baseRate, semis);
 }
 
 static bool beginShortcutPitchBend(bool isHotkeyPlayback) {
@@ -1273,7 +1336,14 @@ static int findHotkey(char k) {
   return -1;
 }
 
-// 给某录音编号绑定一个键(同键覆盖, 同编号原有的键先清掉, 保证一键一录音)
+// Keep sample-key preview aligned with the shortcut list selection.
+static void selectHotkeyPreviewRec(int recNum) {
+  if (recNum <= 0) return;
+  g_listMode = REC_SHORTCUT;
+  g_listModeSelectedRec[REC_SHORTCUT] = recNum;
+}
+
+// Bind one recording to one shortcut key.
 static void setHotkey(char k, int idx) {
   k = normalizeBindKey(k);
   if (!k || idx <= 0) return;
@@ -1505,6 +1575,98 @@ static uint8_t recKindOf(int recNum) {
 
 static void recordingPathForRec(int recNum, char *p, size_t n) {
   recordingPathKind(recNum, recKindOf(recNum), p, n);
+}
+
+static float targetHzForC4Semis(int8_t semis) {
+  return 261.625565f * powf(2.0f, (float)semis / 12.0f);
+}
+
+static float detectPitchHzInOpenWav(File &f, uint32_t rate, uint32_t dataBytes) {
+  if (rate < 8000 || rate > 48000 || dataBytes < 512) return 0.0f;
+  static int16_t pitchBuf[1024];
+  const uint16_t frameN = 1024;
+  const uint32_t maxBytes = min(dataBytes, rate * 2UL * 2UL);
+  const int minLag = max(8, (int)(rate / 1200));
+  const int maxLag = min((int)frameN - 4, (int)(rate / 75));
+  float bestHz = 0.0f;
+  float bestScore = 0.0f;
+  uint32_t offset = 0;
+
+  while (offset + frameN * 2 <= maxBytes) {
+    if (!f.seek(44 + offset)) break;
+    int rd = f.read((uint8_t *)pitchBuf, frameN * 2);
+    if (rd != (int)(frameN * 2)) break;
+
+    int64_t sum = 0;
+    for (uint16_t i = 0; i < frameN; i++) sum += pitchBuf[i];
+    int32_t mean = (int32_t)(sum / frameN);
+    int64_t energy = 0;
+    for (uint16_t i = 0; i < frameN; i++) {
+      int32_t s = (int32_t)pitchBuf[i] - mean;
+      energy += (int64_t)s * s;
+    }
+    float rms = sqrtf((float)((double)energy / frameN));
+    if (rms > 450.0f && energy > 0) {
+      int bestLag = 0;
+      int64_t bestCorr = 0;
+      for (int lag = minLag; lag <= maxLag; lag++) {
+        int64_t corr = 0;
+        int64_t lagEnergy = 0;
+        for (uint16_t i = 0; i + lag < frameN; i++) {
+          int32_t a = (int32_t)pitchBuf[i] - mean;
+          int32_t b = (int32_t)pitchBuf[i + lag] - mean;
+          corr += (int64_t)a * b;
+          lagEnergy += (int64_t)a * a;
+        }
+        if (corr > bestCorr && lagEnergy > 0) {
+          bestCorr = corr;
+          bestLag = lag;
+        }
+      }
+      if (bestLag > 0) {
+        float score = (float)((double)bestCorr / (double)energy);
+        if (score > bestScore) {
+          bestScore = score;
+          bestHz = (float)rate / (float)bestLag;
+        }
+      }
+    }
+    offset += frameN;
+  }
+
+  return bestScore >= 0.30f ? bestHz : 0.0f;
+}
+
+static float scalePitchHzForRec(int recNum) {
+  if (recNum <= 0) return 0.0f;
+  if (g_scalePitchCacheRec == recNum && g_scalePitchCacheHz > 0.0f) return g_scalePitchCacheHz;
+  if (!sdMount()) return 0.0f;
+  char p[40];
+  recordingPathForRec(recNum, p, sizeof(p));
+  File f = SD.open(p, FILE_READ);
+  float hz = 0.0f;
+  if (f) {
+    uint32_t dataBytes = playableWavDataBytes(f);
+    uint32_t rate = wavSampleRate(f);
+    hz = detectPitchHzInOpenWav(f, rate, dataBytes);
+    f.close();
+  }
+  SD.end();
+  if (hz > 0.0f) {
+    g_scalePitchCacheRec = recNum;
+    g_scalePitchCacheHz = hz;
+  }
+  return hz;
+}
+
+static bool prepareScaleNoteForRec(int recNum, int8_t targetSemis) {
+  if (recNum <= 0) return false;
+  float sourceHz = scalePitchHzForRec(recNum);
+  if (sourceHz <= 0.0f) sourceHz = 261.625565f;
+  float targetHz = targetHzForC4Semis(targetSemis);
+  float semis = 12.0f * (logf(targetHz / sourceHz) / logf(2.0f));
+  g_shortcutSemisOverride = semis + (float)g_shortcutTransposeSemis;
+  return true;
 }
 
 static int recListIndexOf(int recNum) {
@@ -2433,7 +2595,7 @@ int playbackScreen(const char *path, int recNum, int prevRec, int nextRec) {
   pauseUploadForMedia();
   auto &d = M5Cardputer.Display;
   if (!sdMount()) { showMsg("播放", "SD 读取失败", COL_RED); return R_LIST; }
-  bool isHotkeyPlayback = hotkeyOf(recNum) != 0;
+  bool isHotkeyPlayback = hotkeyOf(recNum) != 0 || (g_scaleMode && recNum == g_scaleCurrentRec);
   File f = SD.open(path, FILE_READ);
   if (!f) { SD.end(); showMsg("播放", "打不开文件", COL_RED); return R_LIST; }
   uint32_t total = f.size();
@@ -2441,7 +2603,7 @@ int playbackScreen(const char *path, int recNum, int prevRec, int nextRec) {
   uint32_t dataSize = playableWavDataBytes(f);
   if (dataSize == 0) { f.close(); SD.end(); showMsg("播放", "文件无效", COL_RED); return R_LIST; }
   uint32_t sourceRate = wavSampleRate(f);
-  float shortcutRootSemis = (float)g_shortcutTransposeSemis;
+  float shortcutRootSemis = activeShortcutSemis();
   uint32_t playbackRate = shortcutPlaybackRate(sourceRate, isHotkeyPlayback);
   bool hotkeyShortBoost = isHotkeyPlayback && dataSize < (REC_RATE * 2);
   bool pitchBendEnabled = beginShortcutPitchBend(isHotkeyPlayback);
@@ -2561,6 +2723,9 @@ int playbackScreen(const char *path, int recNum, int prevRec, int nextRec) {
   uint32_t fadeBytesLeft = playbackEdgeFadeBytes;
   int32_t pbDc = 0;
   int32_t cassetteLp = 0;
+  bool shiftedShortcutKey = isHotkeyPlayback && activeShortcutSemis() != 0.0f;
+  int32_t keySizzleLp = 0;
+  int32_t keySizzlePrev = 0;
   uint8_t previewBar = 0;
   int pi = 0;
 
@@ -2582,11 +2747,56 @@ int playbackScreen(const char *path, int recNum, int prevRec, int nextRec) {
     speakerSetVolume(playbackVolumeForRecMode(recNum, isHotkeyPlayback));
   }
   bool ignoreKeysUntilRelease = M5Cardputer.Keyboard.isPressed();
+  char ignoreStartBindKey = pressedBindKey();
+  auto handleFastPlaybackKey = [&]() -> bool {
+    char currentBind = pressedBindKey();
+    if (!currentBind || currentBind == ignoreStartBindKey) return false;
+    if (scaleModeCanHandleKey()) {
+      int8_t noteSemis = 0;
+      if (scaleNoteSemis(noteSemis)) {
+        g_scaleCurrentRec = recNum;
+        if (prepareScaleNoteForRec(recNum, noteSemis)) {
+          g_seamlessHotkeySwitch = true;
+          g_nextPlay = recNum;
+          ret = R_PLAY;
+          stop = true;
+          return true;
+        }
+      } else if (isScaleSampleKey(currentBind)) {
+        int sampleRec = findHotkey(currentBind);
+        if (sampleRec > 0) {
+          g_scaleCurrentRec = sampleRec;
+          clearShortcutSemisOverride();
+          selectHotkeyPreviewRec(sampleRec);
+          g_seamlessHotkeySwitch = true;
+          g_nextPlay = sampleRec;
+          ret = R_PLAY;
+          stop = true;
+          return true;
+        }
+      }
+    }
+    int hk = pressedHotkeyRec();
+    if (hk > 0) {
+      g_seamlessHotkeySwitch = true;
+      g_listMode = REC_SHORTCUT;
+      g_nextPlay = hk;
+      ret = R_PLAY;
+      stop = true;
+      return true;
+    }
+    return false;
+  };
 
   while (!stop) {
     M5Cardputer.update();
     if (ignoreKeysUntilRelease) {
       if (!M5Cardputer.Keyboard.isPressed()) ignoreKeysUntilRelease = false;
+      else if (handleFastPlaybackKey()) break;
+      else {
+        char currentBind = pressedBindKey();
+        if (currentBind && currentBind != ignoreStartBindKey) ignoreKeysUntilRelease = false;
+      }
     } else {
       if (keyDel()) {
         if (isHotkeyPlayback) {
@@ -2612,7 +2822,11 @@ int playbackScreen(const char *path, int recNum, int prevRec, int nextRec) {
       if (stop) break;
 
       if (M5Cardputer.Keyboard.isChange() && M5Cardputer.Keyboard.isPressed()) {
-        if (handleShortcutGroupChord()) {
+        if (handleScaleModeChord()) {
+          drawPlaybackAction(cv, g_scaleMode ? "SCALE" : "NORM", g_scaleMode ? COL_GREEN : COL_DIM);
+          waitRelease();
+        }
+        else if (handleShortcutGroupChord()) {
           drawPlaybackAction(cv, shortcutGroupLabel(), COL_GREEN);
           waitRelease();
         }
@@ -2621,6 +2835,36 @@ int playbackScreen(const char *path, int recNum, int prevRec, int nextRec) {
           waitRelease();
         }
         else {
+        if (scaleModeCanHandleKey()) {
+          int8_t noteSemis = 0;
+          if (scaleNoteSemis(noteSemis)) {
+            g_scaleCurrentRec = recNum;
+            if (prepareScaleNoteForRec(recNum, noteSemis)) {
+              g_seamlessHotkeySwitch = true;
+              g_nextPlay = recNum;
+              ret = R_PLAY;
+              stop = true;
+            }
+          } else {
+            char scaleKey = pressedBindKey();
+            if (isScaleSampleKey(scaleKey)) {
+              int sampleRec = findHotkey(scaleKey);
+              if (sampleRec > 0) {
+                g_scaleCurrentRec = sampleRec;
+                clearShortcutSemisOverride();
+                selectHotkeyPreviewRec(sampleRec);
+                g_seamlessHotkeySwitch = true;
+                g_nextPlay = sampleRec;
+                ret = R_PLAY;
+                stop = true;
+              } else {
+                drawPlaybackAction(cv, "NO SMP", COL_DIM);
+                waitRelease();
+              }
+            }
+          }
+          if (stop) break;
+        }
         int hk = pressedHotkeyRec();
         if (hk > 0) {
           drawPlaybackAction(cv, "PLAY", COL_GREEN);
@@ -2724,7 +2968,9 @@ int playbackScreen(const char *path, int recNum, int prevRec, int nextRec) {
       fadeBytesLeft = playbackEdgeFadeBytes;
       pbDc = 0;
       cassetteLp = 0;
-      shortcutRootSemis = (float)g_shortcutTransposeSemis;
+      shortcutRootSemis = activeShortcutSemis();
+      keySizzleLp = 0;
+      keySizzlePrev = 0;
       drawProgress(played);
       lastProgressDraw = millis();
       playSeekFeedback(seekRight && !seekLeft);
@@ -2768,7 +3014,7 @@ int playbackScreen(const char *path, int recNum, int prevRec, int nextRec) {
     size_t liveN = got / 2;
     uint32_t chunkStart = played;
     if (isHotkeyPlayback) {
-      float targetRootSemis = (float)g_shortcutTransposeSemis;
+      float targetRootSemis = activeShortcutSemis();
       shortcutRootSemis += (targetRootSemis - shortcutRootSemis) * 0.18f;
       if (fabsf(targetRootSemis - shortcutRootSemis) < 0.015f) shortcutRootSemis = targetRootSemis;
       playbackRate = shortcutRateForSemis(sourceRate, shortcutRootSemis);
@@ -2803,6 +3049,14 @@ int playbackScreen(const char *path, int recNum, int prevRec, int nextRec) {
         if (drive > 30000) drive = 30000 + ((drive - 30000) >> 3);
         if (drive < -30000) drive = -30000 + ((drive + 30000) >> 3);
         sample = drive;
+      }
+      if (shiftedShortcutKey) {
+        keySizzleLp += (sample - keySizzleLp) >> 2;
+        int32_t hi = sample - keySizzleLp;
+        int32_t diff = abs((int)(sample - keySizzlePrev));
+        int32_t hiMixQ8 = diff > 4200 ? 150 : (diff > 2600 ? 184 : 218);
+        sample = keySizzleLp + ((hi * hiMixQ8) >> 8);
+        keySizzlePrev = sample;
       }
       if (sample > 32767) sample = 32767;
       if (sample < -32768) sample = -32768;
@@ -5039,6 +5293,12 @@ int listScreen(int selectIdx) {
     }
     if (M5Cardputer.Keyboard.isChange() && M5Cardputer.Keyboard.isPressed()) {
       lastInputMs = millis();
+      if (handleScaleModeChord()) {
+        drawActionToast(g_scaleMode ? "SCALE" : "NORM", g_scaleMode ? COL_GREEN : COL_DIM);
+        redraw = true;
+        waitRelease();
+        continue;
+      }
       if (handleShortcutGroupChord()) {
         drawActionToast(shortcutGroupLabel(), COL_GREEN);
         redraw = true;
@@ -5050,6 +5310,37 @@ int listScreen(int selectIdx) {
         redraw = true;
         waitRelease();
         continue;
+      }
+      if (scaleModeCanHandleKey()) {
+        int8_t noteSemis = 0;
+        if (scaleNoteSemis(noteSemis)) {
+          int recNum = g_scaleCurrentRec;
+          if (recNum <= 0 && sel >= 0) recNum = recList[sel];
+          if (recNum > 0) {
+            g_scaleCurrentRec = recNum;
+            if (prepareScaleNoteForRec(recNum, noteSemis)) {
+              rememberListSelection(g_listMode, sel);
+              g_nextPlay = recNum;
+              return R_PLAY;
+            }
+          }
+        }
+        char scaleKey = pressedBindKey();
+        if (isScaleSampleKey(scaleKey)) {
+          int recNum = findHotkey(scaleKey);
+          if (recNum > 0) {
+            g_scaleCurrentRec = recNum;
+            clearShortcutSemisOverride();
+            selectHotkeyPreviewRec(recNum);
+            g_nextPlay = recNum;
+            return R_PLAY;
+          } else {
+            drawActionToast("NO SMP", COL_DIM);
+          }
+          redraw = true;
+          waitRelease();
+          continue;
+        }
       }
       int hk = pressedHotkeyRec();
       if (hk > 0) {                                     // 绑定键=最高优先级, 交给外层播放页
