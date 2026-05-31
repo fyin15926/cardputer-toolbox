@@ -40,6 +40,72 @@
 #define COL_GRAY  0x7BEF
 #define COL_DARK_GRAY 0x2104
 
+static const uint8_t REC_BUILTIN_ACCENT_COUNT = 6;
+static const uint8_t REC_CUSTOM_ACCENT_MAX = 6;
+static const uint8_t REC_ACCENT_CAPACITY = REC_BUILTIN_ACCENT_COUNT + REC_CUSTOM_ACCENT_MAX;
+static uint16_t REC_ACCENT_COLORS[REC_ACCENT_CAPACITY] = {
+  0x07E0, // green
+  0x07FF, // cyan
+  0x04FF, // sky
+  0xF81F, // magenta
+  0xFFE0, // yellow
+  0xFD20  // amber
+};
+static uint8_t recAccentIndex = 0;
+static uint8_t recAccentCount = REC_BUILTIN_ACCENT_COUNT;
+
+struct WavInfo {
+  uint32_t sampleRate = 0;
+  uint32_t dataOffset = 0;
+  uint32_t dataBytes = 0;
+  uint16_t channels = 0;
+  uint16_t bitsPerSample = 0;
+  uint16_t blockAlign = 0;
+  const char *error = "BAD WAV";
+};
+
+static uint16_t recScaleColor(uint16_t col, uint8_t num, uint8_t den, uint16_t minR = 0, uint16_t minG = 0, uint16_t minB = 0) {
+  uint16_t r = (col >> 11) & 0x1f;
+  uint16_t g = (col >> 5) & 0x3f;
+  uint16_t b = col & 0x1f;
+  r = (uint16_t)((r * num) / den);
+  g = (uint16_t)((g * num) / den);
+  b = (uint16_t)((b * num) / den);
+  if (r < minR) r = minR;
+  if (g < minG) g = minG;
+  if (b < minB) b = minB;
+  return (r << 11) | (g << 5) | b;
+}
+
+static uint16_t recAccentColor() {
+  if (recAccentCount == 0) recAccentCount = REC_BUILTIN_ACCENT_COUNT;
+  return REC_ACCENT_COLORS[recAccentIndex % recAccentCount];
+}
+
+static uint16_t recDimColor() {
+  return recScaleColor(recAccentColor(), 2, 5, 1, 2, 1);
+}
+
+static uint16_t recAxisColor() {
+  return recScaleColor(recAccentColor(), 1, 5, 0, 1, 0);
+}
+
+static uint16_t recSelectBgColor() {
+  return recScaleColor(recAccentColor(), 1, 6);
+}
+
+static void cycleRecAccent(int delta) {
+  const uint8_t n = recAccentCount > 0 ? recAccentCount : REC_BUILTIN_ACCENT_COUNT;
+  recAccentIndex = (recAccentIndex + n + delta) % n;
+}
+
+static bool saveRecAccentStateMounted();
+static void saveRecAccentState() {
+  if (!sdMount()) return;
+  saveRecAccentStateMounted();
+  SD.end();
+}
+
 // ---------- 鍏ㄥ睆 UI 甯冨眬甯搁噺 ----------
 // 灞忓箷 240脳135; 涓嶅啀缁樺埗鍙充晶鏍囩鏍? 鎵€鏈夌晫闈娇鐢ㄥ叏瀹藉唴瀹瑰尯
 #define CONTENT_W  240     // 鍐呭鍖哄搴?(x: 0..239)
@@ -89,7 +155,7 @@ static const uint32_t SHORTCUT_SUPERTRIM_HEAD_PAD = REC_RATE / 1000; // 1ms
 static const uint32_t SHORTCUT_SUPERTRIM_TAIL_PAD = REC_RATE * 12 / 1000; // 12ms
 static const uint32_t SHORTCUT_FADE_SAMPLES = REC_RATE / 125; // 8ms 娣″叆娣″嚭
 static const size_t   REC_N    = 256;    // 姣忕紦鍐叉牱鏈暟 (~16ms, 灏?娉㈠舰鏇存祦鐣?
-static const size_t   PB_N     = 256;    // 鎾斁缂撳啿鏍锋湰鏁?(~16ms, B绾挎洿璐磋繎褰曢煶椤?
+static const size_t   PB_N     = 2048;   // Playback int16 samples; larger buffer reduces SD/UI underruns.
 static const uint32_t REC_UI_FRAME_MS = 33;  // Sprite path: about 30fps while keeping audio/SD priority.
 static const uint32_t PB_UI_FRAME_MS  = 33;  // Sprite path: smoother playback UI without pushing toward 60fps.
 static const uint32_t DIRECT_UI_FRAME_MS = 66;  // No-sprite fallback: about 15fps to avoid direct-draw flicker.
@@ -177,6 +243,7 @@ int sdSCLK = 40, sdMISO = 39, sdMOSI = 14, sdCS = 12;
 static const char *REC_DIR = "/REC";
 static const char *SHORTCUT_DIR = "/SHORTCUT";
 static const char *IMPORTANT_DIR = "/IMPORTANT";
+static const char *MUSIC_DIR = "/MUSIC";
 static const char *CHAT_DIR = "/CHAT";
 static const char *CHAT_LAST_PATH = "/CHAT/CHAT_LAST.wav";
 static const char *CHAT_REPLY_PATH = "/CHAT/CHAT_REPLY.wav";
@@ -195,6 +262,7 @@ static const char *UPLOAD_JOB_ERR_PATH = "/UPLOAD/job_err.txt";
 static const char *UPLOAD_CONFIG_PATH = "/UPLOAD/net.txt";
 static const char *UPLOAD_RECORDED_AT_PATH = "/UPLOAD/recorded_at.txt";
 static const char *REC_VOLUME_PATH = "/REC/volume.txt";
+static const char *REC_COLOR_PATH = "/REC/color.txt";
 static const char *ROLLBACK_TMP_PATH = "/REC/.rollback.pcm";
 static const size_t UPLOAD_CHUNK_BYTES = 4096;
 static const uint32_t UPLOAD_ADPCM_THRESHOLD_BYTES = 3UL * 1024UL * 1024UL;
@@ -208,7 +276,74 @@ static const uint16_t FRICTION_NOW_SEC = 60;
 static const uint16_t FRICTION_IDLE_MAX_SEC = 20 * 60;
 static const uint32_t AUTO_SLEEP_MS = 45000;
 
-enum RecKind : uint8_t { REC_NORMAL = 0, REC_SHORTCUT = 1, REC_IMPORTANT = 2 };
+enum RecKind : uint8_t { REC_NORMAL = 0, REC_SHORTCUT = 1, REC_IMPORTANT = 2, REC_MUSIC = 3 };
+static const uint8_t REC_KIND_COUNT = 4;
+static const uint16_t MAX_MUSIC_TRACKS = 160;
+static const int MUSIC_ID_BASE = MAX_REC - MAX_MUSIC_TRACKS + 1;
+static char musicPaths[MAX_MUSIC_TRACKS][128];
+static uint16_t musicTrackCount = 0;
+static const uint8_t NORMAL_INITIAL_LOAD = 5;
+static const uint8_t NORMAL_OLDER_LOAD = 20;
+static int normalOldestLoaded = 0;
+static bool normalReachedBeginning = false;
+
+static void loadRecAccentPresetMounted() {
+  File f = SD.open(REC_COLOR_PATH, FILE_READ);
+  if (!f) return;
+  char line[32];
+  bool loadedNewFormat = false;
+  uint8_t loadedIndex = recAccentIndex;
+  recAccentCount = REC_BUILTIN_ACCENT_COUNT;
+  while (f.available()) {
+    int n = f.readBytesUntil('\n', line, sizeof(line) - 1);
+    line[n] = 0;
+    char *p = line;
+    while (*p == ' ' || *p == '\t' || *p == '\r') p++;
+    char *e = p + strlen(p);
+    while (e > p && (e[-1] == ' ' || e[-1] == '\t' || e[-1] == '\r')) *--e = 0;
+    if (strncmp(p, "IDX ", 4) == 0) {
+      int idx = atoi(p + 4);
+      if (idx >= 0 && idx < (int)REC_ACCENT_CAPACITY) {
+        loadedIndex = (uint8_t)idx;
+        loadedNewFormat = true;
+      }
+    } else if (strncmp(p, "CUSTOM ", 7) == 0) {
+      uint32_t rgb = 0;
+      if (parseHexRgb(p + 7, rgb)) {
+        addRecAccentPreset(rgb888To565(rgb));
+        loadedNewFormat = true;
+      }
+    } else {
+      uint32_t rgb = 0;
+      if (parseHexRgb(p, rgb)) {
+        loadedIndex = addRecAccentPreset(rgb888To565(rgb));
+        loadedNewFormat = true;
+      }
+    }
+  }
+  f.close();
+  if (loadedNewFormat) {
+    recAccentIndex = loadedIndex < recAccentCount ? loadedIndex : (recAccentCount - 1);
+  }
+}
+
+static bool saveRecAccentStateMounted() {
+  if (!SD.exists(REC_DIR)) SD.mkdir(REC_DIR);
+  const char *tmp = "/REC/color.tmp";
+  SD.remove(tmp);
+  File f = SD.open(tmp, FILE_WRITE);
+  if (!f) return false;
+  f.printf("IDX %u\n", (unsigned)recAccentIndex);
+  for (uint8_t i = REC_BUILTIN_ACCENT_COUNT; i < recAccentCount; i++) {
+    uint32_t rgb = rgb565To888(REC_ACCENT_COLORS[i]);
+    f.printf("CUSTOM #%02X%02X%02X\n", (unsigned)((rgb >> 16) & 0xff), (unsigned)((rgb >> 8) & 0xff), (unsigned)(rgb & 0xff));
+  }
+  f.close();
+  SD.remove(REC_COLOR_PATH);
+  bool ok = SD.rename(tmp, REC_COLOR_PATH);
+  if (!ok) SD.remove(tmp);
+  return ok;
+}
 
 static const int8_t IMA_INDEX_TABLE[16] = {
   -1, -1, -1, -1, 2, 4, 6, 8,
@@ -227,7 +362,14 @@ static const int16_t IMA_STEP_TABLE[89] = {
 };
 
 static void recordingPathKind(int recNum, uint8_t kind, char *p, size_t n) {
-  const char *dir = (kind == REC_SHORTCUT) ? SHORTCUT_DIR : ((kind == REC_IMPORTANT) ? IMPORTANT_DIR : REC_DIR);
+  if (kind == REC_MUSIC && recNum >= MUSIC_ID_BASE && recNum <= MAX_REC) {
+    uint16_t slot = (uint16_t)(recNum - MUSIC_ID_BASE);
+    if (slot < musicTrackCount && musicPaths[slot][0]) {
+      snprintf(p, n, "%s", musicPaths[slot]);
+      return;
+    }
+  }
+  const char *dir = (kind == REC_SHORTCUT) ? SHORTCUT_DIR : ((kind == REC_IMPORTANT) ? IMPORTANT_DIR : ((kind == REC_MUSIC) ? MUSIC_DIR : REC_DIR));
   snprintf(p, n, "%s/REC_%04d.wav", dir, recNum);
 }
 
@@ -270,6 +412,61 @@ static bool sdMount() {
   return SD.begin(sdCS, SPI, 25000000);
 }
 
+static int hexValue(char c) {
+  if (c >= '0' && c <= '9') return c - '0';
+  if (c >= 'a' && c <= 'f') return c - 'a' + 10;
+  if (c >= 'A' && c <= 'F') return c - 'A' + 10;
+  return -1;
+}
+
+static bool parseHexRgb(const char *text, uint32_t &rgb) {
+  if (!text) return false;
+  if (*text == '#') text++;
+  if (strlen(text) != 6) return false;
+  uint32_t v = 0;
+  for (int i = 0; i < 6; i++) {
+    int h = hexValue(text[i]);
+    if (h < 0) return false;
+    v = (v << 4) | (uint32_t)h;
+  }
+  rgb = v;
+  return true;
+}
+
+static uint16_t rgb888To565(uint32_t rgb) {
+  uint16_t r = (uint16_t)((rgb >> 19) & 0x1f);
+  uint16_t g = (uint16_t)((rgb >> 10) & 0x3f);
+  uint16_t b = (uint16_t)((rgb >> 3) & 0x1f);
+  return (r << 11) | (g << 5) | b;
+}
+
+static uint32_t rgb565To888(uint16_t col) {
+  uint32_t r = (col >> 11) & 0x1f;
+  uint32_t g = (col >> 5) & 0x3f;
+  uint32_t b = col & 0x1f;
+  r = (r * 255 + 15) / 31;
+  g = (g * 255 + 31) / 63;
+  b = (b * 255 + 15) / 31;
+  return (r << 16) | (g << 8) | b;
+}
+
+static uint8_t addRecAccentPreset(uint16_t col) {
+  for (uint8_t i = 0; i < recAccentCount; i++) {
+    if (REC_ACCENT_COLORS[i] == col) return i;
+  }
+  if (recAccentCount < REC_ACCENT_CAPACITY) {
+    REC_ACCENT_COLORS[recAccentCount] = col;
+    return recAccentCount++;
+  }
+  REC_ACCENT_COLORS[REC_ACCENT_CAPACITY - 1] = col;
+  return REC_ACCENT_CAPACITY - 1;
+}
+
+static void setRecCustomAccent(uint16_t col) {
+  recAccentIndex = addRecAccentPreset(col);
+}
+
+
 static int parseRecordingNumber(const char *name) {
   if (!name) return 0;
   const char *base = strrchr(name, '/');
@@ -281,6 +478,58 @@ static int parseRecordingNumber(const char *name) {
         (base[10] == 'a' || base[10] == 'A') && (base[11] == 'v' || base[11] == 'V'))) return 0;
   if (base[12] != '\0') return 0;
   return (base[4] - '0') * 1000 + (base[5] - '0') * 100 + (base[6] - '0') * 10 + (base[7] - '0');
+}
+
+static bool isWavFileName(const char *name) {
+  if (!name) return false;
+  const char *base = strrchr(name, '/');
+  base = base ? base + 1 : name;
+  if (!base[0] || base[0] == '.') return false;
+  const char *dot = strrchr(base, '.');
+  if (!dot) return false;
+  return (dot[1] == 'w' || dot[1] == 'W') &&
+         (dot[2] == 'a' || dot[2] == 'A') &&
+         (dot[3] == 'v' || dot[3] == 'V') &&
+         dot[4] == '\0';
+}
+
+static int musicRecIdForSlot(uint16_t slot) {
+  return (slot < MAX_MUSIC_TRACKS) ? (MUSIC_ID_BASE + (int)slot) : 0;
+}
+
+static int musicSlotForRec(int recNum) {
+  if (recNum < MUSIC_ID_BASE || recNum > MAX_REC) return -1;
+  int slot = recNum - MUSIC_ID_BASE;
+  return (slot >= 0 && slot < (int)musicTrackCount) ? slot : -1;
+}
+
+static void resetMusicTracks() {
+  musicTrackCount = 0;
+  memset(musicPaths, 0, sizeof(musicPaths));
+}
+
+static void musicListLabel(int recNum, char *out, size_t n) {
+  int slot = musicSlotForRec(recNum);
+  if (slot < 0) {
+    snprintf(out, n, "%04d", recNum);
+    return;
+  }
+  snprintf(out, n, "MU%02d", slot + 1);
+}
+
+static void musicDisplayName(int recNum, char *out, size_t n) {
+  if (n == 0) return;
+  out[0] = 0;
+  int slot = musicSlotForRec(recNum);
+  if (slot < 0 || slot >= (int)musicTrackCount) {
+    musicListLabel(recNum, out, n);
+    return;
+  }
+  const char *base = strrchr(musicPaths[slot], '/');
+  base = base ? base + 1 : musicPaths[slot];
+  snprintf(out, n, "%s", base);
+  char *dot = strrchr(out, '.');
+  if (dot) *dot = 0;
 }
 
 // ---------- WAV 澶?----------
@@ -324,8 +573,8 @@ static bool g_seamlessHotkeySwitch = false;
 int g_listReturnRec = 0;     // 鎾斁椤佃繑鍥炲垪琛ㄦ椂搴旈噸鏂伴€変腑鐨勫綍闊?
 int g_carryDeleteRec = 0;
 uint32_t g_carryDeleteStart = 0;
-uint8_t g_listMode = REC_NORMAL;  // 0鏅€?/ 1蹇嵎 / 2閲嶈
-static int g_listModeSelectedRec[3] = {0, 0, 0};
+uint8_t g_listMode = REC_NORMAL;  // 0 normal / 1 quick / 2 important / 3 music
+static int g_listModeSelectedRec[REC_KIND_COUNT] = {0, 0, 0, 0};
 static int nextRecHint = 0;  // 涓嬩竴涓綍闊崇紪鍙风紦瀛? 閬垮厤姣忔浠?REC_0001 椤哄簭鎺㈡祴
 static const uint32_t DELETE_HOLD_MS = 1200;
 static const uint32_t DELETE_HINT_MS = 280;  // 鐭寜 Del 涓嶆樉绀哄垹闄ゆ彁绀? 闀挎寜鍚庢墠鍑虹幇
@@ -1202,20 +1451,20 @@ static void drawStatusTitle(M5Canvas &g, const char *text, uint16_t col = COL_GR
 
 static void drawStatusTitleNoLine(m5gfx::M5GFX &g, const char *text, uint16_t col = COL_GREEN) {
   g.fillRect(0, 0, CONTENT_W, 19, COL_BG);
-  drawStatusBattery(g);
+  drawStatusBatteryColor(g, col);
   g.setTextColor(col, COL_BG);
   drawDseg14Text(g, 4, 1, text, col);
 }
 
 static void drawStatusTitleNoLine(M5Canvas &g, const char *text, uint16_t col = COL_GREEN) {
   g.fillRect(0, 0, CONTENT_W, 19, COL_BG);
-  drawStatusBattery(g);
+  drawStatusBatteryColor(g, col);
   g.setTextColor(col, COL_BG);
   drawDseg14Text(g, 4, 1, text, col);
 }
 
 #define DRAW_STATUS_TAB_BODY(g, label, x, active) do { \
-  uint16_t _tabCol = active ? COL_GREEN : COL_DIM; \
+  uint16_t _tabCol = active ? recAccentColor() : recDimColor(); \
   (g).setTextColor(_tabCol, COL_BG); \
   drawDseg14Text((g), (x) + 4, 1, (label), _tabCol); \
 } while (0)
@@ -1229,15 +1478,12 @@ static void drawStatusTab(M5Canvas &g, const char *label, int x, bool active) {
 }
 
 #define DRAW_STATUS_TABS_BODY(g, mode, count) do { \
-  drawStatusBase(g); \
+  (g).fillRect(0, 0, CONTENT_W, 21, COL_BG); \
+  drawStatusBatteryColor(g, recAccentColor()); \
   drawStatusTab(g, "NOR", 4, (mode) == REC_NORMAL); \
   drawStatusTab(g, "QCK", 48, (mode) == REC_SHORTCUT); \
   drawStatusTab(g, "IMP", 92, (mode) == REC_IMPORTANT); \
-  (g).setTextColor(COL_GREEN, COL_BG); \
-  char _cnt[8]; snprintf(_cnt, sizeof(_cnt), "%d", count); \
-  drawDseg14Text((g), 142, 1, _cnt, COL_GREEN); \
-  drawDseg14Text((g), 190, 1, shortcutGroupLabel(), COL_DIM); \
-  (g).drawFastHLine(0, 20, CONTENT_W, COL_DIM); \
+  drawStatusTab(g, "MU", 136, (mode) == REC_MUSIC); \
 } while (0)
 
 static void drawStatusTabs(m5gfx::M5GFX &g, uint8_t mode, int count) {
@@ -1270,6 +1516,68 @@ static void drawActionToast(const char *msg, uint16_t col = COL_GREEN) {
   if (x < 76) x = 76;
   d.setCursor(x, 121);
   d.print(msg);
+}
+
+static void drawRecColorInputBar(const char *hex, uint8_t len, bool bad = false) {
+  auto &d = M5Cardputer.Display;
+  d.fillRect(0, 113, CONTENT_W, 22, COL_BG);
+  uint16_t col = bad ? COL_RED : recAccentColor();
+  d.drawRect(0, 113, CONTENT_W, 22, col);
+  FONT_ASCII(d);
+  d.setTextColor(col, COL_BG);
+  d.setCursor(8, 120);
+  d.print("COLOR #");
+  for (uint8_t i = 0; i < 6; i++) d.print(i < len ? hex[i] : '_');
+}
+
+static bool inputRecAccentPreset() {
+  char hex[7] = {0};
+  uint8_t len = 0;
+  waitRelease();
+  drawRecColorInputBar(hex, len);
+  while (true) {
+    M5Cardputer.update();
+    if (M5Cardputer.Keyboard.isChange() && M5Cardputer.Keyboard.isPressed()) {
+      if (keyEsc()) {
+        drawActionToast("CANCEL", recDimColor());
+        waitRelease();
+        return false;
+      }
+      if (keyDel()) {
+        if (len > 0) hex[--len] = 0;
+        drawRecColorInputBar(hex, len);
+        waitRelease();
+        continue;
+      }
+      if (keyEnter()) {
+        uint32_t rgb = 0;
+        if (len == 6 && parseHexRgb(hex, rgb)) {
+          uint16_t col = rgb888To565(rgb);
+          setRecCustomAccent(col);
+          bool saved = false;
+          if (sdMount()) {
+            saved = saveRecAccentStateMounted();
+            SD.end();
+          }
+          drawActionToast(saved ? "SAVED" : "NO SD", saved ? recAccentColor() : COL_RED);
+          waitRelease();
+          return true;
+        }
+        drawRecColorInputBar(hex, len, true);
+        waitRelease();
+        continue;
+      }
+      char k = pressedBindKey();
+      int hv = hexValue(k);
+      if (hv >= 0 && len < 6) {
+        hex[len++] = (char)(hv < 10 ? ('0' + hv) : ('A' + hv - 10));
+        hex[len] = 0;
+        drawRecColorInputBar(hex, len);
+      }
+      waitRelease();
+    }
+    delay(8);
+  }
 }
 
 static void drawCanvasToast(M5Canvas &cv, const char *msg, uint16_t col = COL_GREEN) {
@@ -1358,8 +1666,8 @@ static void drawCanvasSaveBadge(M5Canvas &cv) {
   const int x = CONTENT_W - 78;
   const int y = 114;
   cv.fillRect(x - 4, y - 3, 82, 24, COL_BG);
-  drawDseg14Text(cv, x, y, "SAVED", COL_GREEN);
-  cv.fillRect(x, y + 17, 54, 3, COL_GREEN);
+  drawDseg14Text(cv, x, y, "SAVED", recAccentColor());
+  cv.fillRect(x, y + 17, 54, 3, recAccentColor());
   cv.pushSprite(0, 0);
 }
 
@@ -1516,6 +1824,7 @@ int recList[MAX_REC];
 int recCount = 0;
 static uint8_t shortcutBits[(MAX_REC + 8) / 8];
 static uint8_t importantBits[(MAX_REC + 8) / 8];
+static uint8_t musicBits[(MAX_REC + 8) / 8];
 static uint8_t frictionDoneBits[(MAX_REC + 8) / 8];
 static uint8_t frictionPendingBits[(MAX_REC + 8) / 8];
 static uint8_t uploadQueuedBits[(MAX_REC + 8) / 8];
@@ -1529,6 +1838,7 @@ static uint16_t recDurationSec[MAX_REC];
 static void clearImportantBits() {
   memset(shortcutBits, 0, sizeof(shortcutBits));
   memset(importantBits, 0, sizeof(importantBits));
+  memset(musicBits, 0, sizeof(musicBits));
   memset(recDurationSec, 0, sizeof(recDurationSec));
 }
 
@@ -1631,36 +1941,95 @@ static int adjustRecVolumeDelta(int recNum, int delta) {
   return next;
 }
 
-static uint16_t durationFromFileSize(uint32_t fileSize) {
-  if (fileSize <= 44) return 0;
-  uint32_t sec = (((fileSize - 44) / 2) + REC_RATE - 1) / REC_RATE;
+static uint16_t durationFromPcm(uint32_t dataBytes, uint32_t sampleRate, uint16_t channels) {
+  if (dataBytes == 0 || sampleRate == 0 || channels == 0) return 0;
+  uint32_t frameBytes = (uint32_t)channels * 2;
+  uint32_t frames = dataBytes / frameBytes;
+  uint32_t sec = (frames + sampleRate - 1) / sampleRate;
   return (sec > 65535) ? 65535 : (uint16_t)sec;
 }
 
-static uint32_t playableWavDataBytes(File &f) {
+static uint16_t durationFromFileSize(uint32_t fileSize) {
+  if (fileSize <= 44) return 0;
+  return durationFromPcm(fileSize - 44, REC_RATE, 1);
+}
+
+static uint16_t rd16le(const uint8_t *p) {
+  return (uint16_t)p[0] | ((uint16_t)p[1] << 8);
+}
+
+static uint32_t rd32le(const uint8_t *p) {
+  return (uint32_t)p[0] | ((uint32_t)p[1] << 8) | ((uint32_t)p[2] << 16) | ((uint32_t)p[3] << 24);
+}
+
+static bool parseWavInfo(File &f, WavInfo &info) {
+  info = WavInfo();
   uint32_t total = f.size();
-  if (total <= 44) return 0;
+  if (total < 44) { info.error = "WAV SHORT"; return false; }
   uint8_t h[12];
-  if (!f.seek(0) || f.read(h, sizeof(h)) != (int)sizeof(h)) return 0;
-  if (h[0] != 'R' || h[1] != 'I' || h[2] != 'F' || h[3] != 'F') return 0;
-  if (h[8] != 'W' || h[9] != 'A' || h[10] != 'V' || h[11] != 'E') return 0;
-  uint8_t dataTag[4];
-  if (!f.seek(36) || f.read(dataTag, sizeof(dataTag)) != (int)sizeof(dataTag)) return 0;
-  if (dataTag[0] != 'd' || dataTag[1] != 'a' || dataTag[2] != 't' || dataTag[3] != 'a') return 0;
-  uint8_t hb[4];
-  if (f.read(hb, sizeof(hb)) != (int)sizeof(hb)) return 0;
-  uint32_t dataSize = (uint32_t)hb[0] | ((uint32_t)hb[1] << 8) | ((uint32_t)hb[2] << 16) | ((uint32_t)hb[3] << 24);
-  uint32_t fileData = total - 44;
-  if (dataSize == 0 || dataSize > fileData) return 0;
-  return dataSize & ~1UL;
+  if (!f.seek(0) || f.read(h, sizeof(h)) != (int)sizeof(h)) { info.error = "WAV READ"; return false; }
+  if (memcmp(h, "RIFF", 4) != 0 || memcmp(h + 8, "WAVE", 4) != 0) { info.error = "NOT RIFF"; return false; }
+
+  bool haveFmt = false;
+  bool haveData = false;
+  uint16_t audioFormat = 0;
+  uint32_t pos = 12;
+  while (pos + 8 <= total) {
+    uint8_t ch[8];
+    if (!f.seek(pos) || f.read(ch, sizeof(ch)) != (int)sizeof(ch)) { info.error = "WAV CHUNK"; return false; }
+    uint32_t chunkSize = rd32le(ch + 4);
+    uint32_t payload = pos + 8;
+    if (payload > total || chunkSize > total - payload) { info.error = "WAV SIZE"; return false; }
+
+    if (memcmp(ch, "fmt ", 4) == 0) {
+      if (chunkSize < 16) { info.error = "FMT SHORT"; return false; }
+      uint8_t fmt[16];
+      if (!f.seek(payload) || f.read(fmt, sizeof(fmt)) != (int)sizeof(fmt)) { info.error = "FMT READ"; return false; }
+      audioFormat = rd16le(fmt);
+      info.channels = rd16le(fmt + 2);
+      info.sampleRate = rd32le(fmt + 4);
+      info.blockAlign = rd16le(fmt + 12);
+      info.bitsPerSample = rd16le(fmt + 14);
+      haveFmt = true;
+    } else if (memcmp(ch, "data", 4) == 0) {
+      info.dataOffset = payload;
+      info.dataBytes = chunkSize;
+      haveData = true;
+    }
+
+    uint32_t next = payload + chunkSize + (chunkSize & 1);
+    if (next <= pos) { info.error = "WAV LOOP"; return false; }
+    pos = next;
+  }
+
+  if (!haveFmt) { info.error = "NO FMT"; return false; }
+  if (!haveData || info.dataBytes == 0) { info.error = "NO DATA"; return false; }
+  if (audioFormat != 1) { info.error = "PCM ONLY"; return false; }
+  if (info.bitsPerSample != 16) { info.error = "16BIT ONLY"; return false; }
+  if (info.channels != 1 && info.channels != 2) { info.error = "CH 1/2 ONLY"; return false; }
+  if (info.sampleRate < 8000 || info.sampleRate > 48000) { info.error = "RATE 8-48K"; return false; }
+  uint16_t expectedAlign = info.channels * (info.bitsPerSample / 8);
+  if (info.blockAlign != expectedAlign) { info.error = "BAD ALIGN"; return false; }
+  info.dataBytes -= info.dataBytes % info.blockAlign;
+  if (info.dataBytes == 0) { info.error = "NO DATA"; return false; }
+  info.error = nullptr;
+  return true;
+}
+
+static uint32_t playableWavDataBytes(File &f) {
+  WavInfo info;
+  return parseWavInfo(f, info) ? info.dataBytes : 0;
 }
 
 static uint32_t wavSampleRate(File &f) {
-  uint8_t hb[4];
-  if (!f.seek(24) || f.read(hb, sizeof(hb)) != (int)sizeof(hb)) return REC_RATE;
-  uint32_t rate = (uint32_t)hb[0] | ((uint32_t)hb[1] << 8) | ((uint32_t)hb[2] << 16) | ((uint32_t)hb[3] << 24);
-  if (rate < 8000 || rate > 48000) return REC_RATE;
-  return rate;
+  WavInfo info;
+  return parseWavInfo(f, info) ? info.sampleRate : REC_RATE;
+}
+
+static uint16_t wavDurationSec(File &f) {
+  WavInfo info;
+  if (!parseWavInfo(f, info)) return 0;
+  return durationFromPcm(info.dataBytes, info.sampleRate, info.channels);
 }
 
 static void setRecDuration(int recNum, uint32_t fileSize) {
@@ -1690,6 +2059,12 @@ static bool isImportantRec(int recNum) {
   return (importantBits[bit >> 3] & (1 << (bit & 7))) != 0;
 }
 
+static bool isMusicRec(int recNum) {
+  if (recNum <= 0 || recNum > MAX_REC) return false;
+  int bit = recNum - 1;
+  return (musicBits[bit >> 3] & (1 << (bit & 7))) != 0;
+}
+
 static void setShortcutRec(int recNum, bool shortcut) {
   if (recNum <= 0 || recNum > MAX_REC) return;
   int bit = recNum - 1;
@@ -1707,9 +2082,17 @@ static void setImportantRec(int recNum, bool important) {
   else importantBits[bit >> 3] &= ~(1 << (bit & 7));
 }
 
+static void setMusicRec(int recNum, bool music) {
+  if (recNum <= 0 || recNum > MAX_REC) return;
+  int bit = recNum - 1;
+  if (music) musicBits[bit >> 3] |= (1 << (bit & 7));
+  else musicBits[bit >> 3] &= ~(1 << (bit & 7));
+}
+
 static uint8_t recKindOf(int recNum) {
   if (isShortcutRec(recNum)) return REC_SHORTCUT;
   if (isImportantRec(recNum)) return REC_IMPORTANT;
+  if (isMusicRec(recNum)) return REC_MUSIC;
   return REC_NORMAL;
 }
 
@@ -1721,11 +2104,13 @@ static float targetHzForC4Semis(int8_t semis) {
   return 261.625565f * powf(2.0f, (float)semis / 12.0f);
 }
 
-static float detectPitchHzInOpenWav(File &f, uint32_t rate, uint32_t dataBytes) {
+static float detectPitchHzInOpenWav(File &f, const WavInfo &info) {
+  uint32_t rate = info.sampleRate;
+  uint32_t dataBytes = info.dataBytes;
   if (rate < 8000 || rate > 48000 || dataBytes < 512) return 0.0f;
   static int16_t pitchBuf[1024];
   const uint16_t frameN = 1024;
-  const uint32_t maxBytes = min(dataBytes, rate * 2UL * 2UL);
+  const uint32_t maxBytes = min(dataBytes, rate * (uint32_t)info.blockAlign * 2UL);
   const int minLag = max(8, (int)(rate / 1200));
   const int maxLag = min((int)frameN - 4, (int)(rate / 75));
   float bestHz = 0.0f;
@@ -1733,7 +2118,7 @@ static float detectPitchHzInOpenWav(File &f, uint32_t rate, uint32_t dataBytes) 
   uint32_t offset = 0;
 
   while (offset + frameN * 2 <= maxBytes) {
-    if (!f.seek(44 + offset)) break;
+    if (!f.seek(info.dataOffset + offset)) break;
     int rd = f.read((uint8_t *)pitchBuf, frameN * 2);
     if (rd != (int)(frameN * 2)) break;
 
@@ -1771,7 +2156,7 @@ static float detectPitchHzInOpenWav(File &f, uint32_t rate, uint32_t dataBytes) 
         }
       }
     }
-    offset += frameN;
+    offset += frameN * 2;
   }
 
   return bestScore >= 0.30f ? bestHz : 0.0f;
@@ -1781,14 +2166,13 @@ static float scalePitchHzForRec(int recNum) {
   if (recNum <= 0) return 0.0f;
   if (g_scalePitchCacheRec == recNum && g_scalePitchCacheHz > 0.0f) return g_scalePitchCacheHz;
   if (!sdMount()) return 0.0f;
-  char p[40];
+  char p[128];
   recordingPathForRec(recNum, p, sizeof(p));
   File f = SD.open(p, FILE_READ);
   float hz = 0.0f;
   if (f) {
-    uint32_t dataBytes = playableWavDataBytes(f);
-    uint32_t rate = wavSampleRate(f);
-    hz = detectPitchHzInOpenWav(f, rate, dataBytes);
+    WavInfo info;
+    if (parseWavInfo(f, info)) hz = detectPitchHzInOpenWav(f, info);
     f.close();
   }
   SD.end();
@@ -1820,6 +2204,7 @@ static void insertRecListSorted(int recNum, uint8_t kind = REC_NORMAL) {
   if (existing >= 0) {
     if (kind == REC_SHORTCUT) setShortcutRec(recNum, true);
     if (kind == REC_IMPORTANT) setImportantRec(recNum, true);
+    if (kind == REC_MUSIC && recKindOf(recNum) == REC_MUSIC) setMusicRec(recNum, true);
     return;
   }
   if (recCount >= MAX_REC) return;
@@ -1831,6 +2216,7 @@ static void insertRecListSorted(int recNum, uint8_t kind = REC_NORMAL) {
   recList[pos] = recNum;
   setShortcutRec(recNum, kind == REC_SHORTCUT);
   setImportantRec(recNum, kind == REC_IMPORTANT);
+  setMusicRec(recNum, kind == REC_MUSIC);
   recCount++;
 }
 
@@ -1840,12 +2226,14 @@ static void insertRecListAtEnd(int recNum, uint8_t kind = REC_NORMAL) {
   if (existing >= 0) {
     if (kind == REC_SHORTCUT) setShortcutRec(recNum, true);
     if (kind == REC_IMPORTANT) setImportantRec(recNum, true);
+    if (kind == REC_MUSIC && recKindOf(recNum) == REC_MUSIC) setMusicRec(recNum, true);
     return;
   }
   if (recCount >= MAX_REC) return;
   recList[recCount++] = recNum;
   setShortcutRec(recNum, kind == REC_SHORTCUT);
   setImportantRec(recNum, kind == REC_IMPORTANT);
+  setMusicRec(recNum, kind == REC_MUSIC);
 }
 
 static void applyRecordingOrderMounted() {
@@ -1925,7 +2313,7 @@ static void removeRecListAt(int idx) {
 }
 
 static bool recordingExistsKind(int recNum, uint8_t kind) {
-  char p[40];
+  char p[128];
   recordingPathKind(recNum, kind, p, sizeof(p));
   return SD.exists(p);
 }
@@ -1954,12 +2342,29 @@ static void scanRecordingDir(const char *dirPath, uint8_t kind, int &maxIdx) {
   if (dir && dir.isDirectory()) {
     File e;
     while ((e = dir.openNextFile())) {
-      int n = parseRecordingNumber(e.name());
-      uint32_t dataBytes = (!e.isDirectory()) ? playableWavDataBytes(e) : 0;
-      if (n > 0 && dataBytes > 0) {
-        if (n > maxIdx) maxIdx = n;
-        insertRecListSorted(n, kind);
-        setRecDuration(n, 44 + dataBytes);
+      if (kind == REC_MUSIC) {
+        if (!e.isDirectory() && isWavFileName(e.name()) && musicTrackCount < MAX_MUSIC_TRACKS) {
+          uint16_t dur = wavDurationSec(e);
+          if (dur == 0) { e.close(); continue; }
+          int recId = musicRecIdForSlot(musicTrackCount);
+          if (recId > 0) {
+            const char *name = e.name();
+            if (name && name[0] == '/') snprintf(musicPaths[musicTrackCount], sizeof(musicPaths[musicTrackCount]), "%s", name);
+            else snprintf(musicPaths[musicTrackCount], sizeof(musicPaths[musicTrackCount]), "%s/%s", dirPath, name ? name : "");
+            insertRecListAtEnd(recId, REC_MUSIC);
+            recDurationSec[recId - 1] = dur;
+            musicTrackCount++;
+          }
+        }
+      } else {
+        int n = parseRecordingNumber(e.name());
+        if (n > 0) {
+          uint16_t dur = (!e.isDirectory()) ? wavDurationSec(e) : 0;
+          if (dur == 0) { e.close(); continue; }
+          if (n > maxIdx) maxIdx = n;
+          insertRecListSorted(n, kind);
+          recDurationSec[n - 1] = dur;
+        }
       }
       e.close();
     }
@@ -1967,28 +2372,77 @@ static void scanRecordingDir(const char *dirPath, uint8_t kind, int &maxIdx) {
   }
 }
 
-static int lowestAvailableRecordingIndex() {
-  char p[40];
-  for (int idx = 1; idx < 9999; idx++) {
-    recordingPathKind(idx, REC_NORMAL, p, sizeof(p));
-    if (!SD.exists(p) && !recordingExistsKind(idx, REC_SHORTCUT) && !recordingExistsKind(idx, REC_IMPORTANT)) return idx;
+static bool loadNormalRecordingMounted(int recNum) {
+  if (recNum <= 0 || recNum >= MUSIC_ID_BASE) return false;
+  if (recListIndexOf(recNum) >= 0) return false;
+  char p[128];
+  recordingPathKind(recNum, REC_NORMAL, p, sizeof(p));
+  File f = SD.open(p, FILE_READ);
+  if (!f) return false;
+  uint16_t dur = wavDurationSec(f);
+  f.close();
+  if (dur == 0) return false;
+  insertRecListSorted(recNum, REC_NORMAL);
+  recDurationSec[recNum - 1] = dur;
+  if (normalOldestLoaded == 0 || recNum < normalOldestLoaded) normalOldestLoaded = recNum;
+  return true;
+}
+
+static int recentNormalScanStartMounted() {
+  int next = readNextIndexCache();
+  if (next > 1 && next <= MUSIC_ID_BASE) return next - 1;
+  if (next > MUSIC_ID_BASE) return MUSIC_ID_BASE - 1;
+  return MUSIC_ID_BASE - 1;
+}
+
+static void scanRecentNormalRecordingsMounted(uint8_t limit) {
+  normalOldestLoaded = 0;
+  normalReachedBeginning = false;
+  int found = 0;
+  for (int idx = recentNormalScanStartMounted(); idx >= 1 && found < limit; idx--) {
+    if (loadNormalRecordingMounted(idx)) found++;
+    if (idx == 1) normalReachedBeginning = true;
   }
-  return 9999;
+  if (found == 0) normalReachedBeginning = true;
+}
+
+static bool loadOlderNormalRecordings(uint8_t limit = NORMAL_OLDER_LOAD) {
+  if (normalReachedBeginning) return false;
+  if (!sdMount()) return false;
+  int start = (normalOldestLoaded > 1) ? normalOldestLoaded - 1 : recentNormalScanStartMounted();
+  int found = 0;
+  for (int idx = start; idx >= 1 && found < limit; idx--) {
+    if (loadNormalRecordingMounted(idx)) found++;
+    if (idx == 1) normalReachedBeginning = true;
+  }
+  SD.end();
+  return found > 0;
+}
+
+static int lowestAvailableRecordingIndex() {
+  char p[128];
+  for (int idx = 1; idx < MUSIC_ID_BASE; idx++) {
+    recordingPathKind(idx, REC_NORMAL, p, sizeof(p));
+    if (!SD.exists(p) && !recordingExistsKind(idx, REC_SHORTCUT) && !recordingExistsKind(idx, REC_IMPORTANT) && !recordingExistsKind(idx, REC_MUSIC)) return idx;
+  }
+  return MUSIC_ID_BASE - 1;
 }
 
 static int nextRecordingIndex() {
   int idx = nextRecHint;
   if (idx < 1 || idx > 9999) idx = readNextIndexCache();
   if (idx < 1 || idx > 9999) idx = 1;
+  if (idx >= MUSIC_ID_BASE) idx = 1;
   int start = idx;
   do {
     if (!recordingExistsKind(idx, REC_NORMAL) &&
         !recordingExistsKind(idx, REC_SHORTCUT) &&
-        !recordingExistsKind(idx, REC_IMPORTANT)) {
+        !recordingExistsKind(idx, REC_IMPORTANT) &&
+        !recordingExistsKind(idx, REC_MUSIC)) {
       nextRecHint = idx;
       return idx;
     }
-    idx = (idx < 9999) ? idx + 1 : 1;
+    idx = (idx < MUSIC_ID_BASE - 1) ? idx + 1 : 1;
   } while (idx != start);
   idx = lowestAvailableRecordingIndex();
   nextRecHint = idx;
@@ -1999,30 +2453,25 @@ static int nextRecordingIndex() {
 static void scanRecordings(bool compactNext = false) {
   recCount = 0;
   clearImportantBits();
+  resetMusicTracks();
   if (!sdMount()) return;
-  if (!SD.exists(REC_DIR) && !SD.exists(SHORTCUT_DIR) && !SD.exists(IMPORTANT_DIR)) { SD.end(); return; }
+  loadRecAccentPresetMounted();
+  if (!SD.exists(REC_DIR) && !SD.exists(SHORTCUT_DIR) && !SD.exists(IMPORTANT_DIR) && !SD.exists(MUSIC_DIR) && !SD.exists("/music")) { SD.end(); return; }
   int maxIdx = 0;
-  scanRecordingDir(REC_DIR, REC_NORMAL, maxIdx);
+  if (SD.exists(REC_DIR)) scanRecentNormalRecordingsMounted(NORMAL_INITIAL_LOAD);
   scanRecordingDir(SHORTCUT_DIR, REC_SHORTCUT, maxIdx);
   scanRecordingDir(IMPORTANT_DIR, REC_IMPORTANT, maxIdx);
+  if (SD.exists(MUSIC_DIR)) scanRecordingDir(MUSIC_DIR, REC_MUSIC, maxIdx);
+  else if (SD.exists("/music")) scanRecordingDir("/music", REC_MUSIC, maxIdx);
   applyRecordingOrderMounted();
   loadUploadStateMounted();
   loadRecVolumeStateMounted();
-  nextRecHint = lowestAvailableRecordingIndex();
-  writeNextIndexCache(nextRecHint);
-  SD.end();
-  bool hotkeyChanged = false;
-  for (uint8_t group = 0; group < HOTKEY_GROUPS; group++) {
-    for (int i = 0; i < hotkeyCount[group]; i++) {
-      if (!isShortcutRec(hotkeys[group][i].idx)) {
-        for (int j = i; j < hotkeyCount[group] - 1; j++) hotkeys[group][j] = hotkeys[group][j + 1];
-        hotkeyCount[group]--;
-        i--;
-        hotkeyChanged = true;
-      }
-    }
+  nextRecHint = readNextIndexCache();
+  if (nextRecHint < 1 || nextRecHint >= MUSIC_ID_BASE) {
+    nextRecHint = lowestAvailableRecordingIndex();
+    writeNextIndexCache(nextRecHint);
   }
-  if (hotkeyChanged) saveHotkeys();
+  SD.end();
 }
 
 // ---------- 鎻愮ず闊?"婊? (娣″叆娣″嚭) ----------
@@ -2416,32 +2865,33 @@ static void feedPlaybackWaveBars(uint32_t chunkStart, uint32_t dataSize, const i
   for (int i = first; i <= last; i++) mergePlaybackWaveBar(i, amp);
 }
 
-static bool previewPlaybackWaveBar(File &f, uint32_t dataSize, uint8_t &previewBar) {
+static bool previewPlaybackWaveBar(File &f, uint32_t dataOffset, uint32_t dataSize, uint16_t blockAlign, uint8_t &previewBar) {
   if (previewBar >= WAVE_BARS || dataSize == 0) return false;
   static int16_t tmp[REC_N];
   uint32_t restore = f.position();
   uint32_t segStart = (uint32_t)((uint64_t)dataSize * previewBar / WAVE_BARS);
   uint32_t segEnd = (uint32_t)((uint64_t)dataSize * (previewBar + 1) / WAVE_BARS);
-  if (segEnd <= segStart) segEnd = segStart + 2;
+  if (blockAlign == 0) blockAlign = 2;
+  if (segEnd <= segStart) segEnd = segStart + blockAlign;
   if (segEnd > dataSize) segEnd = dataSize;
   uint32_t span = segEnd - segStart;
   uint32_t pos = segStart + span / 2;
   if (pos + sizeof(tmp) > segEnd) pos = (segEnd > sizeof(tmp)) ? (segEnd - sizeof(tmp)) : segStart;
-  pos &= ~1U;
+  pos -= pos % blockAlign;
   uint32_t want = dataSize - pos;
   if (want > sizeof(tmp)) want = sizeof(tmp);
   if (want > segEnd - pos) want = segEnd - pos;
-  want &= ~1U;
+  want -= want % blockAlign;
   int rd = 0;
-  if (want > 0 && f.seek(44 + pos)) rd = f.read((uint8_t *)tmp, want);
+  if (want > 0 && f.seek(dataOffset + pos)) rd = f.read((uint8_t *)tmp, want);
   if (rd > 0) feedPlaybackWaveBars(pos, dataSize, tmp, rd / 2);
   f.seek(restore);
   previewBar++;
   return true;
 }
 
-static void previewPlaybackWaveStep(File &f, uint32_t dataSize, uint8_t &previewBar, uint8_t budget) {
-  while (budget-- > 0 && previewPlaybackWaveBar(f, dataSize, previewBar)) {}
+static void previewPlaybackWaveStep(File &f, uint32_t dataOffset, uint32_t dataSize, uint16_t blockAlign, uint8_t &previewBar, uint8_t budget) {
+  while (budget-- > 0 && previewPlaybackWaveBar(f, dataOffset, dataSize, blockAlign, previewBar)) {}
 }
 
 static int deleteProgressW(uint32_t heldMs) {
@@ -2500,7 +2950,7 @@ static void drawRecBottomCanvas(M5Canvas &cv, uint32_t elapsedMs, uint32_t delet
   uint32_t s = elapsedMs / 1000;
   char recTime[8];
   snprintf(recTime, sizeof(recTime), "%02lu:%02lu", (unsigned long)(s / 60), (unsigned long)(s % 60));
-  drawDseg14Text(cv, 4, 1, recTime, COL_GREEN);
+  drawDseg14Text(cv, 4, 1, recTime, recAccentColor());
   drawDeleteProgressLocal(cv, deleteHeldMs);
 }
 
@@ -2510,13 +2960,13 @@ static void drawPlaybackBottomCanvas(M5Canvas &cv, uint32_t played, uint32_t dat
   uint32_t tot = (dataSize / 2) / REC_RATE;
   char curBuf[8];
   snprintf(curBuf, sizeof(curBuf), "%02lu:%02lu", (unsigned long)(cur / 60), (unsigned long)(cur % 60));
-  drawDseg14Text(cv, 4, 1, curBuf, COL_GREEN);
+  drawDseg14Text(cv, 4, 1, curBuf, recAccentColor());
   if (deleteHeldMs > 0) {
     drawDeleteProgressLocal(cv, deleteHeldMs);
   } else {
     char totBuf[9];
     snprintf(totBuf, sizeof(totBuf), "%02lu:%02lu", (unsigned long)(tot / 60), (unsigned long)(tot % 60));
-    drawDseg14Text(cv, CONTENT_W - dseg14TextWidth(totBuf) - 4, 1, totBuf, COL_DIM);
+    drawDseg14Text(cv, CONTENT_W - dseg14TextWidth(totBuf) - 4, 1, totBuf, recDimColor());
   }
 }
 
@@ -2527,7 +2977,7 @@ static void drawTrackBar(m5gfx::M5GFX &g, int i, int v) {
   v = abs(v);
   if (v < 1) v = 1;
   if (v > A_HALF) v = A_HALF;
-  g.drawFastVLine(x, A_CY - v, v * 2 + 1, COL_GREEN);
+  g.drawFastVLine(x, A_CY - v, v * 2 + 1, recAccentColor());
 }
 
 static void drawTrackBar(M5Canvas &cv, int i, int v) {
@@ -2537,7 +2987,7 @@ static void drawTrackBar(M5Canvas &cv, int i, int v) {
   v = abs(v);
   if (v < 1) v = 1;
   if (v > A_HALF) v = A_HALF;
-  cv.drawFastVLine(x, A_CY - v, v * 2 + 1, COL_GREEN);
+  cv.drawFastVLine(x, A_CY - v, v * 2 + 1, recAccentColor());
 }
 
 static void pushTrackBar(int amp) {
@@ -2568,7 +3018,7 @@ static void drawTrackBarLocal(M5Canvas &cv, int i, int v) {
   v = abs(v);
   if (v < 1) v = 1;
   if (v > A_HALF) v = A_HALF;
-  cv.drawFastVLine(x, A_CY - WAVE_TOP - v, v * 2 + 1, COL_GREEN);
+  cv.drawFastVLine(x, A_CY - WAVE_TOP - v, v * 2 + 1, recAccentColor());
 }
 
 static void drawTrackBarsLocal(M5Canvas &cv) {
@@ -2617,7 +3067,7 @@ static void drawLiveWaveVisual(M5Canvas &cv, const int8_t *src, int cy) {
   int px = 0, py = cy - src[0];
   for (int x = 1; x < CONTENT_W; x++) {
     int y = cy - src[x];
-    cv.drawLine(px, py, x, y, COL_GREEN);
+    cv.drawLine(px, py, x, y, recAccentColor());
     px = x;
     py = y;
   }
@@ -2628,7 +3078,7 @@ static void drawLiveWaveVisual(m5gfx::M5GFX &g, const int8_t *src, int cy) {
   int px = 0, py = cy - src[0];
   for (int x = 1; x < CONTENT_W; x++) {
     int y = cy - src[x];
-    g.drawLine(px, py, x, y, COL_GREEN);
+    g.drawLine(px, py, x, y, recAccentColor());
     px = x;
     py = y;
   }
@@ -2639,9 +3089,9 @@ static void drawPlaybackCanvas(M5Canvas &g, uint32_t played, uint32_t dataSize, 
   (void)paused;
   updateLiveWaveVisual(playbackLiveWave, liveWave, liveN, B_HALF, PB_B_SMOOTH_FAST, B_DECAY, PB_B_GAIN);
   g.fillRect(0, WAVE_TOP, CONTENT_W, WAVE_H, COL_BG);
-  g.drawFastHLine(0, A_CY, CONTENT_W, 0x0440);
+  g.drawFastHLine(0, A_CY, CONTENT_W, recAxisColor());
   drawTrackBars(g);
-  g.drawFastHLine(0, B_CY, CONTENT_W, 0x0440);
+  g.drawFastHLine(0, B_CY, CONTENT_W, recAxisColor());
   drawLiveWaveVisual(g, playbackLiveWave, B_CY);
 
   int headX = dataSize ? (int)((uint64_t)played * CONTENT_W / dataSize) : 0;
@@ -2651,17 +3101,17 @@ static void drawPlaybackCanvas(M5Canvas &g, uint32_t played, uint32_t dataSize, 
   uint32_t cur  = (played / 2) / REC_RATE;
   uint32_t tot  = (dataSize / 2) / REC_RATE;
   g.fillRect(0, WAVE_BOT + 1, CONTENT_W, 135 - WAVE_BOT - 1, COL_BG);
-  g.setTextColor(COL_GREEN, COL_BG);
+  g.setTextColor(recAccentColor(), COL_BG);
   char curBuf[8];
   snprintf(curBuf, sizeof(curBuf), "%02lu:%02lu", (unsigned long)(cur / 60), (unsigned long)(cur % 60));
-  drawDseg14Text(g, 4, WAVE_BOT + 2, curBuf, COL_GREEN);
+  drawDseg14Text(g, 4, WAVE_BOT + 2, curBuf, recAccentColor());
   if (deleteHeldMs > 0) {
     drawDeleteProgress(g, deleteHeldMs);
   } else {
-    g.setTextColor(COL_DIM, COL_BG);
+    g.setTextColor(recDimColor(), COL_BG);
     char totBuf[9];
     snprintf(totBuf, sizeof(totBuf), "%02lu:%02lu", (unsigned long)(tot / 60), (unsigned long)(tot % 60));
-    drawDseg14Text(g, CONTENT_W - dseg14TextWidth(totBuf) - 4, WAVE_BOT + 2, totBuf, COL_DIM);
+    drawDseg14Text(g, CONTENT_W - dseg14TextWidth(totBuf) - 4, WAVE_BOT + 2, totBuf, recDimColor());
   }
 }
 
@@ -2669,9 +3119,9 @@ static void drawPlaybackCanvas(m5gfx::M5GFX &g, uint32_t played, uint32_t dataSi
   (void)paused;
   updateLiveWaveVisual(playbackLiveWave, liveWave, liveN, B_HALF, PB_B_SMOOTH_FAST, B_DECAY, PB_B_GAIN);
   g.fillRect(0, WAVE_TOP, CONTENT_W, WAVE_H, COL_BG);
-  g.drawFastHLine(0, A_CY, CONTENT_W, 0x0440);
+  g.drawFastHLine(0, A_CY, CONTENT_W, recAxisColor());
   drawTrackBars(g);
-  g.drawFastHLine(0, B_CY, CONTENT_W, 0x0440);
+  g.drawFastHLine(0, B_CY, CONTENT_W, recAxisColor());
   drawLiveWaveVisual(g, playbackLiveWave, B_CY);
 
   int headX = dataSize ? (int)((uint64_t)played * CONTENT_W / dataSize) : 0;
@@ -2681,26 +3131,26 @@ static void drawPlaybackCanvas(m5gfx::M5GFX &g, uint32_t played, uint32_t dataSi
   uint32_t cur  = (played / 2) / REC_RATE;
   uint32_t tot  = (dataSize / 2) / REC_RATE;
   g.fillRect(0, WAVE_BOT + 1, CONTENT_W, 135 - WAVE_BOT - 1, COL_BG);
-  g.setTextColor(COL_GREEN, COL_BG);
+  g.setTextColor(recAccentColor(), COL_BG);
   char curBuf[8];
   snprintf(curBuf, sizeof(curBuf), "%02lu:%02lu", (unsigned long)(cur / 60), (unsigned long)(cur % 60));
-  drawDseg14Text(g, 4, WAVE_BOT + 2, curBuf, COL_GREEN);
+  drawDseg14Text(g, 4, WAVE_BOT + 2, curBuf, recAccentColor());
   if (deleteHeldMs > 0) {
     drawDeleteProgress(g, deleteHeldMs);
   } else {
-    g.setTextColor(COL_DIM, COL_BG);
+    g.setTextColor(recDimColor(), COL_BG);
     char totBuf[9];
     snprintf(totBuf, sizeof(totBuf), "%02lu:%02lu", (unsigned long)(tot / 60), (unsigned long)(tot % 60));
-    drawDseg14Text(g, CONTENT_W - dseg14TextWidth(totBuf) - 4, WAVE_BOT + 2, totBuf, COL_DIM);
+    drawDseg14Text(g, CONTENT_W - dseg14TextWidth(totBuf) - 4, WAVE_BOT + 2, totBuf, recDimColor());
   }
 }
 
 static void drawPlaybackWaveCanvas(M5Canvas &cv, uint32_t played, uint32_t dataSize, int16_t *liveWave, size_t liveN) {
   if (liveWave && liveN > 0) updateLiveWaveVisual(playbackLiveWave, liveWave, liveN, B_HALF, PB_B_SMOOTH_FAST, B_DECAY, PB_B_GAIN);
   cv.fillScreen(COL_BG);
-  cv.drawFastHLine(0, A_CY - WAVE_TOP, CONTENT_W, 0x0440);
+  cv.drawFastHLine(0, A_CY - WAVE_TOP, CONTENT_W, recAxisColor());
   drawTrackBarsLocal(cv);
-  cv.drawFastHLine(0, B_CY - WAVE_TOP, CONTENT_W, 0x0440);
+  cv.drawFastHLine(0, B_CY - WAVE_TOP, CONTENT_W, recAxisColor());
   drawLiveWaveVisual(cv, playbackLiveWave, B_CY - WAVE_TOP);
 
   int headX = dataSize ? (int)((uint64_t)played * CONTENT_W / dataSize) : 0;
@@ -2711,9 +3161,9 @@ static void drawPlaybackWaveCanvas(M5Canvas &cv, uint32_t played, uint32_t dataS
 static void drawPlaybackWaveDirect(m5gfx::M5GFX &g, uint32_t played, uint32_t dataSize, int16_t *liveWave, size_t liveN) {
   if (liveWave && liveN > 0) updateLiveWaveVisual(playbackLiveWave, liveWave, liveN, B_HALF, PB_B_SMOOTH_FAST, B_DECAY, PB_B_GAIN);
   g.fillRect(0, WAVE_TOP, CONTENT_W, WAVE_H, COL_BG);
-  g.drawFastHLine(0, A_CY, CONTENT_W, 0x0440);
+  g.drawFastHLine(0, A_CY, CONTENT_W, recAxisColor());
   drawTrackBars(g);
-  g.drawFastHLine(0, B_CY, CONTENT_W, 0x0440);
+  g.drawFastHLine(0, B_CY, CONTENT_W, recAxisColor());
   drawLiveWaveVisual(g, playbackLiveWave, B_CY);
 
   int headX = dataSize ? (int)((uint64_t)played * CONTENT_W / dataSize) : 0;
@@ -2727,13 +3177,13 @@ static void drawPlaybackChrome(m5gfx::M5GFX &g, uint32_t played, uint32_t dataSi
   g.fillRect(0, WAVE_BOT + 1, CONTENT_W, 135 - WAVE_BOT - 1, COL_BG);
   char curBuf[8];
   snprintf(curBuf, sizeof(curBuf), "%02lu:%02lu", (unsigned long)(cur / 60), (unsigned long)(cur % 60));
-  drawDseg14Text(g, 4, WAVE_BOT + 2, curBuf, COL_GREEN);
+  drawDseg14Text(g, 4, WAVE_BOT + 2, curBuf, recAccentColor());
   if (deleteHeldMs > 0) {
     drawDeleteProgress(g, deleteHeldMs);
   } else {
     char totBuf[9];
     snprintf(totBuf, sizeof(totBuf), "%02lu:%02lu", (unsigned long)(tot / 60), (unsigned long)(tot % 60));
-    drawDseg14Text(g, CONTENT_W - dseg14TextWidth(totBuf) - 4, WAVE_BOT + 2, totBuf, COL_DIM);
+    drawDseg14Text(g, CONTENT_W - dseg14TextWidth(totBuf) - 4, WAVE_BOT + 2, totBuf, recDimColor());
   }
 }
 
@@ -2856,11 +3306,11 @@ static void drawPerfHudOctaveBand(m5gfx::M5GFX &g, int idx, bool active) {
   int tw = (int)strlen(label) * 6;
   FONT_ASCII(g);
   g.setTextSize(1);
-  g.setTextColor(COL_GREEN, COL_BG);
+  g.setTextColor(recAccentColor(), COL_BG);
   g.setCursor(x + (w - tw) / 2, y - 15);
   g.print(label);
-  g.drawRect(x, y, w, h, COL_GREEN);
-  if (active) g.fillRect(x + 2, y + 2, w - 4, h - 4, COL_GREEN);
+  g.drawRect(x, y, w, h, recAccentColor());
+  if (active) g.fillRect(x + 2, y + 2, w - 4, h - 4, recAccentColor());
 }
 
 static void drawPerfHudScaleDetails(m5gfx::M5GFX &g, char key) {
@@ -2872,9 +3322,9 @@ static void drawPerfHudScaleDetails(m5gfx::M5GFX &g, char key) {
   g.fillRect(0, 40, CONTENT_W, 88, COL_BG);
 
   const int sideY = 58;
-  drawDseg14TextScaled(g, 20, sideY, solfege, COL_GREEN, 1);
+  drawDseg14TextScaled(g, 20, sideY, solfege, recAccentColor(), 1);
   int degreeX = CONTENT_W - dseg14TextWidthScaled(degree, 1) - 26;
-  drawDseg14TextScaled(g, degreeX, sideY, degree, COL_GREEN, 1);
+  drawDseg14TextScaled(g, degreeX, sideY, degree, recAccentColor(), 1);
 
   const int groupCenters[3] = {39, 120, 201};
   const int dotGap = 9;
@@ -2883,13 +3333,13 @@ static void drawPerfHudScaleDetails(m5gfx::M5GFX &g, char key) {
     char label[5];
     perfHudOctaveRootLabel((uint8_t)band, label, sizeof(label));
     int labelW = dseg14TextWidthScaled(label, 1);
-    drawDseg14TextScaled(g, groupCenters[band] - labelW / 2, 98, label, COL_GREEN, 1);
+    drawDseg14TextScaled(g, groupCenters[band] - labelW / 2, 98, label, recAccentColor(), 1);
     int startX = groupCenters[band] - dotGap * 3;
     for (int note = 0; note < 7; note++) {
       bool active = (band == octaveBand && note == degreeIndex);
       int x = startX + note * dotGap;
-      if (active) g.fillCircle(x, dotY, 3, COL_GREEN);
-      else g.fillCircle(x, dotY, 1, COL_GREEN);
+      if (active) g.fillCircle(x, dotY, 3, recAccentColor());
+      else g.fillCircle(x, dotY, 1, recAccentColor());
     }
   }
 }
@@ -2907,7 +3357,7 @@ static void drawPerfHudSampleCell(m5gfx::M5GFX &g, int idx, bool on) {
   char label[2] = {keys[idx], 0};
   char bindKey = normalizeBindKey(keys[idx]);
   bool bound = bindKey && findHotkey(bindKey) > 0;
-  uint16_t colText = on ? COL_GREEN : (bound ? COL_DIM : COL_DARK_GRAY);
+  uint16_t colText = on ? recAccentColor() : (bound ? recDimColor() : COL_DARK_GRAY);
   int w = dseg14TextWidthScaled(label, 1);
   g.fillRect(x, y, cellW, 18, COL_BG);
   drawDseg14TextScaled(g, x + (cellW - w) / 2, y + 1, label, colText, 1);
@@ -2917,22 +3367,22 @@ static void drawPerfHudNoteCell(m5gfx::M5GFX &g, int idx, bool on) {
   if (idx < 0 || idx >= 20) return;
   int x = 8 + idx * 11;
   int y = 111;
-  g.fillRect(x, y, 8, on ? 14 : 8, on ? COL_GREEN : COL_DARK_GRAY);
+  g.fillRect(x, y, 8, on ? 14 : 8, on ? recAccentColor() : COL_DARK_GRAY);
 }
 
 static void drawPerfHudBase(m5gfx::M5GFX &g, uint8_t kind) {
   g.fillScreen(COL_BG);
   if (g_scaleMode) {
-    drawDseg14TextScaled(g, CONTENT_W - dseg14TextWidthScaled("SCALE", 1) - 4, 1, "SCALE", COL_GREEN, 1);
+    drawDseg14TextScaled(g, CONTENT_W - dseg14TextWidthScaled("SCALE", 1) - 4, 1, "SCALE", recAccentColor(), 1);
   } else {
-    drawDseg14TextScaled(g, 4, 1, shortcutGroupLabel(), COL_GREEN, 1);
+    drawDseg14TextScaled(g, 4, 1, shortcutGroupLabel(), recAccentColor(), 1);
   }
   if (kind == 1) {
-    if (!g_scaleMode) drawDseg14TextScaled(g, CONTENT_W - dseg14TextWidthScaled("NOTES", 1) - 4, 1, "NOTES", COL_GREEN, 1);
+    if (!g_scaleMode) drawDseg14TextScaled(g, CONTENT_W - dseg14TextWidthScaled("NOTES", 1) - 4, 1, "NOTES", recAccentColor(), 1);
     g.fillRect(18, 40, 204, 90, COL_BG);
   } else {
     for (int i = 0; i < 16; i++) drawPerfHudSampleCell(g, i, false);
-    if (!g_scaleMode) drawDseg14TextScaled(g, CONTENT_W - dseg14TextWidthScaled("KEYS", 1) - 4, 1, "KEYS", COL_GREEN, 1);
+    if (!g_scaleMode) drawDseg14TextScaled(g, CONTENT_W - dseg14TextWidthScaled("KEYS", 1) - 4, 1, "KEYS", recAccentColor(), 1);
   }
 }
 
@@ -2955,7 +3405,7 @@ static void drawPerfHudKey(m5gfx::M5GFX &g, char key, int recNum) {
     char source[8];
     perfHudSourceLabel(recNum, source, sizeof(source));
     g.fillRect(0, 0, 72, 18, COL_BG);
-    drawDseg14TextScaled(g, 4, 1, source, COL_GREEN, 1);
+    drawDseg14TextScaled(g, 4, 1, source, recAccentColor(), 1);
   }
 
   if (g_scaleMode && kind == 1) drawPerfHudScaleDetails(g, key);
@@ -2969,7 +3419,7 @@ static void drawPerfHudKey(m5gfx::M5GFX &g, char key, int recNum) {
   int labelY = (g_scaleMode && kind == 1) ? 42 : 34;
   if (g_scaleMode && kind == 1) g.fillRect(70, 26, 100, 42, COL_BG);
   else g.fillRect(30, 26, 180, 48, COL_BG);
-  drawDseg14TextScaled(g, x, labelY, label, COL_GREEN, labelScale);
+  drawDseg14TextScaled(g, x, labelY, label, recAccentColor(), labelScale);
 
   g_perfHudLastKey = key;
 }
@@ -2991,12 +3441,19 @@ int playbackScreen(const char *path, int recNum, int prevRec, int nextRec) {
   if (!f) { SD.end(); showMsg("鎾斁", "鎵撲笉寮€鏂囦欢", COL_RED); return R_LIST; }
   uint32_t total = f.size();
   if (total <= 44) { f.close(); SD.end(); showMsg("鎾斁", "鏂囦欢涓虹┖", COL_RED); return R_LIST; }
-  uint32_t dataSize = playableWavDataBytes(f);
-  if (dataSize == 0) { f.close(); SD.end(); showMsg("鎾斁", "鏂囦欢鏃犳晥", COL_RED); return R_LIST; }
-  uint32_t sourceRate = wavSampleRate(f);
+  WavInfo wav;
+  if (!parseWavInfo(f, wav)) {
+    const char *err = wav.error ? wav.error : "BAD WAV";
+    f.close(); SD.end(); showMsg("PLAY", err, COL_RED); return R_LIST;
+  }
+  uint32_t dataSize = wav.dataBytes;
+  uint32_t sourceRate = wav.sampleRate;
+  const uint16_t wavChannels = wav.channels;
+  const uint16_t wavBlockAlign = wav.blockAlign;
+  const bool wavStereo = wavChannels == 2;
   float shortcutRootSemis = activeShortcutSemis();
   uint32_t playbackRate = shortcutPlaybackRate(sourceRate, isHotkeyPlayback);
-  bool hotkeyShortBoost = isHotkeyPlayback && dataSize < (REC_RATE * 2);
+  bool hotkeyShortBoost = isHotkeyPlayback && dataSize < (sourceRate * wavBlockAlign);
   bool pitchBendEnabled = beginShortcutPitchBend(isHotkeyPlayback);
   bool hotkeyPerfMode = isHotkeyPlayback;
   char perfHudKey = g_perfHudPendingKey;
@@ -3004,7 +3461,7 @@ int playbackScreen(const char *path, int recNum, int prevRec, int nextRec) {
   if (!perfHudKey) perfHudKey = pressedBindKey();
   if (!perfHudKey) perfHudKey = hotkeyOf(recNum);
   if (!hotkeyPerfMode) g_perfHudVisible = false;
-  f.seek(44);
+  f.seek(wav.dataOffset);
   memset(waveBars, 0, sizeof(waveBars));
   memset(waveBarCounts, 0, sizeof(waveBarCounts));
   memset(playbackLiveWave, 0, sizeof(playbackLiveWave));
@@ -3027,34 +3484,25 @@ int playbackScreen(const char *path, int recNum, int prevRec, int nextRec) {
     if (hotkeyPerfMode) return;
     // 鏂囦欢缂栧彿 (宸︿笂灏忓瓧)
     char title[16];
-    snprintf(title, sizeof(title), "REC_%04d", recNum);
+    if (isMusicRec(recNum)) musicListLabel(recNum, title, sizeof(title));
+    else snprintf(title, sizeof(title), "REC_%04d", recNum);
     char hk = hotkeyOf(recNum);
     if (useSprite) {
       cv.fillScreen(COL_BG);
-      drawStatusTitleNoLine(cv, title, hk ? COL_DIM : COL_GREEN);
+      drawStatusTitleNoLine(cv, title, hk ? recDimColor() : recAccentColor());
       if (hk) {
         char keyLabel[8];
         snprintf(keyLabel, sizeof(keyLabel), "K:%c", dispKey(hk));
-        drawDseg14Text(cv, dseg14TextWidth(title) + 10, 1, keyLabel, COL_GREEN);
-      }
-      drawDseg14Text(cv, CONTENT_W - dseg14TextWidth(shortcutGroupLabel()) - 4, 1, shortcutGroupLabel(), COL_DIM);
-      if (isHotkeyPlayback && g_shortcutKeyRoot != 'C') {
-        int rootX = CONTENT_W - dseg14TextWidth(shortcutGroupLabel()) - dseg14TextWidth(shortcutKeyRootLabel()) - 12;
-        drawDseg14Text(cv, rootX, 1, shortcutKeyRootLabel(), COL_DIM);
+        drawDseg14Text(cv, dseg14TextWidth(title) + 10, 1, keyLabel, recAccentColor());
       }
       cv.drawFastHLine(0, WAVE_BOT + 1, CONTENT_W, 0x0820);
     } else {
       d.fillScreen(COL_BG);
-      drawStatusTitleNoLine(d, title, hk ? COL_DIM : COL_GREEN);
+      drawStatusTitleNoLine(d, title, hk ? recDimColor() : recAccentColor());
       if (hk) {
         char keyLabel[8];
         snprintf(keyLabel, sizeof(keyLabel), "K:%c", dispKey(hk));
-        drawDseg14Text(d, dseg14TextWidth(title) + 10, 1, keyLabel, COL_GREEN);
-      }
-      drawDseg14Text(d, CONTENT_W - dseg14TextWidth(shortcutGroupLabel()) - 4, 1, shortcutGroupLabel(), COL_DIM);
-      if (isHotkeyPlayback && g_shortcutKeyRoot != 'C') {
-        int rootX = CONTENT_W - dseg14TextWidth(shortcutGroupLabel()) - dseg14TextWidth(shortcutKeyRootLabel()) - 12;
-        drawDseg14Text(d, rootX, 1, shortcutKeyRootLabel(), COL_DIM);
+        drawDseg14Text(d, dseg14TextWidth(title) + 10, 1, keyLabel, recAccentColor());
       }
       d.drawFastHLine(0, WAVE_BOT + 1, CONTENT_W, 0x0820);
     }
@@ -3079,6 +3527,7 @@ int playbackScreen(const char *path, int recNum, int prevRec, int nextRec) {
       (void)liveN;
       return;
     }
+    uint32_t chromeSec = durationFromPcm(played, sourceRate, wavChannels);
     if (useWaveSprite) {
       if (liveWave && liveN > 0) {
         if (liveN > PB_N) liveN = PB_N;
@@ -3089,7 +3538,6 @@ int playbackScreen(const char *path, int recNum, int prevRec, int nextRec) {
       drawPlaybackWaveCanvas(waveCv, played, dataSize, visualWave, playbackVisualN);
       waveCv.pushSprite(0, WAVE_TOP);
       uint32_t held = deleteHeldMs();
-      uint32_t chromeSec = (played / 2) / REC_RATE;
       uint32_t heldBucket = held / 60;
       if (chromeSec != lastPbChromeSec || heldBucket != lastPbChromeHeldBucket) {
         if (useBottomSprite) {
@@ -3107,7 +3555,6 @@ int playbackScreen(const char *path, int recNum, int prevRec, int nextRec) {
     } else {
       drawPlaybackWaveDirect(d, played, dataSize, liveWave, liveN);
       uint32_t held = deleteHeldMs();
-      uint32_t chromeSec = (played / 2) / REC_RATE;
       uint32_t heldBucket = held / 60;
       if (chromeSec != lastPbChromeSec || heldBucket != lastPbChromeHeldBucket) {
         drawPlaybackChrome(d, played, dataSize, held);
@@ -3123,7 +3570,7 @@ int playbackScreen(const char *path, int recNum, int prevRec, int nextRec) {
   uint32_t lastSeek = 0;
   uint32_t lastPreviewDraw = 0;
   uint32_t lastProgressDraw = 0;
-  uint32_t playbackEdgeFadeBytes = PLAYBACK_EDGE_FADE_BYTES;
+  uint32_t playbackEdgeFadeBytes = sourceRate * wavBlockAlign * 80 / 1000;
   uint32_t fadeBytesLeft = playbackEdgeFadeBytes;
   int32_t pbDc = 0;
   int32_t cassetteLp = 0;
@@ -3210,7 +3657,7 @@ int playbackScreen(const char *path, int recNum, int prevRec, int nextRec) {
       if (handleFastPlaybackKey()) break;
       if (keyDel()) {
         if (isHotkeyPlayback) {
-          drawPlaybackAction(cv, "STOP", COL_DIM);
+          drawPlaybackAction(cv, "STOP", recDimColor());
           ret = R_LIST;
           stop = true;
           waitRelease();
@@ -3226,23 +3673,23 @@ int playbackScreen(const char *path, int recNum, int prevRec, int nextRec) {
           clearPlaybackDeleteChrome(d);
           lastPbChromeHeldBucket = 0xFFFFFFFFUL;
         }
-        drawPlaybackAction(cv, "BACK", COL_DIM);
+        drawPlaybackAction(cv, "BACK", recDimColor());
         ret = R_LIST; stop = true;                         // 閫€鏍肩煭鎸?鍥炰笂涓€灞?
       }
       if (stop) break;
 
       if (M5Cardputer.Keyboard.isChange() && M5Cardputer.Keyboard.isPressed()) {
-        if (keyRollback()) { drawPlaybackAction(cv, "ROLL", COL_GREEN); ret = R_ROLLBACK; stop = true; waitRelease(); break; }
+        if (keyRollback()) { drawPlaybackAction(cv, "ROLL", recAccentColor()); ret = R_ROLLBACK; stop = true; waitRelease(); break; }
         if (handleScaleModeChord()) {
-          drawPlaybackAction(cv, g_scaleMode ? "SCALE" : "NORM", g_scaleMode ? COL_GREEN : COL_DIM);
+          drawPlaybackAction(cv, g_scaleMode ? "SCALE" : "NORM", g_scaleMode ? recAccentColor() : recDimColor());
           waitRelease();
         }
         else if (handleShortcutGroupChord()) {
-          drawPlaybackAction(cv, shortcutGroupLabel(), COL_GREEN);
+          drawPlaybackAction(cv, shortcutGroupLabel(), recAccentColor());
           waitRelease();
         }
         else if (handleShortcutKeyRootChord()) {
-          drawPlaybackAction(cv, shortcutKeyRootLabel(), COL_GREEN);
+          drawPlaybackAction(cv, shortcutKeyRootLabel(), recAccentColor());
           waitRelease();
         }
         else {
@@ -3271,7 +3718,7 @@ int playbackScreen(const char *path, int recNum, int prevRec, int nextRec) {
                 ret = R_PLAY;
                 stop = true;
               } else {
-                drawPlaybackAction(cv, "NO SMP", COL_DIM);
+                drawPlaybackAction(cv, "NO SMP", recDimColor());
                 waitRelease();
               }
             }
@@ -3280,22 +3727,22 @@ int playbackScreen(const char *path, int recNum, int prevRec, int nextRec) {
         }
         int hk = pressedHotkeyRec();
         if (hk > 0) {
-          drawPlaybackAction(cv, "PLAY", COL_GREEN);
+          drawPlaybackAction(cv, "PLAY", recAccentColor());
           g_seamlessHotkeySwitch = true;
           g_listMode = REC_SHORTCUT;
           g_perfHudPendingKey = pressedBindKey();
           g_nextPlay = hk; ret = R_PLAY; stop = true;
         }   // 鎸夊埌鍒殑缁戝畾閿?绔嬪埢瑕嗙洊鎾斁
-        else if (keyEsc()) { drawPlaybackAction(cv, "SLEEP", COL_DIM); ret = R_BACK; stop = true; }       // Esc=鎭睆
+        else if (keyEsc()) { drawPlaybackAction(cv, "SLEEP", recDimColor()); ret = R_BACK; stop = true; }       // Esc=鎭睆
         else if (keySpace()) { drawPlaybackAction(cv, "REC", COL_RED); ret = R_RECORD; stop = true; }   // 绌烘牸=鍘诲綍闊?
-        else if (keyUp() && prevRec > 0) { drawPlaybackAction(cv, "PREV", COL_GREEN); speakerQuietFlush(6); g_nextPlay = prevRec; ret = R_PLAY; stop = true; }
-        else if (keyDown() && nextRec > 0) { drawPlaybackAction(cv, "NEXT", COL_GREEN); speakerQuietFlush(6); g_nextPlay = nextRec; ret = R_PLAY; stop = true; }
+        else if (keyUp() && prevRec > 0) { drawPlaybackAction(cv, "PREV", recAccentColor()); speakerQuietFlush(6); g_nextPlay = prevRec; ret = R_PLAY; stop = true; }
+        else if (keyDown() && nextRec > 0) { drawPlaybackAction(cv, "NEXT", recAccentColor()); speakerQuietFlush(6); g_nextPlay = nextRec; ret = R_PLAY; stop = true; }
         else if (keyFn() && keyUpload()) {
           uint8_t status = UPSTAT_IDLE;
           bool cancelled = uploadCancelMounted(recNum);
           if (cancelled) status = UPSTAT_ABORTED;
           g_uploadStatus = status;
-          drawPlaybackAction(cv, cancelled ? "ABORT" : (status == UPSTAT_NO_SD ? "NO SD" : "NO WT"), cancelled ? COL_GREEN : COL_DIM);
+          drawPlaybackAction(cv, cancelled ? "ABORT" : (status == UPSTAT_NO_SD ? "NO SD" : "NO WT"), cancelled ? recAccentColor() : recDimColor());
         }
         else if (keyUpload()) {
           uint8_t status = UPSTAT_IDLE;
@@ -3314,7 +3761,7 @@ int playbackScreen(const char *path, int recNum, int prevRec, int nextRec) {
             }
           }
           g_uploadStatus = status;
-          drawPlaybackAction(cv, uploadStatusLabel(status), (status == UPSTAT_QUEUED || status == UPSTAT_DONE) ? COL_GREEN : COL_RED);
+          drawPlaybackAction(cv, uploadStatusLabel(status), (status == UPSTAT_QUEUED || status == UPSTAT_DONE) ? recAccentColor() : COL_RED);
         }
         else if (keyEnter()) {
           paused = !paused;
@@ -3322,42 +3769,49 @@ int playbackScreen(const char *path, int recNum, int prevRec, int nextRec) {
           else fadeInPlaybackVolumeForRec(recNum);
           drawProgress(played);
           lastProgressDraw = millis();
-          drawPlaybackAction(cv, paused ? "PAUSE" : "PLAY", paused ? COL_DIM : COL_GREEN);
+          drawPlaybackAction(cv, paused ? "PAUSE" : "PLAY", paused ? recDimColor() : recAccentColor());
           waitRelease();
         }
         else if (keyVolUp()) {
           if (keyAlt()) {
             adjustRecVolumeDelta(recNum, 1);
             applyPlaybackVolumeForRec(recNum);
-            drawPlaybackAction(cv, "V+", COL_GREEN);
+            drawPlaybackAction(cv, "V+", recAccentColor());
           } else {
             adjustPlayVolume(25);
             applyPlaybackVolumeForRec(recNum);
-            if (useSprite) drawCanvasVolumeToast(cv, COL_GREEN);
-            else drawVolumeToast(COL_GREEN);
+            if (useSprite) drawCanvasVolumeToast(cv, recAccentColor());
+            else drawVolumeToast(recAccentColor());
           }
         }
         else if (keyVolDn()) {
           if (keyAlt()) {
             adjustRecVolumeDelta(recNum, -1);
             applyPlaybackVolumeForRec(recNum);
-            drawPlaybackAction(cv, "V-", COL_GREEN);
+            drawPlaybackAction(cv, "V-", recAccentColor());
           } else {
             adjustPlayVolume(-25);
             applyPlaybackVolumeForRec(recNum);
-            if (useSprite) drawCanvasVolumeToast(cv, COL_GREEN);
-            else drawVolumeToast(COL_GREEN);
+            if (useSprite) drawCanvasVolumeToast(cv, recAccentColor());
+            else drawVolumeToast(recAccentColor());
           }
+        }
+        else if (keyFn() && (keyBrightUp() || keyBrightDn())) {
+          cycleRecAccent(keyBrightUp() ? 1 : -1);
+          saveRecAccentState();
+          drawProgress(played);
+          drawPlaybackAction(cv, "COLOR", recAccentColor());
+          waitRelease();
         }
         else if (keyBrightUp()) {
           adjustBrightness(1);
-          if (useSprite) drawCanvasBrightnessToast(cv, COL_GREEN);
-          else drawBrightnessToast(COL_GREEN);
+          if (useSprite) drawCanvasBrightnessToast(cv, recAccentColor());
+          else drawBrightnessToast(recAccentColor());
         }
         else if (keyBrightDn()) {
           adjustBrightness(-1);
-          if (useSprite) drawCanvasBrightnessToast(cv, COL_GREEN);
-          else drawBrightnessToast(COL_GREEN);
+          if (useSprite) drawCanvasBrightnessToast(cv, recAccentColor());
+          else drawBrightnessToast(recAccentColor());
         }
         }
       }
@@ -3370,12 +3824,12 @@ int playbackScreen(const char *path, int recNum, int prevRec, int nextRec) {
     if ((seekLeft || seekRight) && millis() - lastSeek > 120) {
       lastSeek = millis();
       speakerSetVolume(0);
-      uint32_t step = REC_RATE * 2;  // 绾?1 绉?PCM 鏁版嵁
+      uint32_t step = sourceRate * wavBlockAlign;  // about one second of PCM data
       if (seekLeft) played = (played > step) ? (played - step) : 0;
       if (seekRight) played = (played + step < dataSize) ? (played + step) : dataSize;
-      played &= ~1U;
+      played -= played % wavBlockAlign;
       remaining = dataSize - played;
-      f.seek(44 + played);
+      f.seek(wav.dataOffset + played);
       playbackVisualN = 0;
       memset(playbackLiveWave, 0, sizeof(playbackLiveWave));
       playbackEdgeFadeBytes = PLAYBACK_EDGE_FADE_BYTES;
@@ -3424,7 +3878,7 @@ int playbackScreen(const char *path, int recNum, int prevRec, int nextRec) {
       uint32_t now = millis();
       if (now - lastPreviewDraw > pbFrameMs) {
         lastPreviewDraw = now;
-        previewPlaybackWaveStep(f, dataSize, previewBar, 1);
+        previewPlaybackWaveStep(f, wav.dataOffset, dataSize, wavBlockAlign, previewBar, 1);
         drawProgress(played);
         lastProgressDraw = lastPreviewDraw;
       }
@@ -3432,7 +3886,12 @@ int playbackScreen(const char *path, int recNum, int prevRec, int nextRec) {
       continue;
     }
     size_t want = remaining < sizeof(pbBuf[pi]) ? remaining : sizeof(pbBuf[pi]);
+    want -= want % wavBlockAlign;
+    if (want == 0) { remaining = 0; continue; }
+    if (!f.seek(wav.dataOffset + played)) { remaining = 0; continue; }
     int got = f.read((uint8_t *)pbBuf[pi], want);
+    if (got <= 0) { remaining = 0; continue; }
+    got -= got % wavBlockAlign;
     if (got <= 0) { remaining = 0; continue; }
     remaining -= got;
     int16_t *liveWave = pbBuf[pi];
@@ -3445,28 +3904,28 @@ int playbackScreen(const char *path, int recNum, int prevRec, int nextRec) {
       playbackRate = shortcutRateForSemis(sourceRate, shortcutRootSemis);
     }
     uint32_t livePlaybackRate = shortcutMotionRate(playbackRate, pitchBendEnabled);
-    for (size_t i = 0; i < liveN; i++) {
-      int32_t raw = liveWave[i];
-      pbDc += (raw - pbDc) >> 8;
-      int32_t sample = raw - pbDc;
-      int32_t gain = 256;
-      if (fadeBytesLeft > 0) {
-        uint32_t done = playbackEdgeFadeBytes - fadeBytesLeft;
-        int32_t inGain = (int32_t)(done * 256 / playbackEdgeFadeBytes);
-        if (inGain < gain) gain = inGain;
-        fadeBytesLeft = (fadeBytesLeft > 2) ? (fadeBytesLeft - 2) : 0;
-      }
-      uint32_t sampleByte = chunkStart + (uint32_t)i * 2;
-      uint32_t bytesToEnd = (sampleByte < dataSize) ? (dataSize - sampleByte) : 0;
-      if (bytesToEnd < playbackEdgeFadeBytes) {
-        int32_t outGain = (int32_t)(bytesToEnd * 256 / playbackEdgeFadeBytes);
-        if (outGain < gain) gain = outGain;
-      }
-      if (pitchBendEnabled && g_shortcutTailGain < 0.995f) {
-        gain = (int32_t)((float)gain * g_shortcutTailGain);
-      }
-      sample = (sample * gain) >> 8;
-      if (isHotkeyPlayback) {
+    if (isHotkeyPlayback) {
+      for (size_t i = 0; i < liveN; i++) {
+        int32_t raw = liveWave[i];
+        pbDc += (raw - pbDc) >> 8;
+        int32_t sample = raw - pbDc;
+        int32_t gain = 256;
+        if (fadeBytesLeft > 0) {
+          uint32_t done = playbackEdgeFadeBytes - fadeBytesLeft;
+          int32_t inGain = (int32_t)(done * 256 / playbackEdgeFadeBytes);
+          if (inGain < gain) gain = inGain;
+          fadeBytesLeft = (fadeBytesLeft > 2) ? (fadeBytesLeft - 2) : 0;
+        }
+        uint32_t sampleByte = chunkStart + (uint32_t)i * 2;
+        uint32_t bytesToEnd = (sampleByte < dataSize) ? (dataSize - sampleByte) : 0;
+        if (bytesToEnd < playbackEdgeFadeBytes) {
+          int32_t outGain = (int32_t)(bytesToEnd * 256 / playbackEdgeFadeBytes);
+          if (outGain < gain) gain = outGain;
+        }
+        if (pitchBendEnabled && g_shortcutTailGain < 0.995f) {
+          gain = (int32_t)((float)gain * g_shortcutTailGain);
+        }
+        sample = (sample * gain) >> 8;
         cassetteLp += (sample - cassetteLp) >> 3;
         sample = (sample * 7 + cassetteLp) >> 3;
         int32_t drive = sample + (sample >> 4);
@@ -3474,20 +3933,20 @@ int playbackScreen(const char *path, int recNum, int prevRec, int nextRec) {
         if (drive > 30000) drive = 30000 + ((drive - 30000) >> 3);
         if (drive < -30000) drive = -30000 + ((drive + 30000) >> 3);
         sample = drive;
+        if (shiftedShortcutKey) {
+          keySizzleLp += (sample - keySizzleLp) >> 2;
+          int32_t hi = sample - keySizzleLp;
+          int32_t diff = abs((int)(sample - keySizzlePrev));
+          int32_t hiMixQ8 = diff > 4200 ? 150 : (diff > 2600 ? 184 : 218);
+          sample = keySizzleLp + ((hi * hiMixQ8) >> 8);
+          keySizzlePrev = sample;
+        }
+        if (sample > 32767) sample = 32767;
+        if (sample < -32768) sample = -32768;
+        liveWave[i] = (int16_t)sample;
       }
-      if (shiftedShortcutKey) {
-        keySizzleLp += (sample - keySizzleLp) >> 2;
-        int32_t hi = sample - keySizzleLp;
-        int32_t diff = abs((int)(sample - keySizzlePrev));
-        int32_t hiMixQ8 = diff > 4200 ? 150 : (diff > 2600 ? 184 : 218);
-        sample = keySizzleLp + ((hi * hiMixQ8) >> 8);
-        keySizzlePrev = sample;
-      }
-      if (sample > 32767) sample = 32767;
-      if (sample < -32768) sample = -32768;
-      liveWave[i] = (int16_t)sample;
     }
-    M5Cardputer.Speaker.playRaw(liveWave, liveN, livePlaybackRate, false, 1, 0, false);
+    M5Cardputer.Speaker.playRaw(liveWave, liveN, livePlaybackRate, wavStereo, 1, 0, false);
     pi ^= 1;
     played += got;
     uint32_t now = millis();
@@ -3540,7 +3999,7 @@ int playFlow(int recNum) {
         if (idx + 1 < recCount) nextRec = recList[idx + 1];
       }
     }
-    char p[40]; recordingPathForRec(recNum, p, sizeof(p));
+    char p[128]; recordingPathForRec(recNum, p, sizeof(p));
     int r = playbackScreen(p, recNum, prevRec, nextRec);
     if (r == R_PLAY) { recNum = g_nextPlay; continue; }
     if (r == R_DELETE) { g_listReturnRec = 0; deleteRecording(recNum); return R_LIST; }
@@ -3559,7 +4018,7 @@ void afterRecordingFlow(int recNum) {
   if (action == R_BACK) return;
   while (recNum > 0) {
     if (action == R_NOISE) {
-      char p[40]; recordingPathForRec(recNum, p, sizeof(p));
+      char p[128]; recordingPathForRec(recNum, p, sizeof(p));
       noiseReduce(p);
       action = R_LIST;
       continue;
@@ -3757,7 +4216,7 @@ static bool uploadReadFirstJob(int &recNum, uint8_t &kind) {
     if (!line[0]) continue;
     int k = 0;
     if (sscanf(line, "%d %d", &recNum, &k) >= 1 && recNum > 0) {
-      if (k >= REC_NORMAL && k <= REC_IMPORTANT) kind = (uint8_t)k;
+      if (k >= REC_NORMAL && k < REC_KIND_COUNT) kind = (uint8_t)k;
       f.close();
       return true;
     }
@@ -4329,7 +4788,7 @@ static bool uploadOneJobMounted() {
   if (!uploadReadFirstJob(recNum, kind)) return false;
   g_uploadActiveRec = recNum;
   g_uploadStatus = UPSTAT_UPLOADING;
-  char path[40];
+  char path[128];
   uint8_t currentKind = recKindOf(recNum);
   recordingPathKind(recNum, currentKind, path, sizeof(path));
   if (!SD.exists(path) && currentKind != kind) recordingPathKind(recNum, kind, path, sizeof(path));
@@ -4517,7 +4976,7 @@ static bool uploadQueuedJobsMounted(uint8_t maxJobs = 1, uint32_t budgetMs = 900
     if (g_uploadModeVisible && uploadReadFirstJob(nextRec, nextKind)) {
       g_uploadActiveRec = nextRec;
       g_uploadStatus = UPSTAT_UPLOADING;
-      drawUploadMode("GO", COL_GREEN);
+      drawUploadMode("GO", recAccentColor());
     }
     bool oneChanged = uploadOneJobMounted();
     if (!oneChanged) break;
@@ -4557,29 +5016,35 @@ static uint8_t uploadQueueCountMounted() {
 
 static void drawUploadMode(const char *status, uint16_t col) {
   auto &d = M5Cardputer.Display;
+  uint16_t accent = (col == COL_RED) ? COL_RED : recAccentColor();
   d.fillScreen(COL_BG);
-  drawHeader("UPLOAD");
-  FONT_TIMER(d);
-  d.setTextColor(col, COL_BG);
-  d.setCursor(18, 42);
-  d.print(status);
+  drawStatusTitleNoLine(d, "UPLOAD", accent);
+  d.drawFastHLine(0, WAVE_TOP - 1, CONTENT_W, recAxisColor());
+
+  int statusScale = strlen(status) > 6 ? 1 : 2;
+  int statusW = dseg14TextWidthScaled(status, statusScale);
+  int statusX = (CONTENT_W - statusW) / 2;
+  if (statusX < 4) statusX = 4;
+  drawDseg14TextScaled(d, statusX, 42, status, accent, statusScale);
+
+  int infoY = 82;
+  if (g_uploadActiveRec > 0) {
+    char rec[16];
+    snprintf(rec, sizeof(rec), "REC%04d", g_uploadActiveRec);
+    drawDseg14Text(d, 4, infoY, rec, recAccentColor());
+  }
   if (g_uploadBatchTotal > 0) {
     char progress[16];
     uint8_t current = g_uploadBatchDone;
     if (strcmp(status, "GO") == 0 && current < g_uploadBatchTotal) current++;
     snprintf(progress, sizeof(progress), "%02u/%02u", (unsigned)current, (unsigned)g_uploadBatchTotal);
-    d.setCursor(96, 42);
-    d.print(progress);
+    drawDseg14Text(d, CONTENT_W - dseg14TextWidth(progress) - 4, infoY, progress, recDimColor());
   }
-  if (g_uploadActiveRec > 0) {
-    char rec[16];
-    snprintf(rec, sizeof(rec), "REC_%04d", g_uploadActiveRec);
-    FONT_ASCII(d);
-    d.setTextColor(COL_DIM, COL_BG);
-    d.setCursor(54, 78);
-    d.print(rec);
-  }
-  drawFooter("SPC REC  ENT LIST  ESC SLEEP");
+
+  d.drawFastHLine(0, 113, CONTENT_W, recAxisColor());
+  drawDseg14Text(d, 4, 116, "SPC REC", recDimColor());
+  drawDseg14Text(d, 94, 116, "ENT LIST", recDimColor());
+  drawDseg14Text(d, CONTENT_W - dseg14TextWidth("ESC") - 4, 116, "ESC", recDimColor());
 }
 
 static bool runUploadBatchMounted(bool visible) {
@@ -4607,7 +5072,7 @@ static bool runUploadBatchMounted(bool visible) {
     g_uploadActiveRec = 0;
     g_uploadStatus = UPSTAT_IDLE;
     SD.end();
-    if (visible) drawUploadMode("NO WT", COL_DIM);
+    if (visible) drawUploadMode("NO WT", recDimColor());
     g_uploadModeActive = false;
     g_uploadModeIgnoreKeys = false;
     return false;
@@ -4616,7 +5081,7 @@ static bool runUploadBatchMounted(bool visible) {
   g_uploadActiveAnnounced = visible;
   g_uploadActiveRec = firstRec;
   g_uploadStatus = UPSTAT_UPLOADING;
-  if (g_uploadModeVisible) drawUploadMode("GO", COL_GREEN);
+  if (g_uploadModeVisible) drawUploadMode("GO", recAccentColor());
   bool changed = uploadQueuedJobsMounted(UPLOAD_BATCH_MAX_JOBS, UPLOAD_BATCH_BUDGET_MS);
   int nextRec = 0;
   bool hasNext = uploadQueueHasJobMounted(&nextRec);
@@ -4624,12 +5089,12 @@ static bool runUploadBatchMounted(bool visible) {
   g_uploadActiveRec = hasNext ? nextRec : 0;
   if (hasNext) {
     g_uploadStatus = UPSTAT_QUEUED;
-    if (g_uploadModeVisible) drawUploadMode("WT", COL_GREEN);
+    if (g_uploadModeVisible) drawUploadMode("WT", recAccentColor());
   } else if (changed && g_uploadStatus == UPSTAT_UPLOADING) {
     g_uploadStatus = UPSTAT_DONE;
-    if (g_uploadModeVisible) drawUploadMode("OKK", COL_GREEN);
+    if (g_uploadModeVisible) drawUploadMode("OKK", recAccentColor());
   } else if (g_uploadModeVisible) {
-    drawUploadMode(uploadStatusLabel(g_uploadStatus), (g_uploadStatus == UPSTAT_DONE || g_uploadStatus == UPSTAT_QUEUED) ? COL_GREEN : COL_RED);
+    drawUploadMode(uploadStatusLabel(g_uploadStatus), (g_uploadStatus == UPSTAT_DONE || g_uploadStatus == UPSTAT_QUEUED) ? recAccentColor() : COL_RED);
   }
   SD.end();
   g_uploadModeActive = false;
@@ -4733,7 +5198,7 @@ static bool cleanFrictionForRec(int recNum, bool abortOnKey) {
   if (recNum <= 0) return false;
   if (frictionDone(recNum)) return true;
   if (!sdMount()) return false;
-  char p[40];
+  char p[128];
   recordingPathForRec(recNum, p, sizeof(p));
   File f = SD.open(p, FILE_READ);
   if (!f || f.size() <= 44) { if (f) f.close(); SD.end(); return false; }
@@ -4862,10 +5327,10 @@ void noiseReduce(const char *path) {
     if (processed - lastP > 16384) {
       lastP = processed;
       d.fillRect(0, 36, d.width(), 22, COL_BG);
-      d.setTextColor(COL_GREEN, COL_BG);
+      d.setTextColor(recAccentColor(), COL_BG);
       char pctBuf[8];
       snprintf(pctBuf, sizeof(pctBuf), "%d%%", (int)((uint64_t)processed * 100 / dataBytes));
-      drawDseg14Text(d, 8, 38, pctBuf, COL_GREEN);
+      drawDseg14Text(d, 8, 38, pctBuf, recAccentColor());
     }
   }
   writeWavHeader(out, REC_RATE, outBytes);
@@ -4884,7 +5349,7 @@ void drawRecCanvas(M5Canvas &cv, uint32_t elapsedMs, bool blink, int16_t *wave, 
 
   // 鈹€鈹€ 椤舵爮 鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€
   const char *status = ready ? "READY" : (paused ? "PAUSE" : "REC");
-  uint16_t statusCol = (ready || paused) ? COL_DIM : COL_GREEN;
+  uint16_t statusCol = (ready || paused) ? recDimColor() : recAccentColor();
   drawStatusTitleNoLine(cv, status, statusCol);
   if (!ready && !paused) {
     if (blink) cv.fillCircle(48, 9, 5, COL_RED);
@@ -4893,19 +5358,19 @@ void drawRecCanvas(M5Canvas &cv, uint32_t elapsedMs, bool blink, int16_t *wave, 
   // 鐢甸噺 (浜豢, 榛戝簳纭繚鍙)
 
   // 鈹€鈹€ A绾? 婊氬姩鍘嗗彶 (涓婂崐鍖? 涓酱 y=39) 鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€
-  cv.drawFastHLine(0, A_CY, CONTENT_W, 0x0440);
+  cv.drawFastHLine(0, A_CY, CONTENT_W, recAxisColor());
   drawTrackBars(cv);
 
   // 鈹€鈹€ B绾? 瀹炴椂绀烘尝鍣?(涓嬪崐鍖? 涓酱 y=85) 鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€
-  cv.drawFastHLine(0, B_CY, CONTENT_W, 0x0440);
+  cv.drawFastHLine(0, B_CY, CONTENT_W, recAxisColor());
   drawLiveWaveVisual(cv, recLiveWave, B_CY);
 
   // 鈹€鈹€ 璁℃椂鍣?(搴曢儴宸︿晶) 鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€
   uint32_t s = elapsedMs / 1000;
-  cv.setTextColor(COL_GREEN, COL_BG);
+  cv.setTextColor(recAccentColor(), COL_BG);
   char recTime[8];
   snprintf(recTime, sizeof(recTime), "%02lu:%02lu", (unsigned long)(s / 60), (unsigned long)(s % 60));
-  drawDseg14Text(cv, 4, WAVE_BOT + 2, recTime, COL_GREEN);
+  drawDseg14Text(cv, 4, WAVE_BOT + 2, recTime, recAccentColor());
   drawDeleteProgress(cv, deleteHeldMs);
 }
 
@@ -4915,49 +5380,49 @@ void drawRecCanvas(m5gfx::M5GFX &g, uint32_t elapsedMs, bool blink, int16_t *wav
   g.fillScreen(COL_BG);
 
   const char *status = ready ? "READY" : (paused ? "PAUSE" : "REC");
-  uint16_t statusCol = (ready || paused) ? COL_DIM : COL_GREEN;
+  uint16_t statusCol = (ready || paused) ? recDimColor() : recAccentColor();
   drawStatusTitleNoLine(g, status, statusCol);
   if (!ready && !paused) {
     if (blink) g.fillCircle(48, 9, 5, COL_RED);
     else g.drawCircle(48, 9, 5, 0x2000);
   }
 
-  g.drawFastHLine(0, A_CY, CONTENT_W, 0x0440);
+  g.drawFastHLine(0, A_CY, CONTENT_W, recAxisColor());
   drawTrackBars(g);
 
-  g.drawFastHLine(0, B_CY, CONTENT_W, 0x0440);
+  g.drawFastHLine(0, B_CY, CONTENT_W, recAxisColor());
   drawLiveWaveVisual(g, recLiveWave, B_CY);
 
   uint32_t s = elapsedMs / 1000;
-  g.setTextColor(COL_GREEN, COL_BG);
+  g.setTextColor(recAccentColor(), COL_BG);
   char recTime[8];
   snprintf(recTime, sizeof(recTime), "%02lu:%02lu", (unsigned long)(s / 60), (unsigned long)(s % 60));
-  drawDseg14Text(g, 4, WAVE_BOT + 2, recTime, COL_GREEN);
+  drawDseg14Text(g, 4, WAVE_BOT + 2, recTime, recAccentColor());
   drawDeleteProgress(g, deleteHeldMs);
 }
 
 static void drawRecWaveCanvas(M5Canvas &cv, int16_t *wave) {
   updateLiveWaveVisual(recLiveWave, wave, REC_N, B_HALF, REC_B_SMOOTH, B_DECAY);
   cv.fillScreen(COL_BG);
-  cv.drawFastHLine(0, A_CY - WAVE_TOP, CONTENT_W, 0x0440);
+  cv.drawFastHLine(0, A_CY - WAVE_TOP, CONTENT_W, recAxisColor());
   drawTrackBarsLocal(cv);
-  cv.drawFastHLine(0, B_CY - WAVE_TOP, CONTENT_W, 0x0440);
+  cv.drawFastHLine(0, B_CY - WAVE_TOP, CONTENT_W, recAxisColor());
   drawLiveWaveVisual(cv, recLiveWave, B_CY - WAVE_TOP);
 }
 
 static void drawRecWaveDirect(m5gfx::M5GFX &g, int16_t *wave) {
   updateLiveWaveVisual(recLiveWave, wave, REC_N, B_HALF, REC_B_SMOOTH, B_DECAY);
   g.fillRect(0, WAVE_TOP, CONTENT_W, WAVE_H, COL_BG);
-  g.drawFastHLine(0, A_CY, CONTENT_W, 0x0440);
+  g.drawFastHLine(0, A_CY, CONTENT_W, recAxisColor());
   drawTrackBars(g);
-  g.drawFastHLine(0, B_CY, CONTENT_W, 0x0440);
+  g.drawFastHLine(0, B_CY, CONTENT_W, recAxisColor());
   drawLiveWaveVisual(g, recLiveWave, B_CY);
 }
 
 static void drawRecChrome(m5gfx::M5GFX &g, uint32_t elapsedMs, bool blink, bool ready = false, bool paused = false, uint32_t deleteHeldMs = 0) {
   if (ready || paused) {
     const char *status = ready ? "READY" : "PAUSE";
-    uint16_t statusCol = COL_DIM;
+    uint16_t statusCol = recDimColor();
     drawStatusTitleNoLine(g, status, statusCol);
   } else {
     g.fillRect(42, 3, 14, 14, COL_BG);
@@ -4969,7 +5434,7 @@ static void drawRecChrome(m5gfx::M5GFX &g, uint32_t elapsedMs, bool blink, bool 
   uint32_t s = elapsedMs / 1000;
   char recTime[8];
   snprintf(recTime, sizeof(recTime), "%02lu:%02lu", (unsigned long)(s / 60), (unsigned long)(s % 60));
-  drawDseg14Text(g, 4, WAVE_BOT + 2, recTime, COL_GREEN);
+  drawDseg14Text(g, 4, WAVE_BOT + 2, recTime, recAccentColor());
   drawDeleteProgress(g, deleteHeldMs);
 }
 
@@ -5022,7 +5487,7 @@ int recordingScreen() {
     uint32_t heldBucket = deleteHeldMs / 60;
     if (forceTop || ready || pausedFrame) {
       const char *status = ready ? "READY" : (pausedFrame ? "PAUSE" : "REC");
-      uint16_t statusCol = (ready || pausedFrame) ? COL_DIM : COL_GREEN;
+      uint16_t statusCol = (ready || pausedFrame) ? recDimColor() : recAccentColor();
       drawStatusTitleNoLine(d, status, statusCol);
       if (!ready && !pausedFrame) {
         d.fillRect(42, 3, 14, 14, COL_BG);
@@ -5043,7 +5508,7 @@ int recordingScreen() {
         uint32_t s = elapsedMs / 1000;
         char recTime[8];
         snprintf(recTime, sizeof(recTime), "%02lu:%02lu", (unsigned long)(s / 60), (unsigned long)(s % 60));
-        drawDseg14Text(d, 4, WAVE_BOT + 2, recTime, COL_GREEN);
+        drawDseg14Text(d, 4, WAVE_BOT + 2, recTime, recAccentColor());
         drawDeleteProgress(d, deleteHeldMs);
       }
     }
@@ -5076,21 +5541,21 @@ int recordingScreen() {
       drawRecChromePartial(elapsedMs, blink, false, false, deleteHeldMs);
     }
   };
-  auto drawRecToast = [&](const char *msg, uint16_t col = COL_GREEN) {
+  auto drawRecToast = [&](const char *msg, uint16_t col = recAccentColor()) {
     if (useSprite) drawCanvasToast(cv, msg, col);
     else drawActionToast(msg, col);
   };
-  auto drawRecVolume = [&](uint16_t col = COL_GREEN) {
+  auto drawRecVolume = [&](uint16_t col = recAccentColor()) {
     if (useSprite) drawCanvasVolumeToast(cv, col);
     else drawVolumeToast(col);
   };
-  auto drawRecBrightness = [&](uint16_t col = COL_GREEN) {
+  auto drawRecBrightness = [&](uint16_t col = recAccentColor()) {
     if (useSprite) drawCanvasBrightnessToast(cv, col);
     else drawBrightnessToast(col);
   };
   auto drawRecSave = [&]() {
     if (useSprite) drawCanvasSaveBadge(cv);
-    else drawActionToast("SAVE", COL_GREEN);
+    else drawActionToast("SAVE", recAccentColor());
   };
   auto cleanupRecSprite = [&]() {
     if (useBottomSprite) bottomCv.deleteSprite();
@@ -5264,16 +5729,17 @@ int recordingScreen() {
         else if (keyTab() && keyUpload()) {
           bool cancelled = uploadCancelMounted();
           g_uploadStatus = cancelled ? UPSTAT_ABORTED : UPSTAT_IDLE;
-          drawRecToast(cancelled ? "ABORT" : "NO WT", cancelled ? COL_GREEN : COL_DIM);
+          drawRecToast(cancelled ? "ABORT" : "NO WT", cancelled ? recAccentColor() : recDimColor());
           waitRelease();
         }
-        else if (keyUpload()) { drawRecToast("WT", COL_GREEN); g_uploadAfterRecord = true; g_afterRecord = R_LIST; stop = true; break; }
+        else if (keyUpload()) { drawRecToast("WT", recAccentColor()); g_uploadAfterRecord = true; g_afterRecord = R_LIST; stop = true; break; }
         else if (keyEnter()) { drawRecSave(); g_afterRecord = R_LIST; stop = true; break; }
-        else if (keyAlt()) { drawRecToast("WAIT", COL_GREEN); g_afterRecord = R_NOISE; stop = true; break; }
-        else if (keyVolUp()) { adjustPlayVolume(25); drawRecVolume(COL_GREEN); waitRelease(); }
-        else if (keyVolDn()) { adjustPlayVolume(-25); drawRecVolume(COL_GREEN); waitRelease(); }
-        else if (keyBrightUp()) { adjustBrightness(1); drawRecBrightness(COL_GREEN); waitRelease(); }
-        else if (keyBrightDn()) { adjustBrightness(-1); drawRecBrightness(COL_GREEN); waitRelease(); }
+        else if (keyAlt()) { drawRecToast("WAIT", recAccentColor()); g_afterRecord = R_NOISE; stop = true; break; }
+        else if (keyFn() && (keyBrightUp() || keyBrightDn())) { cycleRecAccent(keyBrightUp() ? 1 : -1); saveRecAccentState(); drawRecToast("COLOR", recAccentColor()); waitRelease(); }
+        else if (keyVolUp()) { adjustPlayVolume(25); drawRecVolume(recAccentColor()); waitRelease(); }
+        else if (keyVolDn()) { adjustPlayVolume(-25); drawRecVolume(recAccentColor()); waitRelease(); }
+        else if (keyBrightUp()) { adjustBrightness(1); drawRecBrightness(recAccentColor()); waitRelease(); }
+        else if (keyBrightDn()) { adjustBrightness(-1); drawRecBrightness(recAccentColor()); waitRelease(); }
         else if (M5Cardputer.Keyboard.isKeyPressed('w') || M5Cardputer.Keyboard.isKeyPressed('W')) { if (recGain < 200) recGain += 4; }
         else if (M5Cardputer.Keyboard.isKeyPressed('s') || M5Cardputer.Keyboard.isKeyPressed('S')) { if (recGain > 2) recGain -= 4; }
       }
@@ -5351,12 +5817,14 @@ int recordingScreen() {
 // 杩斿洖 R_BACK(閫€鍑哄垪琛ㄥ苟鎭睆) 鎴?R_RECORD(鍘诲綍闊?
 static void deleteRecording(int recNum) {
   if (!sdMount()) return;
-  char p[40];
+  char p[128];
   recordingPathKind(recNum, REC_NORMAL, p, sizeof(p));
   SD.remove(p);
   recordingPathKind(recNum, REC_SHORTCUT, p, sizeof(p));
   SD.remove(p);
   recordingPathKind(recNum, REC_IMPORTANT, p, sizeof(p));
+  SD.remove(p);
+  recordingPathKind(recNum, REC_MUSIC, p, sizeof(p));
   SD.remove(p);
   uploadForgetRecordMounted(recNum);
   if (recVolumeDirty) saveRecVolumeStateMounted();
@@ -5364,6 +5832,7 @@ static void deleteRecording(int recNum) {
   SD.end();
   setShortcutRec(recNum, false);
   setImportantRec(recNum, false);
+  setMusicRec(recNum, false);
   setFrictionDone(recNum, false);
   setFrictionPending(recNum, false);
   setUploadQueued(recNum, false);
@@ -5419,7 +5888,7 @@ static bool confirmDeleteUnmarked() {
   d.setCursor(12, 38);
   d.print("鍒犻櫎鎵€鏈夋櫘閫氬綍闊?");
   FONT_CN_12(d);
-  d.setTextColor(COL_DIM, COL_BG);
+  d.setTextColor(recDimColor(), COL_BG);
   d.setCursor(12, 66);
   d.print("淇濈暀 QCK / IMP");
   drawFooter("Enter OK  Esc Cancel");
@@ -5439,11 +5908,11 @@ static bool confirmNoiseReduce(int recNum) {
   d.fillScreen(COL_BG);
   drawHeader("闄嶅櫔纭");
   FONT_CN_16(d);
-  d.setTextColor(COL_GREEN, COL_BG);
+  d.setTextColor(recAccentColor(), COL_BG);
   d.setCursor(18, 42);
   d.printf("闄嶅櫔 REC_%04d ?", recNum);
   FONT_CN_12(d);
-  d.setTextColor(COL_DIM, COL_BG);
+  d.setTextColor(recDimColor(), COL_BG);
   d.setCursor(18, 66);
   d.print("浼氳鐩栧師鏂囦欢");
   drawFooter("Enter OK  Esc Cancel");
@@ -5461,7 +5930,8 @@ static bool confirmNoiseReduce(int recNum) {
 static bool recVisibleInMode(int recNum, uint8_t mode) {
   if (mode == REC_SHORTCUT) return isShortcutRec(recNum);
   if (mode == REC_IMPORTANT) return isImportantRec(recNum);
-  return !isShortcutRec(recNum) && !isImportantRec(recNum);
+  if (mode == REC_MUSIC) return isMusicRec(recNum);
+  return !isShortcutRec(recNum) && !isImportantRec(recNum) && !isMusicRec(recNum);
 }
 
 static int firstVisibleIndex(uint8_t mode) {
@@ -5499,13 +5969,13 @@ static int nextVisibleIndex(int idx, uint8_t mode) {
 }
 
 static void rememberListSelection(uint8_t mode, int sel) {
-  if (mode > REC_IMPORTANT || sel < 0 || sel >= recCount) return;
+  if (mode >= REC_KIND_COUNT || sel < 0 || sel >= recCount) return;
   int recNum = recList[sel];
   if (recVisibleInMode(recNum, mode)) g_listModeSelectedRec[mode] = recNum;
 }
 
 static int rememberedListIndex(uint8_t mode) {
-  if (mode > REC_IMPORTANT) return -1;
+  if (mode >= REC_KIND_COUNT) return -1;
   int recNum = g_listModeSelectedRec[mode];
   int idx = recListIndexOf(recNum);
   if (idx >= 0 && recVisibleInMode(recNum, mode)) return idx;
@@ -5531,11 +6001,14 @@ int listScreen(int selectIdx) {
   // 绌哄垪琛?
   if (recCount == 0) {
     d.fillScreen(COL_BG);
-    drawBattery();
-    FONT_CN_16(d); d.setTextColor(COL_DIM, COL_BG);
-    d.setCursor(12, 56); d.print("NO REC");
-    FONT_CN_12(d); d.setTextColor(COL_DIM, COL_BG);
-    d.setCursor(4, 120); d.print("绌烘牸褰曢煶  Esc鎭睆");
+    drawStatusTabs(d, g_listMode, 0);
+    FONT_ASCII(d);
+    d.setTextColor(recDimColor(), COL_BG);
+    d.setCursor(28, 58);
+    d.print("EMPTY");
+    drawDseg14Text(d, 4, 118, shortcutGroupLabel(), recAccentColor());
+    if (g_scaleMode) drawDseg14Text(d, 34, 118, "G0", recAccentColor());
+    drawDseg14Text(d, CONTENT_W - dseg14TextWidth("0") - 4, 118, "0", recAccentColor());
     waitRelease();
     uint32_t lastInputMs = millis();
     while (true) {
@@ -5543,10 +6016,12 @@ int listScreen(int selectIdx) {
       if (M5Cardputer.Keyboard.isChange() && M5Cardputer.Keyboard.isPressed()) {
         lastInputMs = millis();
         if (keyRollback()) return R_ROLLBACK;
-        if (keyVolUp()) { adjustPlayVolume(25); drawVolumeToast(COL_GREEN); waitRelease(); continue; }
-        if (keyVolDn()) { adjustPlayVolume(-25); drawVolumeToast(COL_GREEN); waitRelease(); continue; }
-        if (keyBrightUp()) { adjustBrightness(1); drawBrightnessToast(COL_GREEN); waitRelease(); continue; }
-        if (keyBrightDn()) { adjustBrightness(-1); drawBrightnessToast(COL_GREEN); waitRelease(); continue; }
+        if (keyFn() && keyChat()) { inputRecAccentPreset(); waitRelease(); continue; }
+        if (keyFn() && (keyBrightUp() || keyBrightDn())) { cycleRecAccent(keyBrightUp() ? 1 : -1); saveRecAccentState(); drawActionToast("COLOR", recAccentColor()); waitRelease(); continue; }
+        if (keyVolUp()) { adjustPlayVolume(25); drawVolumeToast(recAccentColor()); waitRelease(); continue; }
+        if (keyVolDn()) { adjustPlayVolume(-25); drawVolumeToast(recAccentColor()); waitRelease(); continue; }
+        if (keyBrightUp()) { adjustBrightness(1); drawBrightnessToast(recAccentColor()); waitRelease(); continue; }
+        if (keyBrightDn()) { adjustBrightness(-1); drawBrightnessToast(recAccentColor()); waitRelease(); continue; }
         if (keySpace()) return R_RECORD;
         if (keyEsc())   return R_BACK;
         if (keyDel())   return R_BACK;
@@ -5618,7 +6093,7 @@ int listScreen(int selectIdx) {
 
       // 鍒楄〃琛?
       if (visibleTotal == 0) {
-        d.setTextColor(COL_DIM, COL_BG);
+        d.setTextColor(recDimColor(), COL_BG);
         d.setCursor(28, 58);
         d.print("EMPTY");
       }
@@ -5629,45 +6104,56 @@ int listScreen(int selectIdx) {
         int r = drawn++;
         int y = top + r * rowH;
         bool on = (i == sel);
-        uint16_t bg = on ? 0x0180 : COL_BG;
+        uint16_t bg = on ? recSelectBgColor() : COL_BG;
         if (on) d.fillRect(0, y - 2, CONTENT_W, rowH - 1, bg);
         // 閫変腑娓告爣
-        if (on) { d.setTextColor(COL_GREEN, bg); d.setCursor(2, y); d.print(">"); }
-        d.setTextColor(on ? COL_GREEN : COL_DIM, bg);
-        char recName[8];
-        snprintf(recName, sizeof(recName), "%04d", recList[i]);
-        drawDseg14Text(d, 14, y, recName, on ? COL_GREEN : COL_DIM);
+        if (on) { d.setTextColor(recAccentColor(), bg); d.setCursor(2, y); d.print(">"); }
+        d.setTextColor(on ? recAccentColor() : recDimColor(), bg);
+        char recName[40];
+        if (isMusicRec(recList[i])) {
+          musicDisplayName(recList[i], recName, sizeof(recName));
+          FONT_CN_12(d);
+          d.setTextColor(on ? recAccentColor() : recDimColor(), bg);
+          d.setCursor(14, y + 2);
+          d.print(recName);
+        } else {
+          snprintf(recName, sizeof(recName), "%04d", recList[i]);
+          drawDseg14Text(d, 14, y, recName, on ? recAccentColor() : recDimColor());
+        }
         char hk = hotkeyOf(recList[i]);
         bool imp = isImportantRec(recList[i]);
         if (hk) {
           char keyLabel[8];
           snprintf(keyLabel, sizeof(keyLabel), "K:%c", dispKey(hk));
-          drawDseg14Text(d, tagX, y, keyLabel, on ? COL_GREEN : COL_DIM);
+          drawDseg14Text(d, tagX, y, keyLabel, on ? recAccentColor() : recDimColor());
         } else if (imp) {
-          drawDseg14Text(d, tagX, y, "IMP", on ? COL_GREEN : COL_DIM);
+          drawDseg14Text(d, tagX, y, "IMP", on ? recAccentColor() : recDimColor());
         }
         if (uploadDone(recList[i])) {
-          drawDseg14Text(d, uploadX, y, "OKK", on ? COL_GREEN : COL_DIM);
+          drawDseg14Text(d, uploadX, y, "OKK", on ? recAccentColor() : recDimColor());
         } else if (g_uploadActiveRec == recList[i]) {
-          drawDseg14Text(d, uploadX, y, "GO", on ? COL_GREEN : COL_DIM);
+          drawDseg14Text(d, uploadX, y, "GO", on ? recAccentColor() : recDimColor());
         } else if (uploadPending(recList[i]) || uploadModelErr(recList[i]) || uploadJobErr(recList[i])) {
-          drawDseg14Text(d, uploadX, y, "OKK", on ? COL_GREEN : COL_DIM);
+          drawDseg14Text(d, uploadX, y, "OKK", on ? recAccentColor() : recDimColor());
         } else if (uploadQueued(recList[i])) {
-          drawDseg14Text(d, uploadX, y, "WT", on ? COL_GREEN : COL_DIM);
+          drawDseg14Text(d, uploadX, y, "WT", on ? recAccentColor() : recDimColor());
         }
         char dur[8];
         formatDuration(getRecDuration(recList[i]), dur, sizeof(dur));
-        d.setTextColor(on ? COL_GREEN : COL_DIM, bg);
-        drawDseg14Text(d, durX, y, dur, on ? COL_GREEN : COL_DIM);
-        if (frictionPending(recList[i])) d.drawFastHLine(CONTENT_W - 16, y + 15, 6, on ? COL_GREEN : COL_DIM);
+        d.setTextColor(on ? recAccentColor() : recDimColor(), bg);
+        drawDseg14Text(d, durX, y, dur, on ? recAccentColor() : recDimColor());
+        if (frictionPending(recList[i])) d.drawFastHLine(CONTENT_W - 16, y + 15, 6, on ? recAccentColor() : recDimColor());
       }
       // 鏇村椤圭澶?
-      FONT_CN_12(d); d.setTextColor(COL_DIM, COL_BG);
+      FONT_CN_12(d); d.setTextColor(recDimColor(), COL_BG);
       if (firstOrdinal > 0)                    { d.setCursor(CONTENT_W - 10, top); d.print("^"); }
       if (firstOrdinal + visRows < visibleTotal) { d.setCursor(CONTENT_W - 10, top + (visRows - 1) * rowH); d.print("v"); }
-      // 搴曢儴鎿嶄綔鎻愮ず
-      d.drawFastHLine(0, 120, CONTENT_W, COL_DIM);
-      d.setCursor(4, 122); d.print(";/. SEL Enter PLAY Esc BACK Del DEL");
+      // 搴曢儴快捷组
+      drawDseg14Text(d, 4, 118, shortcutGroupLabel(), recAccentColor());
+      if (g_scaleMode) drawDseg14Text(d, 34, 118, "G0", recAccentColor());
+      char cnt[8];
+      snprintf(cnt, sizeof(cnt), "%d", visibleTotal);
+      drawDseg14Text(d, CONTENT_W - dseg14TextWidth(cnt) - 4, 118, cnt, recAccentColor());
     }
 
     M5Cardputer.update();
@@ -5724,20 +6210,26 @@ int listScreen(int selectIdx) {
     if (M5Cardputer.Keyboard.isChange() && M5Cardputer.Keyboard.isPressed()) {
       lastInputMs = millis();
       if (keyRollback()) { waitRelease(); return R_ROLLBACK; }
+      if (keyFn() && keyChat()) {
+        inputRecAccentPreset();
+        redraw = true;
+        waitRelease();
+        continue;
+      }
       if (handleScaleModeChord()) {
-        drawActionToast(g_scaleMode ? "SCALE" : "NORM", g_scaleMode ? COL_GREEN : COL_DIM);
+        drawActionToast(g_scaleMode ? "SCALE" : "NORM", g_scaleMode ? recAccentColor() : recDimColor());
         redraw = true;
         waitRelease();
         continue;
       }
       if (handleShortcutGroupChord()) {
-        drawActionToast(shortcutGroupLabel(), COL_GREEN);
+        drawActionToast(shortcutGroupLabel(), recAccentColor());
         redraw = true;
         waitRelease();
         continue;
       }
       if (handleShortcutKeyRootChord()) {
-        drawActionToast(shortcutKeyRootLabel(), COL_GREEN);
+        drawActionToast(shortcutKeyRootLabel(), recAccentColor());
         redraw = true;
         waitRelease();
         continue;
@@ -5768,7 +6260,7 @@ int listScreen(int selectIdx) {
             g_nextPlay = recNum;
             return R_PLAY;
           } else {
-            drawActionToast("NO SMP", COL_DIM);
+            drawActionToast("NO SMP", recDimColor());
           }
           redraw = true;
           waitRelease();
@@ -5784,10 +6276,11 @@ int listScreen(int selectIdx) {
         g_nextPlay = hk;
         return R_PLAY;
       }
-      else if (keyVolUp()) { adjustPlayVolume(25); drawVolumeToast(COL_GREEN); waitRelease(); }
-      else if (keyVolDn()) { adjustPlayVolume(-25); drawVolumeToast(COL_GREEN); waitRelease(); }
-      else if (keyBrightUp()) { adjustBrightness(1); drawBrightnessToast(COL_GREEN); waitRelease(); }
-      else if (keyBrightDn()) { adjustBrightness(-1); drawBrightnessToast(COL_GREEN); waitRelease(); }
+      else if (keyFn() && (keyBrightUp() || keyBrightDn())) { cycleRecAccent(keyBrightUp() ? 1 : -1); saveRecAccentState(); drawActionToast("COLOR", recAccentColor()); redraw = true; waitRelease(); }
+      else if (keyVolUp()) { adjustPlayVolume(25); drawVolumeToast(recAccentColor()); waitRelease(); }
+      else if (keyVolDn()) { adjustPlayVolume(-25); drawVolumeToast(recAccentColor()); waitRelease(); }
+      else if (keyBrightUp()) { adjustBrightness(1); drawBrightnessToast(recAccentColor()); waitRelease(); }
+      else if (keyBrightDn()) { adjustBrightness(-1); drawBrightnessToast(recAccentColor()); waitRelease(); }
       else if (keyFn() && keyDel()) {
         if (confirmDeleteUnmarked()) {
           int deleted = deleteUnmarkedRecordings();
@@ -5823,7 +6316,7 @@ int listScreen(int selectIdx) {
             rememberListSelection(g_listMode, sel);
             char msg[8];
             snprintf(msg, sizeof(msg), "TRIM%d", trimTier);
-            drawActionToast(msg, COL_GREEN);
+            drawActionToast(msg, recAccentColor());
           }
           redraw = true; waitRelease();
         }
@@ -5840,13 +6333,13 @@ int listScreen(int selectIdx) {
         }
         if (cancelled) status = UPSTAT_ABORTED;
         g_uploadStatus = status;
-        drawActionToast(cancelled ? "ABORT" : (status == UPSTAT_NO_SD ? uploadStatusLabel(status) : "NO WT"), cancelled ? COL_GREEN : COL_DIM);
+        drawActionToast(cancelled ? "ABORT" : (status == UPSTAT_NO_SD ? uploadStatusLabel(status) : "NO WT"), cancelled ? recAccentColor() : recDimColor());
         redraw = true;
         if (M5Cardputer.Keyboard.isPressed()) waitRelease();
       }
       else if (keyUpload() && sel >= 0) {
         if (uploadModeHoldTriggered()) {
-          drawActionToast("GO", COL_GREEN);
+          drawActionToast("GO", recAccentColor());
           waitRelease();
           runUploadBatchMounted(true);
           if (g_uploadExitRequested) {
@@ -5877,7 +6370,7 @@ int listScreen(int selectIdx) {
             SD.end();
           }
           g_uploadStatus = status;
-          drawActionToast(uploadStatusLabel(status), (status == UPSTAT_QUEUED || status == UPSTAT_DONE) ? COL_GREEN : COL_RED);
+          drawActionToast(uploadStatusLabel(status), (status == UPSTAT_QUEUED || status == UPSTAT_DONE) ? recAccentColor() : COL_RED);
         }
         redraw = true;
         if (M5Cardputer.Keyboard.isPressed()) waitRelease();
@@ -5885,9 +6378,19 @@ int listScreen(int selectIdx) {
       else if (keySpace()) { return R_RECORD; }         // 绌烘牸=鍘诲綍闊?
       else if (keyEsc())   { return R_BACK; }           // Esc=閫€鍑哄垪琛ㄥ苟鎭睆
       else if (keyEsc())   { return R_BACK; }
-      else if (keyLeft())  { rememberListSelection(g_listMode, sel); g_listMode = (g_listMode + 2) % 3; sel = selectIndexForMode(g_listMode, sel); redraw = true; waitRelease(); }
-      else if (keyRight()) { rememberListSelection(g_listMode, sel); g_listMode = (g_listMode + 1) % 3; sel = selectIndexForMode(g_listMode, sel); redraw = true; waitRelease(); }
-      else if (keyUp())    { if (sel >= 0) { sel = prevVisibleIndex(sel, g_listMode); rememberListSelection(g_listMode, sel); } redraw = true; }
+      else if (keyLeft())  { rememberListSelection(g_listMode, sel); g_listMode = (g_listMode + REC_KIND_COUNT - 1) % REC_KIND_COUNT; sel = selectIndexForMode(g_listMode, sel); redraw = true; waitRelease(); }
+      else if (keyRight()) { rememberListSelection(g_listMode, sel); g_listMode = (g_listMode + 1) % REC_KIND_COUNT; sel = selectIndexForMode(g_listMode, sel); redraw = true; waitRelease(); }
+      else if (keyUp())    {
+        if (sel >= 0) {
+          int prev = prevVisibleIndex(sel, g_listMode);
+          if (prev == sel && g_listMode == REC_NORMAL && loadOlderNormalRecordings()) {
+            prev = prevVisibleIndex(sel, g_listMode);
+          }
+          sel = prev;
+          rememberListSelection(g_listMode, sel);
+        }
+        redraw = true;
+      }
       else if (keyDown())  { if (sel >= 0) { sel = nextVisibleIndex(sel, g_listMode); rememberListSelection(g_listMode, sel); } redraw = true; }
       else if (keyEnter() && sel >= 0) {
         rememberListSelection(g_listMode, sel);
@@ -5897,7 +6400,7 @@ int listScreen(int selectIdx) {
       else if (keyAlt() && sel >= 0) {
         int recNum = recList[sel];
         if (confirmNoiseReduce(recNum)) {
-          char p[40]; recordingPathForRec(recNum, p, sizeof(p));
+          char p[128]; recordingPathForRec(recNum, p, sizeof(p));
           noiseReduce(p);
         }
         redraw = true; waitRelease();
@@ -6813,22 +7316,24 @@ static bool downloadHttpToFileMounted(const char *url, const char *path) {
 static bool playWavQuickMounted(const char *path) {
   File f = SD.open(path, FILE_READ);
   if (!f) return false;
-  uint32_t dataBytes = playableWavDataBytes(f);
-  if (!dataBytes || !f.seek(44)) {
+  WavInfo wav;
+  if (!parseWavInfo(f, wav) || !f.seek(wav.dataOffset)) {
     f.close();
     return false;
   }
-  uint32_t rate = wavSampleRate(f);
-  f.seek(44);
   speakerOn();
   static int16_t pcm[PB_N];
-  uint32_t remaining = dataBytes;
+  uint32_t played = 0;
+  uint32_t remaining = wav.dataBytes;
   while (remaining > 0) {
     size_t want = remaining > sizeof(pcm) ? sizeof(pcm) : remaining;
-    want &= ~1U;
+    want -= want % wav.blockAlign;
     if (!want) break;
-    size_t got = f.read((uint8_t *)pcm, want);
+    if (!f.seek(wav.dataOffset + played)) break;
+    int got = f.read((uint8_t *)pcm, want);
     if (got == 0) break;
+    got -= got % wav.blockAlign;
+    if (got <= 0) break;
     size_t samples = got / 2;
     while (M5Cardputer.Speaker.isPlaying(0) >= 2) {
       M5Cardputer.update();
@@ -6839,7 +7344,8 @@ static bool playWavQuickMounted(const char *path) {
       }
       delay(2);
     }
-    M5Cardputer.Speaker.playRaw(pcm, samples, rate, false, 1, 0, false);
+    M5Cardputer.Speaker.playRaw(pcm, samples, wav.sampleRate, wav.channels == 2, 1, 0, false);
+    played += got;
     remaining -= got;
   }
   while (M5Cardputer.Speaker.isPlaying(0)) {
